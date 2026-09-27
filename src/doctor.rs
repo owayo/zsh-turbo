@@ -24,7 +24,13 @@ pub fn run_doctor() {
     char_test("Nerd Font folder", "\u{f07c}");
     char_test("Unicode diamond", "\u{25c6}");
     char_test("Emoji", "\u{1f680}");
-    info("If icons render as boxes, run `zsh-turbo install-font` to install MesloLGS NF.");
+    info(
+        "If Nerd Font icons appear as '?' or boxes, install MesloLGS NF and select it in the active terminal profile.",
+    );
+    #[cfg(target_os = "macos")]
+    info(
+        "Terminal.app: Settings > Profiles > Text > Font; iTerm2: Settings > Profiles > Text > Font.",
+    );
 
     section("Shell");
     check_env("SHELL");

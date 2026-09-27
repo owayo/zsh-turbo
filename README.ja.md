@@ -36,7 +36,7 @@
 
 ## 機能
 
-- **4つのプロンプトスタイル**: Lean、Classic（パワーライン）、Rainbow、Pure + フォントレベル自動検出
+- **4つのプロンプトスタイル**: Lean、Classic（パワーライン）、Rainbow、Pure。フォントレベルは4段階から選択可能
 - **30以上のセグメント**: dir, git, virtualenv, kubecontext, aws, gcloud, terraform, docker, direnv, nix_shell, ssh, 各種言語バージョン, load, battery, disk_usage, ram, vi_mode, proxy, cpu_arch, root_indicator, dir_writable, ip 等
 - **カスタムコマンドセグメント**: TUI または TOML で任意のセグメントを定義
 - **並列セグメント実行**: `std::thread::scope` で全セグメントを同時実行
@@ -59,6 +59,16 @@
 - **OS**: macOS、Linux
 - **シェル**: zsh 5.4 以上
 - **Rust**: 1.98 以上（ソースからビルドする場合、edition 2024。検証用のバージョンは `mise.toml` で固定）
+
+## 対応ターミナル
+
+| ターミナル | Nerd Font アイコンの設定 |
+|---|---|
+| Ghostty、cmux | 対応。アイコンが表示されない場合は MesloLGS NF を選択してください。 |
+| [macOS 標準ターミナル](https://support.apple.com/ja-jp/guide/terminal/trmltxt/mac) | 使用中のプロファイルで **設定 → プロファイル → テキスト → フォント → 変更** から MesloLGS NF を選択してください。 |
+| [iTerm2](https://iterm2.com/documentation-fonts.html) | 使用中のプロファイルで **Settings → Profiles → Text → Font** から MesloLGS NF を選択してください。 |
+
+ターミナルのフォント設定と zsh-turbo の設定は別です。Nerd Font アイコンを使う場合は `zsh-turbo configure` の **Prompt → Font level** を **Nerd** にします。アイコンが `?` や四角で表示される場合は `zsh-turbo doctor` でサンプル文字を確認してください。そのほかの zsh 対応ターミナルでは、Nerd Font がなくても `unicode` または `ascii` を使えます。
 
 ## インストール
 
@@ -191,7 +201,7 @@ zsh-turbo doctor                          # 環境診断
 
 フォントの取得元は確認済みのコミットに固定しています。フォント取得前に、配布元の著作権表示と Apache-2.0 の全文を `MesloLGS NF License.txt` として同じディレクトリへ保存します。フォントがすべてインストール済みでも、再実行するとライセンス文書を補完します。この文書はフォントのインストール／スキップ件数には含めません。
 
-インストール後はターミナルアプリのフォント設定を **MesloLGS NF** に変更し、新しいターミナルセッションで使い始めてください。
+インストール後は、使用中のターミナルのプロファイルで **MesloLGS NF** を選び、新しいターミナルセッションを開いてください。フォントのインストールだけではターミナルのフォント設定は変わりません。標準ターミナルと iTerm2 の設定場所は[対応ターミナル](#対応ターミナル)を参照してください。
 
 ## 設定
 

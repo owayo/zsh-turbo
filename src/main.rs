@@ -220,7 +220,14 @@ fn main() {
                     result.dest_dir.display()
                 );
                 println!(
-                    "Next: set your terminal font to 'MesloLGS NF', then restart the terminal."
+                    "Next: select 'MesloLGS NF' in the active terminal profile, then open a new terminal session."
+                );
+                #[cfg(target_os = "macos")]
+                println!(
+                    "Terminal.app: Settings > Profiles > Text > Font; iTerm2: Settings > Profiles > Text > Font."
+                );
+                println!(
+                    "For Nerd Font icons, set Prompt > Font level to Nerd in `zsh-turbo configure`."
                 );
             }
             Err(e) => {

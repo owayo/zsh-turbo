@@ -36,7 +36,7 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 
 ## Features
 
-- **Prompt Styles**: Lean, Classic (powerline), Rainbow, Pure with font-level detection
+- **Prompt Styles**: Lean, Classic (powerline), Rainbow, Pure with four selectable font levels
 - **30+ Segments**: dir, git, virtualenv, kubecontext, aws, gcloud, terraform, docker, direnv, nix_shell, ssh, node/python/rust/go/ruby/java/php/swift/dotnet, package, jobs, os_icon, user, host, load, battery, disk_usage, ram, vi_mode, proxy, cpu_arch, root_indicator, dir_writable, ip
 - **Custom Command Segments**: Define any segment in the TUI or TOML
 - **Parallel Execution**: All segments run concurrently via `std::thread::scope`
@@ -59,6 +59,16 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **OS**: macOS, Linux
 - **Shell**: zsh 5.4+
 - **Rust**: 1.98+ (for building from source, edition 2024; the tested toolchain is pinned in `mise.toml`)
+
+## Supported Terminals
+
+| Terminal | Nerd Font icons |
+|---|---|
+| Ghostty, cmux | Supported; choose MesloLGS NF if icons are missing. |
+| [macOS Terminal](https://support.apple.com/guide/terminal/trmltxt/mac) | Select MesloLGS NF in the active profile under **Settings → Profiles → Text → Font → Change**. |
+| [iTerm2](https://iterm2.com/documentation-fonts.html) | Select MesloLGS NF in the active profile under **Settings → Profiles → Text → Font**. |
+
+The terminal font is configured separately from zsh-turbo. For Nerd Font icons, set **Prompt → Font level** to **Nerd** in `zsh-turbo configure`. If icons show as `?` or boxes, run `zsh-turbo doctor` to inspect sample glyphs. Other zsh terminals can use the `unicode` or `ascii` font level without a Nerd Font.
 
 ## Installation
 
@@ -191,7 +201,7 @@ The preflight write check uses an exclusively created, unique probe file and nev
 
 The font download is pinned to a reviewed upstream revision. Before downloading fonts, the installer saves the upstream copyright notice and full Apache-2.0 license as `MesloLGS NF License.txt` in the same directory. Running the command again also supplies this document when all fonts are already installed; license documents are excluded from the installed/skipped font counts.
 
-After installation, set your terminal's font to **MesloLGS NF** and start a new terminal session.
+After installation, select **MesloLGS NF** in the profile used by your terminal and open a new terminal session. Installing the font does not change a terminal's selected font. See [Supported Terminals](#supported-terminals) for Terminal and iTerm2 settings.
 
 ## Configuration
 
