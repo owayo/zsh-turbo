@@ -5,9 +5,32 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
     let root = tmp.path();
     std::fs::create_dir(root.join("zsh-turbo")).unwrap();
     std::fs::create_dir(root.join("candidate-dir")).unwrap();
+    std::fs::write(root.join("Makefile"), "build:\n\t@true\n").unwrap();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"scripts":{"dev":"vite","test":"node test.js"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pyproject.toml"),
+        "[project.scripts]\nhello = 'example:main'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("deno.jsonc"),
+        "{ // task\n \"tasks\": {\"check\": \"deno check .\",},\n}",
+    )
+    .unwrap();
+    std::fs::write(root.join("mise.toml"), "[tasks]\nbuild = 'echo build'\n").unwrap();
+    std::fs::write(root.join("justfile"), "check:\n  echo check\n").unwrap();
+    std::fs::write(
+        root.join("Taskfile.yml"),
+        "version: '3'\ntasks:\n  build:\n    cmds: ['echo build']\n",
+    )
+    .unwrap();
     std::fs::write(root.join("zsh-turbo/config.toml"), "[prompt]\nleft_segments=[]\nright_segments=[]\nnewline=false\n[suggest]\nmax_suggestions=10\n").unwrap();
     let mut history = Vec::new();
-    for byte in "echo sample-alpha\necho sample-alpha\necho sample-beta\necho 日本語\nls -l /path/to/hoge/fuga\n".bytes() {
+    for byte in "echo sample-alpha\necho sample-alpha\necho sample-beta\necho 日本語\nls -l /path/to/hoge/fuga\nmake busted\npnpm deploy\n".bytes() {
         if byte >= 0x80 {
             history.extend([0x83, byte ^ 0x20]);
         } else {

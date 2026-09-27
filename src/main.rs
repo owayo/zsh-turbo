@@ -7,6 +7,7 @@ mod font_install;
 mod font_wizard;
 mod highlight;
 mod icons;
+mod project_tasks;
 mod prompt;
 mod style;
 mod suggest;
@@ -73,6 +74,9 @@ enum Commands {
         /// 返す補完候補の最大数
         #[arg(long)]
         max: Option<usize>,
+        /// カレントディレクトリのタスク候補だけを返す
+        #[arg(long)]
+        project_only: bool,
     },
     /// 対話型設定ウィザードを起動する
     Configure,
@@ -190,9 +194,12 @@ fn main() {
             history_file,
             strategy,
             max,
+            project_only,
         } => {
             let max = max.unwrap_or_else(|| config::load_config().suggest.max_suggestions);
-            let completions = if let Some(strategy) = strategy {
+            let completions = if project_only {
+                project_tasks::candidates(&prefix, max)
+            } else if let Some(strategy) = strategy {
                 suggest::get_completions_with_strategy(
                     &prefix,
                     history_file.as_deref(),
@@ -305,6 +312,7 @@ fn render_init(cfg: &config::Config) -> String {
     script.push_str("\n() {\n emulate -L zsh\n");
     script.push_str(&String::from_utf8(completion).expect("completion script is UTF-8"));
     script.push_str("\n}\n");
+    script.push_str(include_str!("../shell/project_completion.zsh"));
     script.push_str(&completion::shell_init(&cfg.completions));
     script
 }

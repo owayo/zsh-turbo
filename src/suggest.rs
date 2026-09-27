@@ -1,3 +1,4 @@
+use crate::project_tasks;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -148,6 +149,10 @@ pub fn get_suggestion(
         return None;
     }
 
+    if let Some(candidate) = project_tasks::candidates(query, 1).into_iter().next() {
+        return Some(candidate);
+    }
+
     let history_path = resolve_history_path(history_file)?;
 
     let text = read_ranked_history(&history_path)?;
@@ -232,11 +237,23 @@ pub fn get_completions_with_strategy(
     if max == 0 || (query.is_empty() && !matches!(strategy, Strategy::Fuzzy)) {
         return Vec::new();
     }
+    let mut project = project_tasks::candidates(query, max);
+    if project.len() == max {
+        return project;
+    }
     let Some(text) = resolve_history_path(history_file).and_then(|path| read_ranked_history(&path))
     else {
-        return Vec::new();
+        return project;
     };
-    ranked_candidates(query, &text, strategy, max)
+    for candidate in ranked_candidates(query, &text, strategy, max) {
+        if !project.contains(&candidate) {
+            project.push(candidate);
+            if project.len() == max {
+                break;
+            }
+        }
+    }
+    project
 }
 
 /// ファジーマッチ: クエリの全文字がターゲット内に順序通りに出現するか判定。

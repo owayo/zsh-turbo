@@ -151,6 +151,22 @@ term_shell_integration = "auto" # auto, 1（有効）, 0（無効）
 | `ip`             | プライマリ IPv4（`ZSH_TURBO_IP_INTERFACE` で対象を指定可、未指定時は macOS で `en0`、Linux で scope global） |
 | *(custom)*       | `[[prompt.custom]]` で定義した任意コマンド |
 
+## プロジェクトのタスク補完
+
+カレントディレクトリのタスク定義ファイルを読みます。
+
+| コマンド | 定義ファイル |
+| --- | --- |
+| `make <target>` | `GNUmakefile`・`makefile`・`Makefile`（最初に見つかったもの） |
+| `npm run <script>`・`npm run-script <script>`・`pnpm [run] <script>`・`bun [run] <script>`・`yarn [run] <script>` | `package.json` の scripts |
+| `uv run <script>` | `pyproject.toml` の `[project.scripts]` |
+| `deno task <name>` | `deno.json` または `deno.jsonc` の tasks と `package.json` の scripts |
+| `mise run <task>`・`mise r <task>` | `mise.toml` または `.mise.toml` の `[tasks]` と、既定のタスクディレクトリ（`mise-tasks/`・`.mise-tasks/`・`mise/tasks/`・`.mise/tasks/`・`.config/mise/tasks/`）内の実行可能ファイル |
+| `just <recipe>` | `justfile`・`Justfile`・`.justfile` のレシピ（非公開レシピは除外） |
+| `task <name>`（Go Task） | `Taskfile.yml`・`.yaml` と `.dist` 形式（内部タスクは除外） |
+
+名前は前方一致で選び、不正なファイルや大きすぎるファイルは無視します。候補の取得中にタスク管理コマンドは実行しません。プロジェクトのタスクは履歴より先に薄い候補へ表示されます。「入力候補 → Tab: Default」では通常の zsh 補完で候補を一覧表示し、該当タスクがなければ既存の補完定義に戻ります。`zsh-turbo complete --project-only -- "make bu"` は履歴を含めずにプロジェクトのタスクを一覧表示します。
+
 ## CLI 補完の登録
 
 `zsh-turbo configure` の「補完」は登録済みコマンドを一覧表示します。上下キーで選び、Enter でそのコマンドの設定を開きます。`n` で CLI を追加し、名前入力を取り消した場合は下書きを破棄します。詳細画面では Enter で編集、Esc で一覧へ戻ります。Backspace（⌫）または `d` を 2 回押すと削除し、`s` で保存します。`r` で変更のあるキャッシュを再生成、`Shift+R` で保存済みの全登録を強制再生成できます。画面上の再生成項目を選んで Enter でも実行できます。処理中も TUI は操作でき、結果を表示します。登録の追加・無効化・削除後は zsh を再起動してください。登録済み CLI のキャッシュ更新は起動中のシェルにも反映されます。

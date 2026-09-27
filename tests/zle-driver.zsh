@@ -116,6 +116,55 @@ zpty -b fixture zsh -di || exit 1
     await_fixture ghost 'hoge/fuga' || exit 33
     zpty -w -n fixture $'\t'
     await_fixture buffer 'ls -l /path/to/hoge/fuga' || exit 34
+    zpty -w -n fixture $'\x15make bu'
+    await_fixture ghost 'ild' || exit 35
+    zpty -w -n fixture $'\t'
+    await_fixture buffer 'make build' || exit 36
+    zpty -w -n fixture $'\x15pnpm de'
+    await_fixture ghost 'v' || exit 37
+    zpty -w -n fixture $'\x15bun run de'
+    await_fixture ghost 'v' || exit 38
+    zpty -w -n fixture $'\x15uv run he'
+    await_fixture ghost 'llo' || exit 39
+    zpty -w -n fixture $'\x15npm run de'
+    await_fixture ghost 'v' || exit 39
+    zpty -w -n fixture $'\x15yarn de'
+    await_fixture ghost 'v' || exit 39
+    zpty -w -n fixture $'\x15deno task ch'
+    await_fixture ghost 'eck' || exit 39
+    zpty -w -n fixture $'\x15mise run bu'
+    await_fixture ghost 'ild' || exit 39
+    zpty -w -n fixture $'\x15just ch'
+    await_fixture ghost 'eck' || exit 39
+    zpty -w -n fixture $'\x15task bu'
+    await_fixture ghost 'ild' || exit 39
+    zpty -w -n fixture $'\x15ZSH_TURBO_KEY_TAB=default\r'
+    repeat 100; do
+        drain_fixture
+        [[ "$(<"$TEST_ROOT/boot")" == 4 ]] && break
+        zselect -t 5
+    done
+    [[ "$(<"$TEST_ROOT/boot")" == 4 ]] || exit 40
+    zpty -w -n fixture $'make bu\t'
+    await_fixture buffer 'make build ' || exit 41
+    zpty -w -n fixture $'\x15pnpm run de\t'
+    await_fixture buffer 'pnpm run dev ' || exit 42
+    zpty -w -n fixture $'\x15bun run de\t'
+    await_fixture buffer 'bun run dev ' || exit 43
+    zpty -w -n fixture $'\x15uv run he\t'
+    await_fixture buffer 'uv run hello ' || exit 44
+    zpty -w -n fixture $'\x15npm run de\t'
+    await_fixture buffer 'npm run dev ' || exit 45
+    zpty -w -n fixture $'\x15yarn de\t'
+    await_fixture buffer 'yarn dev ' || exit 46
+    zpty -w -n fixture $'\x15deno task ch\t'
+    await_fixture buffer 'deno task check ' || exit 47
+    zpty -w -n fixture $'\x15mise run bu\t'
+    await_fixture buffer 'mise run build ' || exit 48
+    zpty -w -n fixture $'\x15just ch\t'
+    await_fixture buffer 'just check ' || exit 49
+    zpty -w -n fixture $'\x15task bu\t'
+    await_fixture buffer 'task build ' || exit 50
     zpty -w -n fixture $'\x15exit\r'
     print 'ZLE OK'
 } always {

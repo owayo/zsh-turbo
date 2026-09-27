@@ -13,7 +13,7 @@ Run `zsh-turbo configure` to edit every setting below, or edit the config file d
 | Prompt | Style, font level, transient prompt, home symbol, truncation length and symbol, IP interface (empty for automatic), command input position |
 | Segments | Left/right placement and ordering of built-in and custom segments |
 | Git | Status, ahead/behind, and stash visibility |
-| Suggest | Search strategy, highlight color, completion limit |
+| Suggest | Search strategy, highlight color, completion limit, key actions |
 | Style | Primary, success, error, and muted colors; Rainbow palette |
 | Custom | Add/delete segments; edit name, command, icon, foreground, background, and condition |
 | Shell | Completion directories, terminal integration, interface language (`auto`, `en`, `ja`), and font setup |
@@ -150,6 +150,22 @@ Custom segment commands run through the shell with a 500ms timeout. Only stdout 
 | `dir_writable`   | Lock icon when the current directory is not writable |
 | `ip`             | Primary IPv4 (`ZSH_TURBO_IP_INTERFACE` to override; macOS: `en0`, Linux: global scope) |
 | *(custom)*       | Any command defined in `[[prompt.custom]]` |
+
+## Project task completion
+
+Task names are read from files in the current directory:
+
+| Command | Definition |
+| --- | --- |
+| `make <target>` | `GNUmakefile`, `makefile`, or `Makefile` (first found) |
+| `npm run <script>`, `npm run-script <script>`, `pnpm [run] <script>`, `bun [run] <script>`, `yarn [run] <script>` | `package.json` scripts |
+| `uv run <script>` | `pyproject.toml` `[project.scripts]` |
+| `deno task <name>` | `deno.json` or `deno.jsonc` tasks, plus `package.json` scripts |
+| `mise run <task>`, `mise r <task>` | `mise.toml` or `.mise.toml` `[tasks]`, plus executable file tasks in the default task directories (`mise-tasks/`, `.mise-tasks/`, `mise/tasks/`, `.mise/tasks/`, `.config/mise/tasks/`) |
+| `just <recipe>` | `justfile`, `Justfile`, or `.justfile` recipes (private recipes excluded) |
+| `task <name>` (Go Task) | `Taskfile.yml`/`.yaml`, including `.dist` variants (internal tasks excluded) |
+
+Names are matched by prefix; malformed or oversized files are ignored. No task manager is executed while finding candidates. Project tasks appear as ghost suggestions before history matches. With **Suggest → Tab: Default**, Tab uses zsh completion to list them, falling back to existing completion definitions when no project task matches. `zsh-turbo complete --project-only -- "make bu"` lists matching project tasks without history.
 
 ## CLI completion registration
 
