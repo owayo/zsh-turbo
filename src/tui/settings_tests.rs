@@ -83,6 +83,7 @@ fn 全設定をキー操作で変更してtomlへ保存できる() {
         (3, 5),
         (3, 6),
         (6, 1),
+        (6, 2),
     ] {
         focus(&mut app, tab, field);
         press(&mut app, KeyCode::Enter);
@@ -602,8 +603,67 @@ fn 補完登録を編集し切替と削除ができる() {
     edit(&mut app, 7, 4, "~/completions/_example");
     assert_eq!(app.config.completions[0].file, "~/completions/_example");
     press(&mut app, KeyCode::Delete);
+    assert_eq!(app.config.completions.len(), 1);
+    press(&mut app, KeyCode::Delete);
     assert!(app.config.completions.is_empty());
     assert_eq!(app.current_focus(), 0);
+}
+
+#[test]
+fn 補完一覧から詳細を開き削除確認と新規取消しができる() {
+    let mut app = App::new(Config::default(), Lang::Ja);
+    focus(&mut app, 7, 0);
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.config.completions.is_empty());
+    assert!(!app.dirty);
+    press(&mut app, KeyCode::Char('n'));
+    replace_input(&mut app, "first");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.completion_detail);
+    press(&mut app, KeyCode::Char('n'));
+    replace_input(&mut app, "second");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.config.completions.len(), 2);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui(frame, &mut app)).unwrap();
+    let list = format!("{:?}", terminal.backend().buffer());
+    assert!(list.contains("first"));
+    assert!(list.contains("second"));
+    press(&mut app, KeyCode::Up);
+    assert_eq!(app.completion_index, 0);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.completion_detail);
+    assert_eq!(
+        app.config.completions[app.completion_index].command,
+        "first"
+    );
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.config.completions.len(), 2);
+    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Delete);
+    assert_eq!(app.config.completions[0].command, "second");
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.config.completions.len(), 1);
+}
+
+#[test]
+fn 表示言語を切り替えると即時反映し保存できる() {
+    let mut app = App::new(Config::default(), Lang::En);
+    focus(&mut app, 6, 2);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.config.ui.language, UiLanguage::En);
+    assert_eq!(app.lang, Lang::En);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.config.ui.language, UiLanguage::Ja);
+    assert_eq!(app.lang, Lang::Ja);
+    let loaded: Config = toml::from_str(&toml::to_string(&app.config).unwrap()).unwrap();
+    assert_eq!(loaded.ui.language, UiLanguage::Ja);
 }
 
 #[test]

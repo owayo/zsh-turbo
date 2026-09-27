@@ -9,6 +9,14 @@ impl Lang {
         Self::resolve(|key| std::env::var(key).ok())
     }
 
+    pub(super) fn from_preference(preference: crate::config::UiLanguage) -> Self {
+        match preference {
+            crate::config::UiLanguage::Auto => Self::from_env(),
+            crate::config::UiLanguage::En => Self::En,
+            crate::config::UiLanguage::Ja => Self::Ja,
+        }
+    }
+
     fn resolve(env: impl Fn(&str) -> Option<String>) -> Self {
         let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .into_iter()

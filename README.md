@@ -49,6 +49,7 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **Safe Prompt Output**: Segment text escapes zsh prompt expansion and replaces terminal control characters
 - **Interactive Configuration TUI**: Edit every setting in tabs (Prompt / Segments / Git / Suggest / Style / Custom / Shell / Completions), with live preview
 - **`zsh-turbo install-font`**: Download MesloLGS NF into the OS user font directory
+- **`zsh-turbo font`**: Choose a font and Ghostty/cmux ligature settings interactively
 - **`zsh-turbo doctor`**: Diagnose terminal, fonts, tools, and config
 - **Enhanced Completions**: Case-insensitive, grouped, cached, color-coded, and optional external completion directories
 
@@ -62,14 +63,16 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 
 ## Terminal Font Setup
 
-The default `unicode` font level and `ascii` do not need a Nerd Font. The `powerline` and `nerd` levels use additional glyphs; select a level under **Prompt → Font level** in `zsh-turbo configure`. `zsh-turbo install-font` installs MesloLGS NF but does not change your terminal's font setting.
+The default `unicode` font level and `ascii` do not need a Nerd Font. The `powerline` and `nerd` levels use additional glyphs; select a level under **Prompt → Font level** in `zsh-turbo configure`. Run `zsh-turbo font` (also available from **Shell → Terminal Font Setup**) to choose a font. It offers the terminal default, MesloLGS NF, and installed font families. MesloLGS NF is a reliable choice for Nerd Font icons, but it does not provide programming ligatures. A font with ligatures is a better choice if joined `!=`, `=>`, and `->` glyphs matter to you. `zsh-turbo install-font` installs MesloLGS NF without changing your terminal's selected font.
 
 | Terminal | Font setting for `powerline` or `nerd` |
 |---|---|
-| [Ghostty 1.2+](https://ghostty.org/docs/install/release-notes/1-2-0) | Nerd Font symbols are built in, so no font change is normally needed. If an icon is missing, add `font-family = MesloLGS NF` to the [Ghostty configuration](https://ghostty.org/docs/config/reference#font-family) and reload it. |
-| [cmux](https://github.com/manaflow-ai/cmux#can-i-customize-cmux) | Uses Ghostty for rendering and reads its font configuration. Check the icons first; if any are missing, add `font-family = MesloLGS NF` to `~/.config/ghostty/config` and restart cmux. |
-| [macOS Terminal](https://support.apple.com/guide/terminal/trmltxt/mac) | In the profile you use, open **Terminal → Settings → Profiles → Text → Font → Change** and select MesloLGS NF. |
-| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | In the active profile, open **Settings → Profiles → Text** and select MesloLGS NF for **Font**. If **Use Non-ASCII Font** is enabled, also select MesloLGS NF for **Non-ASCII Font**, which draws the icons. |
+| [Ghostty 1.2+](https://ghostty.org/docs/config) | Built-in Nerd Font symbols usually suffice. The wizard can set the font and `font-feature = +calt` / `font-feature = +liga` in a chosen Ghostty config file. Reload the configuration afterward. |
+| [cmux](https://github.com/manaflow-ai/cmux/issues/3518) | The wizard targets `~/Library/Application Support/com.cmuxterm.app/config.ghostty` for cmux, separate from standalone Ghostty's settings. Restart cmux afterward. |
+| [macOS Terminal](https://support.apple.com/guide/terminal/trmltxt/mac) | The wizard shows the selected family. In the active profile, open **Terminal → Settings → Profiles → Text → Font → Change** and select it. |
+| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | The wizard shows the selected family. In the active profile, open **Settings → Profiles → Text** and set **Font**. If **Use Non-ASCII Font** is enabled, set that font too. |
+
+For Ghostty and cmux, the wizard offers default, enabled (`+calt`, `+liga`), and disabled (`-calt`, `-liga`) ligatures. It previews a managed block before writing, preserves other settings, and creates a backup when replacing an existing file. A font must support these features for the flags to affect its appearance.
 
 Open a new terminal window after changing its font. If icons still appear as `?` or boxes, run `zsh-turbo doctor` to inspect sample glyphs.
 
@@ -188,10 +191,11 @@ zsh-turbo suggest "qry" --strategy fuzzy  # Fuzzy suggestion
 zsh-turbo complete "prefix"            # List completions
 zsh-turbo highlight "FOO=bar echo 2>&1"  # Syntax highlight buffer
 zsh-turbo install-font                 # Install MesloLGS NF (use --force to overwrite)
+zsh-turbo font                         # Interactive terminal font setup
 zsh-turbo doctor                       # Diagnose environment
 ```
 
-The configuration TUI automatically uses Japanese for Japanese locales and English otherwise. It checks the first non-empty `LC_ALL`, `LC_MESSAGES`, then `LANG`; `C`/`POSIX` locales force English. Otherwise, the first supported language in the colon-separated `LANGUAGE` list takes precedence. With no language settings, it uses English. For a one-time English session, run `LC_ALL=C zsh-turbo configure`. Configuration keys and values stay the same in both languages.
+The configuration TUI defaults to **Shell → Interface Language: Auto**. Auto uses Japanese for Japanese locales and English otherwise. It checks the first non-empty `LC_ALL`, `LC_MESSAGES`, then `LANG`; `C`/`POSIX` locales force English. Otherwise, the first supported language in the colon-separated `LANGUAGE` list takes precedence. With no language settings, it uses English. Select English or 日本語 in the TUI to save an explicit choice. Configuration keys and values stay the same in both languages.
 
 ### Nerd Font Installation
 

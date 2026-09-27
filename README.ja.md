@@ -49,6 +49,7 @@
 - **安全なプロンプト出力**: セグメント文字列の zsh プロンプト展開を防ぎ、端末制御文字を置換
 - **対話型設定 TUI**: 全設定を編集できるタブ式エディタ（Prompt / Segments / Git / Suggest / Style / Custom / Shell）とライブプレビュー
 - **`zsh-turbo install-font`**: MesloLGS NF を OS のユーザフォントディレクトリへインストール
+- **`zsh-turbo font`**: フォントと Ghostty/cmux のリガチャ設定を対話形式で選択
 - **`zsh-turbo doctor`**: ターミナル・フォント・ツール・設定の診断
 - **補完スタイリング**: 大小文字無視、グループ化、キャッシュ、色分け、外部補完関数ディレクトリの追加
 
@@ -62,14 +63,16 @@
 
 ## ターミナルのフォント設定
 
-既定の `unicode` と `ascii` には Nerd Font は不要です。`powerline` と `nerd` は追加のグリフを使います。`zsh-turbo configure` の **Prompt → Font level** でレベルを選んでください。`zsh-turbo install-font` は MesloLGS NF をインストールしますが、ターミナルのフォント設定は変更しません。
+既定の `unicode` と `ascii` には Nerd Font は不要です。`powerline` と `nerd` は追加のグリフを使います。`zsh-turbo configure` の **Prompt → Font level** でレベルを選んでください。`zsh-turbo font`（**Shell → 端末フォント設定** からも起動可能）では端末の既定フォント、MesloLGS NF、インストール済みのフォントから選べます。MesloLGS NF は Nerd Font のアイコンに適していますが、プログラミング用リガチャはありません。`!=`・`=>`・`->` などを結合表示したい場合は、対応フォントを選んでください。`zsh-turbo install-font` は MesloLGS NF をインストールしますが、端末のフォント設定は変更しません。
 
 | ターミナル | `powerline` / `nerd` 用のフォント設定 |
 |---|---|
-| [Ghostty 1.2 以降](https://ghostty.org/docs/install/release-notes/1-2-0) | Nerd Font の記号を内蔵しているため、通常はフォント変更不要です。アイコンが欠ける場合は [Ghostty の設定](https://ghostty.org/docs/config/reference#font-family)に `font-family = MesloLGS NF` を追加して再読み込みします。 |
-| [cmux](https://github.com/manaflow-ai/cmux#can-i-customize-cmux) | 描画に Ghostty を使い、そのフォント設定を読み込みます。まずアイコンを確認し、欠ける場合は `~/.config/ghostty/config` に `font-family = MesloLGS NF` を追加して cmux を再起動します。 |
-| [macOS 標準ターミナル](https://support.apple.com/ja-jp/guide/terminal/trmltxt/mac) | 使用するプロファイルで **ターミナル → 設定 → プロファイル → テキスト → フォント → 変更** を開き、MesloLGS NF を選びます。 |
-| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | 使用中のプロファイルの **Settings → Profiles → Text** で **Font** に MesloLGS NF を選びます。**Use Non-ASCII Font** が有効なら、アイコンを描く **Non-ASCII Font** にも MesloLGS NF を選びます。 |
+| [Ghostty 1.2 以降](https://ghostty.org/docs/config) | Nerd Font の記号を内蔵しており、通常はフォント変更不要です。ウィザードでフォントと `font-feature = +calt` / `font-feature = +liga` を設定ファイルへ書けます。変更後は設定を再読み込みしてください。 |
+| [cmux](https://github.com/manaflow-ai/cmux/issues/3518) | ウィザードは単体 Ghostty とは別の `~/Library/Application Support/com.cmuxterm.app/config.ghostty` を対象にします。変更後は cmux を再起動してください。 |
+| [macOS 標準ターミナル](https://support.apple.com/ja-jp/guide/terminal/trmltxt/mac) | ウィザードで選んだフォントを、使用中のプロファイルの **ターミナル → 設定 → プロファイル → テキスト → フォント → 変更** から指定します。 |
+| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | ウィザードで選んだフォントを、使用中のプロファイルの **Settings → Profiles → Text → Font** で指定します。**Use Non-ASCII Font** が有効ならそちらも設定します。 |
+
+Ghostty と cmux のウィザードではリガチャを「既定」「有効（`+calt`、`+liga`）」「無効（`-calt`、`-liga`）」から選べます。書き込み前に追加内容を表示し、他の設定を保ったまま変更します。既存ファイルを置き換えるときはバックアップを作成します。選んだフォントが対応していない機能は見た目に反映されません。
 
 フォントを変更したら新しいターミナルウィンドウを開いてください。アイコンがまだ `?` や四角になる場合は、`zsh-turbo doctor` でサンプル文字を確認できます。
 
@@ -188,10 +191,11 @@ zsh-turbo suggest "qry" --strategy fuzzy  # ファジーサジェスト
 zsh-turbo complete "prefix"               # 補完候補一覧
 zsh-turbo highlight "FOO=bar echo 2>&1"   # シンタックスハイライト
 zsh-turbo install-font                    # MesloLGS NF をインストール（--force で上書き）
+zsh-turbo font                            # 端末フォント設定ウィザード
 zsh-turbo doctor                          # 環境診断
 ```
 
-設定 TUI は日本語環境なら日本語、それ以外では英語で表示します。`LC_ALL` → `LC_MESSAGES` → `LANG` の順に最初の空でない値を採用し、`C`・`POSIX` ロケールなら英語に固定します。それ以外では、`LANGUAGE` の `:` 区切りリストで最初に見つかった対応言語を優先します。言語設定がなければ英語です。一時的に英語で開くには `LC_ALL=C zsh-turbo configure` を実行してください。保存する設定のキーと値は、表示言語によらず共通です。
+設定 TUI の **Shell → 表示言語** は既定で「Auto」です。自動判定では日本語環境なら日本語、それ以外では英語で表示します。`LC_ALL` → `LC_MESSAGES` → `LANG` の順に最初の空でない値を採用し、`C`・`POSIX` ロケールなら英語に固定します。それ以外では、`LANGUAGE` の `:` 区切りリストで最初に見つかった対応言語を優先します。言語設定がなければ英語です。TUI で「English」「日本語」を選ぶと明示的に保存できます。保存する設定のキーと値は、表示言語によらず共通です。
 
 ### Nerd Font のインストール
 

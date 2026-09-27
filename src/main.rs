@@ -4,6 +4,7 @@ mod completion;
 mod config;
 mod doctor;
 mod font_install;
+mod font_wizard;
 mod highlight;
 mod icons;
 mod prompt;
@@ -75,6 +76,8 @@ enum Commands {
     },
     /// 対話型設定ウィザードを起動する
     Configure,
+    /// 端末のフォントとリガチャ設定を対話形式で選ぶ
+    Font,
     /// MesloLGS NF (Nerd Font) をユーザフォントディレクトリへインストールする
     InstallFont {
         /// 既存ファイルがあっても上書きする
@@ -205,6 +208,12 @@ fn main() {
         }
         Commands::Configure => {
             if let Err(e) = tui::run_tui() {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Font => {
+            if let Err(e) = font_wizard::run() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }

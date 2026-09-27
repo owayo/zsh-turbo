@@ -16,12 +16,14 @@ Run `zsh-turbo configure` to edit every setting below, or edit the config file d
 | Suggest | Search strategy, highlight color, completion limit |
 | Style | Primary, success, error, and muted colors; Rainbow palette |
 | Custom | Add/delete segments; edit name, command, icon, foreground, background, and condition |
-| Shell | Completion directories and terminal integration (`auto`, `1` = on, `0` = off) |
+| Shell | Completion directories, terminal integration, interface language (`auto`, `en`, `ja`), and font setup |
 | Completions | Register, enable/disable, remove, and rebuild CLI completions |
 
 Use `Tab` / `Shift+Tab` to switch tabs and Up/Down to select fields. `Enter` edits or toggles a field; Left/Right changes choices and numbers. Numbers also support direct entry with `Enter`. While editing, use Left/Right, `Home`, and `End` to move the cursor, `Enter` to confirm, and `Esc` to cancel.
 
 Press `Esc` from the main screen to close. If there are unsaved changes, press `Esc` again to discard them, or another key to return. `q` no longer closes the TUI.
+
+**Shell → Interface Language** is `auto` by default. Auto follows the locale; choose `English` or `日本語` to save a fixed language. The choice is stored as `[ui] language = "auto"`, `"en"`, or `"ja"`. **Shell → Terminal Font Setup** starts `zsh-turbo font` after leaving the TUI; save pending changes first. The wizard can edit Ghostty or cmux font and ligature settings, and shows profile instructions for Terminal.app and iTerm2.
 
 The four Style colors, Suggest highlight color, and Custom foreground/background colors include swatches. Press `Enter` to open the 256-color palette, choose with arrows or `h/j/k/l`, confirm with `Enter`, or cancel with `Esc`. Press `e` for direct entry of a name such as `blue`, an index from `0` to `255`, or `#RRGGBB`. Suggest also accepts attributes such as `fg=8,bg=0,bold`; palette selection changes only the foreground color.
 
@@ -151,7 +153,7 @@ Custom segment commands run through the shell with a 500ms timeout. Only stdout 
 
 ## CLI completion registration
 
-Open **Completions** in `zsh-turbo configure`. Press `n`, enter a CLI name found on `PATH`, then choose its source. Left/Right on the first row selects a registration; Enter edits fields, Delete removes it, `s` saves, and `r` checks for changes and rebuilds affected caches, and `Shift+R` forces all saved registrations to rebuild. Both actions also appear as selectable rows; press Enter to run them. Progress and results stay visible while you continue using the TUI. Restart zsh after adding, disabling, or removing registrations. Cache refreshes for existing registrations take effect in running shells.
+Open **Completions** in `zsh-turbo configure`. The first screen lists registered commands. Use Up/Down and Enter to open a command's settings. Press `n` to add a CLI; cancelling the name edit discards the draft. Use Enter to edit settings, Esc to return to the list, Delete twice to confirm removal, and `s` to save. Press `r` to rebuild changed caches or `Shift+R` to force all saved registrations to rebuild. Both actions also appear as selectable rows in the details. Progress and results stay visible while you continue using the TUI. Restart zsh after adding, disabling, or removing registrations. Cache refreshes for existing registrations take effect in running shells.
 
 - **Help** (default): reads `COMMAND --help` and discovered subcommand help, generating option names, subcommands, descriptions, and file/path arguments. It handles common English help layouts; arbitrary help formats, dynamic values, and inherited global options may require native completions. Scans use at most four workers, four subcommand levels, 128 help pages, five seconds per page, and 120 seconds overall.
 - **Native generator**: enter an executable and its arguments as a JSON array, for example `["tool", "completion", "zsh"]`. No shell expansion or pipelines are applied. Use the CLI's documented generation command. A generator has a ten-second deadline.

@@ -84,6 +84,7 @@ pub(super) fn validate(
 }
 
 pub(super) fn add(app: &mut App) {
+    app.completion_draft_prior_dirty = app.dirty;
     let command = (1..)
         .map(|n| format!("cli{n}"))
         .find(|s| !app.config.completions.iter().any(|e| e.command == *s))
@@ -93,6 +94,8 @@ pub(super) fn add(app: &mut App) {
         ..Default::default()
     });
     app.completion_index = app.config.completions.len() - 1;
+    app.completion_detail = true;
+    app.completion_draft = true;
     app.completion_focus = 1;
     app.dirty = true;
     app.start_edit(EditTarget::Completion(app.completion_index, Field::Command));
@@ -107,10 +110,14 @@ pub(super) fn remove(app: &mut App) {
         .completion_index
         .min(app.config.completions.len().saturating_sub(1));
     app.completion_focus = 0;
+    app.completion_detail = false;
     app.dirty = true;
 }
 
 pub(super) fn select(app: &mut App, forward: bool) {
+    if !app.completion_detail {
+        return;
+    }
     let len = app.config.completions.len();
     if len == 0 {
         return;
@@ -127,6 +134,17 @@ pub(super) fn select(app: &mut App, forward: bool) {
 }
 
 pub(super) fn activate(app: &mut App) {
+    if !app.completion_detail {
+        if !app.config.completions.is_empty() {
+            app.completion_detail = true;
+            app.completion_focus = 1;
+        }
+        return;
+    }
+    if app.completion_focus == 0 {
+        app.completion_detail = false;
+        return;
+    }
     if matches!(app.completion_focus, 6 | 7) {
         refresh(app, app.completion_focus == 7);
         return;
@@ -237,6 +255,10 @@ pub(super) fn poll_refresh(app: &mut App) {
 }
 
 pub(super) fn render(frame: &mut Frame, app: &App, area: Rect) {
+    if !app.completion_detail {
+        render_list(frame, app, area);
+        return;
+    }
     let parts = Layout::vertical([Constraint::Min(0), Constraint::Length(4)]).split(area);
     if let Some(entry) = app.config.completions.get(app.completion_index) {
         let source = match entry.source {
@@ -265,7 +287,7 @@ pub(super) fn render(frame: &mut Frame, app: &App, area: Rect) {
         let rows = [
             (
                 app.lang
-                    .text("Registered CLI (← / →)", "登録済み CLI（← / →）"),
+                    .text("Back to registered CLIs", "登録済み CLI 一覧に戻る"),
                 selection,
             ),
             (Field::Command.label(app.lang), entry.command.clone()),
@@ -326,4 +348,66 @@ pub(super) fn render(frame: &mut Frame, app: &App, area: Rect) {
     )
     };
     frame.render_widget(Paragraph::new(help).wrap(Wrap { trim: false }), parts[1]);
+}
+
+fn render_list(frame: &mut Frame, app: &App, area: Rect) {
+    let title = app.lang.text(" Registered CLIs ", " 登録済み CLI ");
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if app.config.completions.is_empty() {
+        frame.render_widget(
+            Paragraph::new(app.lang.text(
+                "No CLI registered. Press n to add one.",
+                "登録された CLI はありません。n で追加します。",
+            )),
+            inner,
+        );
+        return;
+    }
+    let visible = usize::from(inner.height).max(1);
+    let start = app
+        .completion_index
+        .saturating_add(1)
+        .saturating_sub(visible);
+    let items: Vec<ListItem> = app
+        .config
+        .completions
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(i, entry)| {
+            let status = completion::status(entry);
+            let status = match status.as_str() {
+                "ready" => app.lang.text("Ready", "利用可能"),
+                "pending" => app.lang.text("Pending", "未生成"),
+                _ => &status,
+            };
+            let source = match entry.source {
+                Source::Help => app.lang.text("help", "ヘルプ"),
+                Source::Generator => app.lang.text("generator", "生成コマンド"),
+                Source::File => app.lang.text("file", "ファイル"),
+            };
+            let marker = if i == app.completion_index {
+                "▶ "
+            } else {
+                "  "
+            };
+            let enabled = if entry.enabled { "●" } else { "○" };
+            let line = format!(
+                "{marker}{enabled}  {}  ({source})  [{status}]",
+                entry.command
+            );
+            let style = if i == app.completion_index {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(line).style(style)
+        })
+        .collect();
+    frame.render_widget(List::new(items), inner);
 }

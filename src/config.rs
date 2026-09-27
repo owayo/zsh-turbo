@@ -11,6 +11,8 @@ pub const MAX_PROMPT_BLANK_LINES: usize = 10;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
+    pub ui: UiConfig,
+    #[serde(default)]
     pub prompt: PromptConfig,
     #[serde(default)]
     pub suggest: SuggestConfig,
@@ -20,6 +22,53 @@ pub struct Config {
     pub shell: ShellConfig,
     #[serde(default)]
     pub completions: Vec<crate::completion::Registration>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    pub language: UiLanguage,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiLanguage {
+    #[default]
+    Auto,
+    En,
+    Ja,
+}
+
+impl<'de> Deserialize<'de> for UiLanguage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "en" => Self::En,
+            "ja" => Self::Ja,
+            _ => Self::Auto,
+        })
+    }
+}
+
+impl UiLanguage {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Auto => Self::En,
+            Self::En => Self::Ja,
+            Self::Ja => Self::Auto,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Auto => Self::Ja,
+            Self::En => Self::Auto,
+            Self::Ja => Self::En,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -318,6 +367,47 @@ pub fn config_path() -> PathBuf {
 
 pub fn load_config() -> Config {
     load_config_from(&config_path())
+}
+
+pub fn load_config_strict() -> std::io::Result<Config> {
+    load_config_strict_from(&config_path())
+}
+
+fn load_config_strict_from(path: &Path) -> std::io::Result<Config> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => toml::from_str(&content).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{}: {e}", path.display()),
+            )
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_config_is_not_replaced_with_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui\nlanguage = 'ja'").unwrap();
+        assert!(load_config_strict_from(&path).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[ui\nlanguage = 'ja'"
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            load_config_strict_from(&path).unwrap().ui.language,
+            UiLanguage::Auto
+        );
+        let unknown: Config = toml::from_str("[ui]\nlanguage = 'fr'").unwrap();
+        assert_eq!(unknown.ui.language, UiLanguage::Auto);
+    }
 }
 
 /// 指定パスから Config を読み込む。テスト容易性のため読み込み元を引数化した内部実装

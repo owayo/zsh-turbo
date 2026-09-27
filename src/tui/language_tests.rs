@@ -20,7 +20,7 @@ fn 全タブの見出しと項目が選択言語で表示される() {
                 "基本色",
                 "カスタムセグメントはありません",
                 "端末との連携",
-                "補完対象",
+                "登録済み CLI",
             ],
         ),
         (
@@ -33,7 +33,7 @@ fn 全タブの見出しと項目が選択言語で表示される() {
                 "Primary Color",
                 "No custom segments",
                 "Terminal Integration",
-                "register a CLI",
+                "No CLI registered",
             ],
         ),
     ] {

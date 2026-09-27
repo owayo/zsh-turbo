@@ -1,4 +1,4 @@
-use crate::config::{self, Config, CustomSegment, SuggestKeyAction};
+use crate::config::{self, Config, CustomSegment, SuggestKeyAction, UiLanguage};
 use crate::icons::{FontLevel, Icons};
 use crate::style::{self, Color as AppColor};
 
@@ -18,15 +18,20 @@ mod lang;
 use colors::{ColorPicker, color_field_item};
 use lang::Lang;
 
+pub(crate) fn interface_is_japanese() -> bool {
+    Lang::from_preference(config::load_config().ui.language) == Lang::Ja
+}
+
 pub fn history_menu_help() -> &'static str {
-    Lang::from_env().text(
+    Lang::from_preference(config::load_config().ui.language).text(
         "Up/Down Tab: select  Enter: insert  Esc: cancel",
         "↑/↓ Tab:選択  Enter:入力欄へ  Esc:取消",
     )
 }
 
 pub fn history_menu_empty() -> &'static str {
-    Lang::from_env().text("No matching history", "一致する履歴がありません")
+    Lang::from_preference(config::load_config().ui.language)
+        .text("No matching history", "一致する履歴がありません")
 }
 
 #[cfg(test)]
@@ -228,6 +233,12 @@ struct App {
     shell_focus: usize,
     completion_focus: usize,
     completion_index: usize,
+    completion_detail: bool,
+    completion_delete_pending: bool,
+    completion_draft: bool,
+    completion_draft_prior_dirty: bool,
+    launch_font_wizard: bool,
+    initial_config_bytes: Option<Option<Vec<u8>>>,
     completion_job: Option<std::sync::mpsc::Receiver<String>>,
     custom_index: usize,
     custom_delete_pending: bool,
@@ -281,6 +292,12 @@ impl App {
             shell_focus: 0,
             completion_focus: 0,
             completion_index: 0,
+            completion_detail: false,
+            completion_delete_pending: false,
+            completion_draft: false,
+            completion_draft_prior_dirty: false,
+            launch_font_wizard: false,
+            initial_config_bytes: None,
             completion_job: None,
             custom_index: 0,
             custom_delete_pending: false,
@@ -311,8 +328,8 @@ impl App {
                 }
             }
             5 if !self.config.prompt.custom.is_empty() => 6,
-            6 => 1,
-            7 if !self.config.completions.is_empty() => 7,
+            6 => 3,
+            7 if self.completion_detail && !self.config.completions.is_empty() => 7,
             _ => 0,
         }
     }
@@ -344,6 +361,10 @@ impl App {
     }
 
     fn focus_up(&mut self) {
+        if self.tab == 7 && !self.completion_detail {
+            self.completion_index = self.completion_index.saturating_sub(1);
+            return;
+        }
         if self.tab == 1 {
             self.seg_focus_up();
             return;
@@ -355,6 +376,13 @@ impl App {
     }
 
     fn focus_down(&mut self) {
+        if self.tab == 7 && !self.completion_detail {
+            self.completion_index = self
+                .completion_index
+                .saturating_add(1)
+                .min(self.config.completions.len().saturating_sub(1));
+            return;
+        }
         if self.tab == 1 {
             self.seg_focus_down();
             return;
@@ -543,6 +571,30 @@ impl App {
     }
 
     fn save(&mut self) {
+        if let Some(initial) = &self.initial_config_bytes {
+            let current = match std::fs::read(config::config_path()) {
+                Ok(bytes) => Some(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => {
+                    self.status_msg = Some(format!(
+                        "{}: {e}",
+                        self.lang.text("Read error", "読み込みエラー")
+                    ));
+                    return;
+                }
+            };
+            if &current != initial {
+                self.status_msg = Some(
+                    self.lang
+                        .text(
+                            "Config changed outside this screen. Reopen it before saving.",
+                            "別の操作で設定ファイルが変わりました。画面を開き直してください。",
+                        )
+                        .into(),
+                );
+                return;
+            }
+        }
         if let Err(error) = crate::completion::validate(&self.config.completions) {
             self.status_msg = Some(format!(
                 "{}: {error}",
@@ -553,6 +605,9 @@ impl App {
         match config::save_config(&self.config) {
             Ok(()) => {
                 self.dirty = false;
+                if self.initial_config_bytes.is_some() {
+                    self.initial_config_bytes = Some(std::fs::read(config::config_path()).ok());
+                }
                 crate::completion::refresh_saved_async();
                 self.status_msg = Some(
                     self.lang
@@ -627,7 +682,10 @@ impl App {
                 EditTarget::IpInterface => self.config.prompt.ip_interface = val,
                 EditTarget::CompletionDirs => self.config.shell.completion_dirs = val,
                 EditTarget::Completion(i, field) => {
-                    field.set(&mut self.config.completions[i], &val)
+                    field.set(&mut self.config.completions[i], &val);
+                    if field == completions::Field::Command {
+                        self.completion_draft = false;
+                    }
                 }
                 EditTarget::Custom(index, field) => {
                     if field == CustomField::Name {
@@ -834,6 +892,16 @@ impl App {
     }
 
     fn cancel_edit(&mut self) {
+        if self.completion_draft
+            && matches!(
+                self.editing,
+                Some(EditTarget::Completion(_, completions::Field::Command))
+            )
+        {
+            completions::remove(self);
+            self.completion_draft = false;
+            self.dirty = self.completion_draft_prior_dirty;
+        }
         self.editing = None;
         self.edit_buffer.clear();
     }
@@ -1244,11 +1312,28 @@ fn ui(frame: &mut Frame, app: &mut App) {
             "Delete again: remove definition and placements  Any other key: cancel",
             "再度 Del:定義と配置を削除  その他のキー:戻る",
         )
+    } else if app.completion_delete_pending {
+        app.lang.text(
+            "Delete again: remove selected CLI  Any other key: cancel",
+            "再度 Delete:選択中の CLI を削除  その他のキー:取消",
+        )
     } else if app.editing.is_some() {
         app.lang.text(
             "Enter:confirm  Esc:cancel  Arrows/Home/End:cursor  Alt+Enter:newline",
             "Enter:確定  Esc:取消  矢印/Home/End:移動  Alt+Enter:改行",
         )
+    } else if app.tab == 7 {
+        if app.completion_detail {
+            app.lang.text(
+                "↑/↓:field  Enter:edit  n:add  Del:delete  s:save  Esc:list",
+                "↑/↓:項目  Enter:編集  n:追加  Del:削除  s:保存  Esc:一覧",
+            )
+        } else {
+            app.lang.text(
+                "↑/↓:select  Enter:settings  n:add  Del:delete  s:save  Esc:quit",
+                "↑/↓:選択  Enter:設定  n:追加  Del:削除  s:保存  Esc:終了",
+            )
+        }
     } else if app.tab == 1 {
         app.lang.text(
             "Tab:switch  hjkl:nav  L/R:add to side  Del:remove  u/d:order  S:save  Esc:quit",
@@ -1675,6 +1760,18 @@ fn render_custom_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) 
 }
 
 fn render_shell_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let language = match app.config.ui.language {
+        UiLanguage::Auto => format!(
+            "Auto ({})",
+            if Lang::from_env() == Lang::Ja {
+                "日本語"
+            } else {
+                "English"
+            }
+        ),
+        UiLanguage::En => "English".into(),
+        UiLanguage::Ja => "日本語".into(),
+    };
     let items = vec![
         field_item(
             app.lang.text(
@@ -1689,6 +1786,18 @@ fn render_shell_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             app.lang.text("Terminal Integration", "端末との連携"),
             &app.config.shell.term_shell_integration,
             app.shell_focus == 1,
+            false,
+        ),
+        field_item(
+            app.lang.text("Interface Language", "表示言語"),
+            &language,
+            app.shell_focus == 2,
+            false,
+        ),
+        field_item(
+            app.lang.text("Terminal Font Setup", "端末フォント設定"),
+            "zsh-turbo font ↵",
+            app.shell_focus == 3,
             false,
         ),
     ];
@@ -1814,6 +1923,14 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
 
+    if app.completion_delete_pending {
+        app.completion_delete_pending = false;
+        if key.code == KeyCode::Delete {
+            completions::remove(app);
+        }
+        return false;
+    }
+
     // 終了確認
     if app.quit_state == QuitState::Confirming {
         if key.code == KeyCode::Esc {
@@ -1891,9 +2008,15 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
         // タブ切り替え
         KeyCode::Tab | KeyCode::Char(']') => {
             app.tab = (app.tab + 1) % TAB_TITLES.len();
+            if app.tab == 7 {
+                app.completion_detail = false;
+            }
         }
         KeyCode::BackTab | KeyCode::Char('[') => {
             app.tab = (app.tab + TAB_TITLES.len() - 1) % TAB_TITLES.len();
+            if app.tab == 7 {
+                app.completion_detail = false;
+            }
         }
         // ナビゲーション
         KeyCode::Up | KeyCode::Char('k') => app.focus_up(),
@@ -1921,7 +2044,17 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
             app.seg_reorder(false);
         }
         KeyCode::Char('n') if app.tab == 7 => completions::add(app),
-        KeyCode::Delete if app.tab == 7 => completions::remove(app),
+        KeyCode::Delete if app.tab == 7 && !app.config.completions.is_empty() => {
+            app.completion_delete_pending = true;
+            app.status_msg = Some(format!(
+                "{}: {}",
+                app.config.completions[app.completion_index].command,
+                app.lang.text(
+                    "Press Delete again to remove this CLI.",
+                    "もう一度 Delete でこの CLI を削除します。"
+                )
+            ));
+        }
         KeyCode::Char('r') if app.tab == 7 => completions::refresh(app, false),
         KeyCode::Char('R') if app.tab == 7 => completions::refresh(app, true),
         KeyCode::Char('n') if app.tab == 5 => app.custom_add(),
@@ -1937,6 +2070,11 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
             ));
         }
         KeyCode::Esc => {
+            if app.tab == 7 && app.completion_detail {
+                app.completion_detail = false;
+                app.completion_focus = 0;
+                return false;
+            }
             // 非編集モードでは Esc で終了
             if app.dirty {
                 app.quit_state = QuitState::Confirming;
@@ -2010,6 +2148,11 @@ fn handle_left(app: &mut App) {
                 cycle_prev(&app.config.shell.term_shell_integration, SHELL_INTEGRATIONS);
             app.dirty = true;
         }
+        6 if app.shell_focus == 2 => {
+            app.config.ui.language = app.config.ui.language.prev();
+            app.lang = Lang::from_preference(app.config.ui.language);
+            app.dirty = true;
+        }
         _ => {}
     }
 }
@@ -2075,6 +2218,11 @@ fn handle_right(app: &mut App) {
         6 if app.shell_focus == 1 => {
             app.config.shell.term_shell_integration =
                 cycle_next(&app.config.shell.term_shell_integration, SHELL_INTEGRATIONS);
+            app.dirty = true;
+        }
+        6 if app.shell_focus == 2 => {
+            app.config.ui.language = app.config.ui.language.next();
+            app.lang = Lang::from_preference(app.config.ui.language);
             app.dirty = true;
         }
         _ => {}
@@ -2170,6 +2318,19 @@ fn handle_activate(app: &mut App) {
         6 => {
             if app.shell_focus == 0 {
                 app.start_edit(EditTarget::CompletionDirs);
+            } else if app.shell_focus == 3 {
+                if app.dirty {
+                    app.status_msg = Some(
+                        app.lang
+                            .text(
+                                "Save settings first (s).",
+                                "先に s で設定を保存してください。",
+                            )
+                            .into(),
+                    );
+                } else {
+                    app.launch_font_wizard = true;
+                }
             } else {
                 handle_right(app);
             }
@@ -2202,17 +2363,32 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> std::io::R
             if handle_event(app, key) {
                 break;
             }
+            if app.launch_font_wizard {
+                break;
+            }
         }
     }
     Ok(())
 }
 
 pub fn run_tui() -> std::io::Result<()> {
+    let config = config::load_config_strict()?;
+    let lang = Lang::from_preference(config.ui.language);
+    let initial = match std::fs::read(config::config_path()) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
     let mut terminal = ratatui::init();
-    let mut app = App::new(config::load_config(), Lang::from_env());
+    let mut app = App::new(config, lang);
+    app.initial_config_bytes = Some(initial);
     let result = run_app(&mut terminal, &mut app);
     ratatui::restore();
-    result
+    result?;
+    if app.launch_font_wizard {
+        crate::font_wizard::run()?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
