@@ -253,7 +253,7 @@ function _zsh_turbo_autosuggest_display() {
     POSTDISPLAY=""
 }
 
-# 次の空白またはパス区切りまでを返す。先頭の空白・/ は次の要素に含める。
+# 次の空白またはパス区切りまでを返す。パス区切りは今回の補完に含める。
 function _zsh_turbo_suggestion_step() {
     emulate -L zsh
     local suffix="$1" char quote="" previous=""
@@ -279,9 +279,7 @@ function _zsh_turbo_suggestion_step() {
         fi
         if [[ "$char" == '/' ]]; then
             if (( seen )); then
-                if (( i == ${#suffix} )) || [[ "${suffix[i+1]}" == [[:space:]] ]]; then
-                    (( i++ ))
-                fi
+                (( i++ ))
                 break
             fi
             continue

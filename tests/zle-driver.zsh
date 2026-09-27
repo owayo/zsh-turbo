@@ -107,11 +107,13 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture $'\x15ls -l'
     await_fixture ghost ' /path/to/hoge/fuga' || exit 29
     zpty -w -n fixture $'\e[C'
-    await_fixture buffer 'ls -l /path' || exit 30
-    await_fixture ghost '/to/hoge/fuga' || exit 31
+    await_fixture buffer 'ls -l /path/' || exit 30
+    await_fixture ghost 'to/hoge/fuga' || exit 31
+    zpty -w -n fixture $'\x15ls -l /path'
+    await_fixture ghost '/to/hoge/fuga' || exit 32
     zpty -w -n fixture $'\e[C'
-    await_fixture buffer 'ls -l /path/to' || exit 32
-    await_fixture ghost '/hoge/fuga' || exit 33
+    await_fixture buffer 'ls -l /path/to/' || exit 32
+    await_fixture ghost 'hoge/fuga' || exit 33
     zpty -w -n fixture $'\t'
     await_fixture buffer 'ls -l /path/to/hoge/fuga' || exit 34
     zpty -w -n fixture $'\x15exit\r'

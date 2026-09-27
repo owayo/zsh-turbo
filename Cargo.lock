@@ -2140,6 +2140,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "dirs",
+ "iana-time-zone",
  "ratatui",
  "serde",
  "serde_json",

@@ -23,7 +23,7 @@ Use `Tab` / `Shift+Tab` to switch tabs and Up/Down to select fields. `Enter` edi
 
 Press `Esc` from the main screen to close. If there are unsaved changes, press `Esc` again to discard them, or another key to return. `q` no longer closes the TUI.
 
-**Shell → Interface Language** is `auto` by default. Auto follows the locale; choose `English` or `日本語` to save a fixed language. The choice is stored as `[ui] language = "auto"`, `"en"`, or `"ja"`. **Shell → Terminal Font Setup** starts `zsh-turbo font` after leaving the TUI; save pending changes first. The wizard can edit Ghostty or cmux font and ligature settings, and shows profile instructions for Terminal.app and iTerm2.
+**Shell → Interface Language** is `auto` by default. Auto follows an explicit locale and uses the local time zone for `C.UTF-8` or missing locales; `Asia/Tokyo` and `Japan` select Japanese. Choose `English` or `日本語` to save a fixed language. The choice is stored as `[ui] language = "auto"`, `"en"`, or `"ja"`. **Shell → Terminal Font Setup** starts `zsh-turbo font` after leaving the TUI; save pending changes first. The wizard can edit Ghostty or cmux font and ligature settings, and shows profile instructions for Terminal.app and iTerm2.
 
 The four Style colors, Suggest highlight color, and Custom foreground/background colors include swatches. Press `Enter` to open the 256-color palette, choose with arrows or `h/j/k/l`, confirm with `Enter`, or cancel with `Esc`. Press `e` for direct entry of a name such as `blue`, an index from `0` to `255`, or `#RRGGBB`. Suggest also accepts attributes such as `fg=8,bg=0,bold`; palette selection changes only the foreground color.
 

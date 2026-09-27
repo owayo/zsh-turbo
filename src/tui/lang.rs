@@ -6,7 +6,7 @@ pub(super) enum Lang {
 
 impl Lang {
     pub(super) fn from_env() -> Self {
-        Self::resolve(|key| std::env::var(key).ok())
+        Self::resolve(|key| std::env::var(key).ok(), system_timezone_name)
     }
 
     pub(super) fn from_preference(preference: crate::config::UiLanguage) -> Self {
@@ -17,13 +17,19 @@ impl Lang {
         }
     }
 
-    fn resolve(env: impl Fn(&str) -> Option<String>) -> Self {
+    fn resolve(
+        env: impl Fn(&str) -> Option<String>,
+        system_zone: impl FnOnce() -> Option<String>,
+    ) -> Self {
         let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .into_iter()
             .filter_map(&env)
             .find(|value| !value.trim().is_empty());
-        // C ロケールの英語指定は LANGUAGE より優先する。
-        if locale.as_deref().is_some_and(is_c_locale) {
+        // 素の C/POSIX は明示的な英語指定として扱う。
+        if locale
+            .as_deref()
+            .is_some_and(|value| is_c_locale(value) && !is_utf8_c_locale(value))
+        {
             return Self::En;
         }
         if let Some(list) = env("LANGUAGE")
@@ -31,7 +37,19 @@ impl Lang {
         {
             return lang;
         }
-        locale.as_deref().and_then(Self::parse).unwrap_or(Self::En)
+        if let Some(value) = locale.as_deref()
+            && !is_utf8_c_locale(value)
+        {
+            return Self::parse(value).unwrap_or(Self::En);
+        }
+        let zone = env("TZ")
+            .filter(|value| !value.trim().is_empty())
+            .or_else(system_zone);
+        if zone.as_deref().is_some_and(is_japan_zone) {
+            Self::Ja
+        } else {
+            Self::En
+        }
     }
 
     fn parse(value: &str) -> Option<Self> {
@@ -80,17 +98,48 @@ fn is_c_locale(value: &str) -> bool {
     base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX")
 }
 
+fn is_utf8_c_locale(value: &str) -> bool {
+    let without_modifier = value.trim().split('@').next().unwrap_or("");
+    let Some((base, charset)) = without_modifier.split_once('.') else {
+        return false;
+    };
+    (base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX"))
+        && (charset.eq_ignore_ascii_case("UTF-8") || charset.eq_ignore_ascii_case("UTF8"))
+}
+
+fn is_japan_zone(value: &str) -> bool {
+    matches!(value.trim().trim_start_matches(':'), "Asia/Tokyo" | "Japan")
+}
+
+fn system_timezone_name() -> Option<String> {
+    #[cfg(unix)]
+    if let Ok(link) = std::fs::read_link("/etc/localtime")
+        && let Some(name) = link.to_str()
+        && let Some((_, zone)) = name.split_once("/zoneinfo/")
+    {
+        return Some(zone.into());
+    }
+    iana_time_zone::get_timezone().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn resolve(pairs: &[(&str, &str)]) -> Lang {
-        Lang::resolve(|key| {
-            pairs
-                .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| v.to_string())
-        })
+        resolve_with_zone(pairs, None)
+    }
+
+    fn resolve_with_zone(pairs: &[(&str, &str)], zone: Option<&str>) -> Lang {
+        Lang::resolve(
+            |key| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v.to_string())
+            },
+            || zone.map(str::to_owned),
+        )
     }
 
     #[test]
@@ -117,7 +166,7 @@ mod tests {
             assert_eq!(resolve(&[("LANG", locale)]), Lang::En, "{locale}");
         }
         assert_eq!(resolve(&[]), Lang::En);
-        assert_eq!(resolve(&[("TZ", "Asia/Tokyo")]), Lang::En);
+        assert_eq!(resolve(&[("TZ", "Asia/Tokyo")]), Lang::Ja);
     }
 
     #[test]
@@ -150,11 +199,69 @@ mod tests {
         );
         assert_eq!(resolve(&[("LANGUAGE", "fr:de"), ("LANG", "ja")]), Lang::Ja);
         assert_eq!(resolve(&[("LANGUAGE", "ja")]), Lang::Ja);
-        for locale in ["C", "POSIX", "c.UTF-8", "POSIX.UTF-8", " C@foo "] {
+        for locale in ["C", "POSIX", " C@foo "] {
             assert_eq!(
                 resolve(&[("LC_ALL", locale), ("LANGUAGE", "ja"), ("LANG", "ja")]),
                 Lang::En
             );
         }
+        for locale in ["c.UTF-8", "POSIX.UTF-8"] {
+            assert_eq!(
+                resolve(&[("LC_ALL", locale), ("LANGUAGE", "ja"), ("LANG", "en")]),
+                Lang::Ja
+            );
+        }
+    }
+
+    #[test]
+    fn c_utf8では日本のタイムゾーンをフォールバックに使う() {
+        for locale in ["C.UTF-8", "c.utf8", "POSIX.UTF-8"] {
+            assert_eq!(
+                resolve_with_zone(&[("LC_ALL", locale)], Some("Asia/Tokyo")),
+                Lang::Ja
+            );
+            assert_eq!(
+                resolve_with_zone(&[("LC_ALL", locale)], Some("Japan")),
+                Lang::Ja
+            );
+            assert_eq!(
+                resolve_with_zone(&[("LC_ALL", locale)], Some("Asia/Seoul")),
+                Lang::En
+            );
+        }
+        assert_eq!(
+            resolve_with_zone(&[("LC_ALL", "C")], Some("Asia/Tokyo")),
+            Lang::En
+        );
+        assert_eq!(
+            resolve_with_zone(&[("LANG", "en_US.UTF-8")], Some("Asia/Tokyo")),
+            Lang::En
+        );
+        assert_eq!(
+            resolve_with_zone(&[("LANG", "fr_FR.UTF-8")], Some("Asia/Tokyo")),
+            Lang::En
+        );
+        assert_eq!(
+            resolve_with_zone(
+                &[("LC_ALL", "C.UTF-8"), ("LANGUAGE", "en")],
+                Some("Asia/Tokyo")
+            ),
+            Lang::En
+        );
+    }
+
+    #[test]
+    fn tz環境変数をシステムタイムゾーンより優先する() {
+        assert_eq!(
+            resolve_with_zone(&[("TZ", ":Asia/Tokyo")], Some("UTC")),
+            Lang::Ja
+        );
+        assert_eq!(
+            resolve_with_zone(&[("TZ", "UTC")], Some("Asia/Tokyo")),
+            Lang::En
+        );
+        assert_eq!(resolve_with_zone(&[], Some("Asia/Tokyo")), Lang::Ja);
+        assert_eq!(resolve_with_zone(&[], Some("Asia/Seoul")), Lang::En);
+        assert_eq!(resolve_with_zone(&[], None), Lang::En);
     }
 }

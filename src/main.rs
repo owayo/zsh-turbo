@@ -525,7 +525,7 @@ function zle() {{ ZLE_CALLED="$1"; }}
 BUFFER='ls -l'
 CURSOR=${{#BUFFER}}
 full='ls -l /path/to/hoge/fuga'
-for expected in 'ls -l /path' 'ls -l /path/to' 'ls -l /path/to/hoge' 'ls -l /path/to/hoge/fuga'; do
+for expected in 'ls -l /path/' 'ls -l /path/to/' 'ls -l /path/to/hoge/' 'ls -l /path/to/hoge/fuga'; do
     POSTDISPLAY="${{full#"$BUFFER"}}"
     region_highlight=("${{#BUFFER}} 100 fg=8")
     _zsh_turbo_accept_right
@@ -552,9 +552,9 @@ _zsh_turbo_accept_right
 _zsh_turbo_suggestion_step '/to/'
 [[ "$REPLY" == '/to/' ]] || exit 6
 _zsh_turbo_suggestion_step ' relative/child'
-[[ "$REPLY" == ' relative' ]] || exit 7
+[[ "$REPLY" == ' relative/' ]] || exit 7
 _zsh_turbo_suggestion_step ' "space name/child"'
-[[ "$REPLY" == ' "space name' ]] || exit 8
+[[ "$REPLY" == ' "space name/' ]] || exit 8
 "#,
             shell_single_quote(&init_path.display().to_string())
         );

@@ -170,7 +170,7 @@ In `zsh-turbo configure`, use **Style → Rainbow palette** to choose from 14 pa
 | Tab         | Accept full suggestion; run standard completion when none is shown |
 
 Suggestions are displayed and accepted only while the cursor is at the end of the buffer. Moving the cursor into existing text clears the ghost text; returning to the end restores the still-valid suggestion.
-For example, if `ls -l` suggests `/path/to/hoge/fuga`, each Right Arrow press accepts `/path`, then `/path/to`, then `/path/to/hoge`. Tab accepts the whole suggestion. You can assign the actions for Tab, Right Arrow, Alt+F, and Ctrl+Right separately in **Suggest** under `zsh-turbo configure`. Restart the shell after changing them.
+For example, if `ls -l` suggests `/path/to/hoge/fuga`, each Right Arrow press accepts `/path/`, then `/path/to/`, then `/path/to/hoge/`. If you have already typed `/path`, one press accepts `/to/` and leaves `/path/to/` in the input. Tab accepts the whole suggestion. You can assign the actions for Tab, Right Arrow, Alt+F, and Ctrl+Right separately in **Suggest** under `zsh-turbo configure`. Restart the shell after changing them.
 
 Equally strong matches are ranked by frequency, then recency. `Ctrl+R` searches history using the current input, or the entire history when the input is empty. Choose with Up/Down or Tab, press Enter to insert, then Enter again to execute. Esc / Ctrl+C restores the original input and cursor. Set the menu limit in **Suggest → Max Suggestions**; the default is 10.
 
@@ -195,7 +195,7 @@ zsh-turbo font                         # Interactive terminal font setup
 zsh-turbo doctor                       # Diagnose environment
 ```
 
-The configuration TUI defaults to **Shell → Interface Language: Auto**. Auto uses Japanese for Japanese locales and English otherwise. It checks the first non-empty `LC_ALL`, `LC_MESSAGES`, then `LANG`; `C`/`POSIX` locales force English. Otherwise, the first supported language in the colon-separated `LANGUAGE` list takes precedence. With no language settings, it uses English. Select English or 日本語 in the TUI to save an explicit choice. Configuration keys and values stay the same in both languages.
+The configuration TUI defaults to **Shell → Interface Language: Auto**. Auto checks the first non-empty `LC_ALL`, `LC_MESSAGES`, then `LANG`. Plain `C`/`POSIX` locales select English. Otherwise, the first supported language in the colon-separated `LANGUAGE` list takes precedence, followed by an explicit Japanese or other locale. `C.UTF-8`/`POSIX.UTF-8` and missing locales have no language preference: Auto selects Japanese for the local `Asia/Tokyo` or `Japan` time zone and English otherwise. `TZ` takes precedence over the system time zone. Select English or 日本語 in the TUI to save an explicit choice. Configuration keys and values stay the same in both languages.
 
 ### Nerd Font Installation
 
