@@ -15,63 +15,90 @@ fn candidates_in(query: &str, cwd: &Path, max: usize) -> Vec<String> {
     if max == 0 || query.chars().any(char::is_control) {
         return Vec::new();
     }
-    let Some((command, rest)) = query.split_once(char::is_whitespace) else {
-        return Vec::new();
-    };
+    let (command, rest) = query.split_once(char::is_whitespace).unwrap_or((query, ""));
     let rest = rest.trim_start_matches(char::is_whitespace);
-    let (names, prefix) = match command {
-        "make" => (make_targets(cwd), rest),
+    let (names, prefix, bare_head) = match command {
+        "make" => (make_targets(cwd), rest, "make "),
         "pnpm" | "bun" | "yarn" => (
             package_scripts(cwd, command == "pnpm"),
             after_keyword(rest, "run").unwrap_or(rest),
+            match command {
+                "pnpm" => "pnpm ",
+                "bun" => "bun ",
+                _ => "yarn ",
+            },
         ),
         "npm" => {
-            let Some(prefix) =
-                after_keyword(rest, "run").or_else(|| after_keyword(rest, "run-script"))
+            let Some(prefix) = rest
+                .is_empty()
+                .then_some("")
+                .or_else(|| after_keyword(rest, "run"))
+                .or_else(|| after_keyword(rest, "run-script"))
             else {
                 return Vec::new();
             };
-            (package_scripts(cwd, false), prefix)
+            (package_scripts(cwd, false), prefix, "npm run ")
         }
         "uv" => {
-            let Some(prefix) = after_keyword(rest, "run") else {
-                return Vec::new();
-            };
-            (uv_scripts(cwd), prefix)
-        }
-        "deno" => {
-            let Some(prefix) = after_keyword(rest, "task") else {
-                return Vec::new();
-            };
-            (deno_tasks(cwd), prefix)
-        }
-        "mise" => {
-            let Some(prefix) = after_keyword(rest, "run").or_else(|| after_keyword(rest, "r"))
+            let Some(prefix) = rest
+                .is_empty()
+                .then_some("")
+                .or_else(|| after_keyword(rest, "run"))
             else {
                 return Vec::new();
             };
-            (mise_tasks(cwd), prefix)
+            (uv_scripts(cwd), prefix, "uv run ")
         }
-        "just" => (just_recipes(cwd), rest),
-        "task" => (taskfile_tasks(cwd), rest),
+        "deno" => {
+            let Some(prefix) = rest
+                .is_empty()
+                .then_some("")
+                .or_else(|| after_keyword(rest, "task"))
+            else {
+                return Vec::new();
+            };
+            (deno_tasks(cwd), prefix, "deno task ")
+        }
+        "mise" => {
+            let Some(prefix) = rest
+                .is_empty()
+                .then_some("")
+                .or_else(|| after_keyword(rest, "run"))
+                .or_else(|| after_keyword(rest, "r"))
+            else {
+                return Vec::new();
+            };
+            (mise_tasks(cwd), prefix, "mise run ")
+        }
+        "just" => (just_recipes(cwd), rest, "just "),
+        "task" => (taskfile_tasks(cwd), rest, "task "),
         _ => return Vec::new(),
     };
-    matching(query, prefix, names, max)
+    let head = if query == command
+        || (rest.is_empty() && matches!(command, "npm" | "uv" | "deno" | "mise"))
+    {
+        bare_head
+    } else if prefix.is_empty() && !query.ends_with(char::is_whitespace) {
+        // `npm run` など、サブコマンド直後も候補を表示する。
+        return matching(&format!("{query} "), prefix, names, max);
+    } else {
+        &query[..query.len() - prefix.len()]
+    };
+    matching(head, prefix, names, max)
 }
 
 fn after_keyword<'a>(rest: &'a str, keyword: &str) -> Option<&'a str> {
     let after = rest.strip_prefix(keyword)?;
-    if !after.starts_with(char::is_whitespace) {
+    if !after.is_empty() && !after.starts_with(char::is_whitespace) {
         return None;
     }
     Some(after.trim_start_matches(char::is_whitespace))
 }
 
-fn matching(query: &str, prefix: &str, names: Vec<String>, max: usize) -> Vec<String> {
+fn matching(head: &str, prefix: &str, names: Vec<String>, max: usize) -> Vec<String> {
     if prefix.chars().any(char::is_whitespace) || prefix.starts_with('-') {
         return Vec::new();
     }
-    let head = &query[..query.len() - prefix.len()];
     names
         .into_iter()
         .filter(|name| name.starts_with(prefix) && name != prefix)
@@ -398,6 +425,39 @@ mod tests {
         assert_eq!(
             candidates_in("make ", tmp.path(), 10),
             ["make all", "make build", "make test"]
+        );
+        assert_eq!(
+            candidates_in("make", tmp.path(), 10),
+            ["make all", "make build", "make test"]
+        );
+        assert_eq!(
+            candidates_in("pnpm", tmp.path(), 10),
+            ["pnpm deploy", "pnpm dev"]
+        );
+        assert_eq!(
+            candidates_in("npm", tmp.path(), 10),
+            ["npm run .hidden", "npm run deploy", "npm run dev"]
+        );
+        assert_eq!(
+            candidates_in("npm run", tmp.path(), 10),
+            ["npm run .hidden", "npm run deploy", "npm run dev"]
+        );
+        assert_eq!(
+            candidates_in("uv", tmp.path(), 10),
+            ["uv run hello", "uv run hello-world"]
+        );
+        assert_eq!(
+            candidates_in("deno", tmp.path(), 10),
+            [
+                "deno task .hidden",
+                "deno task check",
+                "deno task deploy",
+                "deno task dev"
+            ]
+        );
+        assert_eq!(
+            candidates_in("mise", tmp.path(), 10),
+            ["mise run check", "mise run deploy", "mise run test"]
         );
         assert_eq!(
             candidates_in("pnpm de", tmp.path(), 10),

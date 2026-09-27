@@ -9,7 +9,9 @@ eval "$("$TEST_BINARY" init)"
 bindkey -e
 function snapshot_fixture() {
     print -rn -- "$BUFFER" > "$TEST_ROOT/buffer"
-    print -rn -- "$POSTDISPLAY" > "$TEST_ROOT/ghost"
+    print -rn -- "$_ZSH_TURBO_GHOST_SUFFIX" > "$TEST_ROOT/ghost"
+    print -rn -- "$POSTDISPLAY" > "$TEST_ROOT/display"
+    print -rl -- "${_ZSH_TURBO_PROJECT_CANDIDATES[@]}" > "$TEST_ROOT/project"
     print -rl -- "${region_highlight[@]}" > "$TEST_ROOT/highlight"
     print -rn -- "$CURSOR" > "$TEST_ROOT/cursor"
     print -rn -- "$_ZSH_TURBO_ASYNC_FD $_ZSH_TURBO_HIGHLIGHT_FD" > "$TEST_ROOT/fds"

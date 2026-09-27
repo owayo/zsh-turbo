@@ -153,6 +153,18 @@ pub fn get_suggestion(
         return Some(candidate);
     }
 
+    get_history_suggestion(query, history_file, strategy)
+}
+
+pub fn get_history_suggestion(
+    query: &str,
+    history_file: Option<&str>,
+    strategy: &Strategy,
+) -> Option<String> {
+    if query.is_empty() {
+        return None;
+    }
+
     let history_path = resolve_history_path(history_file)?;
 
     let text = read_ranked_history(&history_path)?;

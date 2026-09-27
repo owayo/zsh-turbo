@@ -176,7 +176,7 @@ Equally strong matches are ranked by frequency, then recency. `Ctrl+R` searches 
 
 History suggestions prefer a prefix match over substring and fuzzy matches across the entire history file. Incomplete final entries and fragments of multiline commands are excluded, including fragments at the 64 KiB read boundary. Only the top candidates are selected, avoiding a full sort of all matches.
 
-Project tasks in the current directory take priority over history suggestions. Supported commands include `make`, `npm run`, `pnpm`, `bun`, `yarn`, `uv run`, `deno task`, `mise run`, `just`, and `task` (Go Task). Task files are parsed without running the tools. Tab accepts the ghost suggestion; with **Suggest → Tab: Default**, normal zsh completion lists matching project tasks. See [project task completion](docs/configuration.md#project-task-completion).
+Project tasks in the current directory take priority over history suggestions. Typing `make` shows targets from the Makefile below the input; `pnpm` and other supported commands show their tasks the same way. Further input filters the list by prefix. Task files are parsed without running the tools. Tab accepts the ghost suggestion; **Suggest → Tab: Default** uses normal zsh completion. See [supported commands and task files](docs/configuration.md#project-task-completion).
 
 When no history suggestion is shown, Tab also completes subcommands and options, such as `zsh-turbo conf<Tab>` and `zsh-turbo install-font --fo<Tab>`. Completion is generated from the CLI definition. Other commands use standard zsh completion and your `fpath`. Clearing or accepting the input unregisters pending suggestion handlers and preserves normal command error output. Both sides of the prompt are rendered with one CLI invocation.
 

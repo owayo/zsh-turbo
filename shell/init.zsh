@@ -8,6 +8,7 @@ typeset -g ZSH_TURBO_CMD="${commands[zsh-turbo]:-zsh-turbo}"
 typeset -g ZSH_TURBO_TRANSIENT="${ZSH_TURBO_TRANSIENT:-0}"
 typeset -g ZSH_TURBO_SUGGEST_STRATEGY="${ZSH_TURBO_SUGGEST_STRATEGY:-prefix}"
 typeset -g ZSH_TURBO_SUGGEST_HIGHLIGHT="${ZSH_TURBO_SUGGEST_HIGHLIGHT:-fg=8}"
+typeset -g ZSH_TURBO_TASK_LIST_LABEL="${ZSH_TURBO_TASK_LIST_LABEL:-Tasks}"
 typeset -g ZSH_TURBO_KEY_TAB="${ZSH_TURBO_KEY_TAB:-full}"
 typeset -g ZSH_TURBO_KEY_RIGHT="${ZSH_TURBO_KEY_RIGHT:-step}"
 typeset -g ZSH_TURBO_KEY_ALT_F="${ZSH_TURBO_KEY_ALT_F:-word}"
@@ -156,6 +157,8 @@ zle -N zle-line-finish _zsh_turbo_zle_line_finish
 # ─── オートサジェスト連携（非同期） ────────────────────────────
 
 typeset -g _ZSH_TURBO_SUGGESTION=""
+typeset -g _ZSH_TURBO_GHOST_SUFFIX=""
+typeset -ga _ZSH_TURBO_PROJECT_CANDIDATES=()
 typeset -gi _ZSH_TURBO_ASYNC_FD=0
 typeset -g _ZSH_TURBO_ASYNC_BUFFER=""
 
@@ -175,12 +178,16 @@ function _zsh_turbo_autosuggest_fetch() {
     _ZSH_TURBO_ASYNC_FD=0
     if [[ -z "$prefix" ]]; then
         _ZSH_TURBO_SUGGESTION=""
+        _ZSH_TURBO_PROJECT_CANDIDATES=()
+        _ZSH_TURBO_GHOST_SUFFIX=""
         POSTDISPLAY=""
         return
     fi
 
     # 新しい検索結果が返るまで古い候補を表示しない
     _ZSH_TURBO_SUGGESTION=""
+    _ZSH_TURBO_PROJECT_CANDIDATES=()
+    _ZSH_TURBO_GHOST_SUFFIX=""
     POSTDISPLAY=""
 
     _ZSH_TURBO_ASYNC_BUFFER="$prefix"
@@ -190,18 +197,24 @@ function _zsh_turbo_autosuggest_fetch() {
     #   help が stdout へ漏れ、候補として表示されるのを防ぐ。
     # - `--history-file "$HISTFILE"`: HISTFILE はシェル変数で export されないため、
     #   明示的に渡さないと子プロセスはカスタム履歴パスを解決できない。
-    exec {_ZSH_TURBO_ASYNC_FD}< <("$ZSH_TURBO_CMD" suggest --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" -- "$prefix" 2>/dev/null; printf '\n')
+    exec {_ZSH_TURBO_ASYNC_FD}< <("$ZSH_TURBO_CMD" suggest --project-list --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" -- "$prefix" 2>/dev/null; printf '\n')
     zle -F -w "$_ZSH_TURBO_ASYNC_FD" _zsh_turbo_async_callback
 }
 
 function _zsh_turbo_async_callback() {
     emulate -L zsh
     local fd="$1"
-    local suggestion=""
+    local suggestion="" kind="" candidate
+    local -a project_candidates
 
-    # 結果を読み取る
-    if IFS= read -r -u "$fd" suggestion 2>/dev/null; then
-        : # 取得済み
+    IFS= read -r -u "$fd" kind 2>/dev/null
+    if [[ "$kind" == project ]]; then
+        while IFS= read -r -u "$fd" candidate 2>/dev/null; do
+            [[ -n "$candidate" ]] && project_candidates+=("$candidate")
+        done
+        suggestion="${project_candidates[1]:-}"
+    elif [[ "$kind" == history ]]; then
+        IFS= read -r -u "$fd" suggestion 2>/dev/null
     fi
 
     # fd を片付ける
@@ -210,6 +223,7 @@ function _zsh_turbo_async_callback() {
 
     # リクエスト後にバッファが変わっていない場合だけ反映する
     if [[ "$BUFFER" == "$_ZSH_TURBO_ASYNC_BUFFER" ]]; then
+        _ZSH_TURBO_PROJECT_CANDIDATES=("${project_candidates[@]}")
         if [[ -n "$suggestion" ]]; then
             _ZSH_TURBO_SUGGESTION="$suggestion"
         else
@@ -234,23 +248,36 @@ function _zsh_turbo_autosuggest_display() {
         fi
     done
     region_highlight=("${syntax_hl[@]}")
+    _ZSH_TURBO_GHOST_SUFFIX=""
+    POSTDISPLAY=""
+
+    (( CURSOR == ${#BUFFER} )) || return
 
     # 候補が BUFFER の延長 (prefix 一致) の場合だけ ghost 表示する。
     # substring/fuzzy 戦略は BUFFER で始まらない候補を返すことがあり、そのまま
     # suffix 計算すると候補全文が POSTDISPLAY に入って表示・受け入れが壊れる。
-    if (( CURSOR == ${#BUFFER} )) && \
-       [[ -n "$_ZSH_TURBO_SUGGESTION" && "$_ZSH_TURBO_SUGGESTION" != "$BUFFER" \
+    if [[ -n "$_ZSH_TURBO_SUGGESTION" && "$_ZSH_TURBO_SUGGESTION" != "$BUFFER" \
           && "$_ZSH_TURBO_SUGGESTION" == "$BUFFER"* ]]; then
         # zsh の ${VAR#PATTERN} は右辺をパターンとして解釈するため、
         # BUFFER に `[`/`*`/`?` 等を含むと壊れる。クオートして literal 扱いにする。
         local suffix="${_ZSH_TURBO_SUGGESTION#"$BUFFER"}"
         if [[ -n "$suffix" ]]; then
+            _ZSH_TURBO_GHOST_SUFFIX="$suffix"
             POSTDISPLAY="$suffix"
             region_highlight+=("$(( ${#BUFFER} )) $(( ${#BUFFER} + ${#suffix} )) ${ZSH_TURBO_SUGGEST_HIGHLIGHT}")
-            return
         fi
     fi
-    POSTDISPLAY=""
+
+    if (( ${#_ZSH_TURBO_PROJECT_CANDIDATES} )); then
+        local candidate
+        local -i count=0 limit=$(( LINES > 6 ? LINES - 6 : 1 ))
+        POSTDISPLAY+=$'\n'"$ZSH_TURBO_TASK_LIST_LABEL (${#_ZSH_TURBO_PROJECT_CANDIDATES}):"
+        for candidate in "${_ZSH_TURBO_PROJECT_CANDIDATES[@]}"; do
+            POSTDISPLAY+=$'\n'"  ${candidate##* }"
+            (( ++count >= limit )) && break
+        done
+    fi
+    return 0
 }
 
 # 次の空白またはパス区切りまでを返す。パス区切りは今回の補完に含める。
@@ -296,7 +323,7 @@ function _zsh_turbo_suggestion_step() {
 # キーごとの通常操作は、候補がない場合やカーソルが行末以外の場合に使う。
 function _zsh_turbo_accept_by_key() {
     emulate -L zsh
-    local action="$1" fallback="$2" suffix="$POSTDISPLAY" chunk
+    local action="$1" fallback="$2" suffix="$_ZSH_TURBO_GHOST_SUFFIX" chunk
     if [[ "$action" == default || -z "$suffix" ]] || (( CURSOR != ${#BUFFER} )); then
         zle "$fallback"
         return
@@ -344,6 +371,8 @@ function _zsh_turbo_clear_suggestion() {
     emulate -L zsh
     POSTDISPLAY=""
     _ZSH_TURBO_SUGGESTION=""
+    _ZSH_TURBO_PROJECT_CANDIDATES=()
+    _ZSH_TURBO_GHOST_SUFFIX=""
     _zsh_turbo_autosuggest_display
 }
 

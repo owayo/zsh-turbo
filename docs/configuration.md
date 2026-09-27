@@ -165,7 +165,7 @@ Task names are read from files in the current directory:
 | `just <recipe>` | `justfile`, `Justfile`, or `.justfile` recipes (private recipes excluded) |
 | `task <name>` (Go Task) | `Taskfile.yml`/`.yaml`, including `.dist` variants (internal tasks excluded) |
 
-Names are matched by prefix; malformed or oversized files are ignored. No task manager is executed while finding candidates. Project tasks appear as ghost suggestions before history matches. With **Suggest → Tab: Default**, Tab uses zsh completion to list them, falling back to existing completion definitions when no project task matches. `zsh-turbo complete --project-only -- "make bu"` lists matching project tasks without history.
+Typing a supported command shows its project tasks below the input. `make` shows Makefile targets and `pnpm` shows package.json scripts. For `npm`, `uv`, `deno`, and `mise`, candidates include the required `run` or `task` subcommand. Further input filters names by prefix; moving the cursor away from the end hides the list. **Suggest → Max Suggestions** limits its size. Malformed or oversized files are ignored, and task managers are not executed while finding candidates. The first task also appears as ghost text and can be accepted with Tab. **Suggest → Tab: Default** uses normal zsh completion and falls back to existing completion definitions when no project task matches. `zsh-turbo complete --project-only -- "make"` lists matching project tasks without history.
 
 ## CLI completion registration
 

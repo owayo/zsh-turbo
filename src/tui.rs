@@ -34,6 +34,10 @@ pub fn history_menu_empty() -> &'static str {
         .text("No matching history", "一致する履歴がありません")
 }
 
+pub fn project_task_list_label() -> &'static str {
+    Lang::from_preference(config::load_config().ui.language).text("Tasks", "タスク")
+}
+
 #[cfg(test)]
 #[path = "tui/settings_tests.rs"]
 mod settings_tests;

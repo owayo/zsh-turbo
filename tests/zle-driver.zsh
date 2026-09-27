@@ -118,8 +118,26 @@ zpty -b fixture zsh -di || exit 1
     await_fixture buffer 'ls -l /path/to/hoge/fuga' || exit 34
     zpty -w -n fixture $'\x15make bu'
     await_fixture ghost 'ild' || exit 35
+    zpty -w -n fixture $'\x15make'
+    await_fixture project 'make build' || exit 51
+    await_fixture display $' build\nTasks (1):\n  build' || exit 52
+    drain_fixture
+    [[ "$(<"$TEST_ROOT/terminal")" == *'Tasks (1):'* ]] || exit 52
+    zpty -w -n fixture $'\e[D'
+    await_fixture display '' || exit 52
+    zpty -w -n fixture $'\e[C'
+    await_fixture display $' build\nTasks (1):\n  build' || exit 52
     zpty -w -n fixture $'\t'
-    await_fixture buffer 'make build' || exit 36
+    await_fixture buffer 'make build' || exit 52
+    await_fixture project '' || exit 52
+    zpty -w -n fixture $'\x15pnpm'
+    await_fixture project $'pnpm dev\npnpm test' || exit 53
+    await_fixture display $' dev\nTasks (2):\n  dev\n  test' || exit 54
+    zpty -w -n fixture $'\x15echo sam'
+    await_fixture project '' || exit 55
+    await_fixture display 'ple-alpha' || exit 55
+    zpty -w -n fixture $'\t'
+    await_fixture buffer 'echo sample-alpha' || exit 36
     zpty -w -n fixture $'\x15pnpm de'
     await_fixture ghost 'v' || exit 37
     zpty -w -n fixture $'\x15bun run de'

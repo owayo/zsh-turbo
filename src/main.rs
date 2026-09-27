@@ -59,6 +59,9 @@ enum Commands {
         /// 検索戦略（prefix, substring, fuzzy）
         #[arg(long, allow_hyphen_values = true)]
         strategy: Option<String>,
+        /// プロジェクトのタスク候補を一覧用プロトコルで返す
+        #[arg(long, hide = true)]
+        project_list: bool,
     },
     /// 履歴ベースの補完候補を一覧表示する
     Complete {
@@ -180,9 +183,28 @@ fn main() {
             prefix,
             history_file,
             strategy,
+            project_list,
         } => {
             let strategy = strategy.unwrap_or_else(|| config::load_config().suggest.strategy);
             let strat = suggest::Strategy::from_str(&strategy);
+            if project_list {
+                let max = config::load_config().suggest.max_suggestions;
+                let project = project_tasks::candidates(&prefix, max);
+                if !project.is_empty() {
+                    println!("project");
+                    for candidate in project {
+                        println!("{candidate}");
+                    }
+                    return;
+                }
+                println!("history");
+                if let Some(suggestion) =
+                    suggest::get_history_suggestion(&prefix, history_file.as_deref(), &strat)
+                {
+                    print!("{suggestion}");
+                }
+                return;
+            }
             if let Some(suggestion) =
                 suggest::get_suggestion(&prefix, history_file.as_deref(), &strat)
             {
@@ -276,6 +298,7 @@ fn render_init(cfg: &config::Config) -> String {
         ("ZSH_TURBO_SUGGEST_STRATEGY", cfg.suggest.strategy.as_str()),
         ("ZSH_TURBO_HISTORY_MENU_HELP", tui::history_menu_help()),
         ("ZSH_TURBO_HISTORY_MENU_EMPTY", tui::history_menu_empty()),
+        ("ZSH_TURBO_TASK_LIST_LABEL", tui::project_task_list_label()),
         (
             "ZSH_TURBO_SUGGEST_HIGHLIGHT",
             &suggest_highlight_style(&cfg.suggest.highlight_color),
@@ -499,9 +522,10 @@ fi
     fn init_script_clear_suggestion_は_region_highlightも更新する() {
         let script = include_str!("../shell/init.zsh");
         assert!(
-            script.contains(
-                "function _zsh_turbo_clear_suggestion() {\n    emulate -L zsh\n    POSTDISPLAY=\"\"\n    _ZSH_TURBO_SUGGESTION=\"\"\n    _zsh_turbo_autosuggest_display\n}"
-            ),
+            script.contains("function _zsh_turbo_clear_suggestion() {")
+                && script.contains(
+                    "    _ZSH_TURBO_GHOST_SUFFIX=\"\"\n    _zsh_turbo_autosuggest_display\n}"
+                ),
             "サジェスト消去時は POSTDISPLAY だけでなく region_highlight も更新する必要がある"
         );
         assert!(script.contains("_zsh_turbo_clear_suggestion\n    BUFFER=\"${BUFFER}${chunk}\""));
@@ -511,7 +535,7 @@ fi
     fn init_script_は行末以外でサジェストを表示も受理もしない() {
         let script = include_str!("../shell/init.zsh");
         assert!(
-            script.contains("if (( CURSOR == ${#BUFFER} )) && \\")
+            script.contains("(( CURSOR == ${#BUFFER} )) || return")
                 && script.contains("(( CURSOR != ${#BUFFER} )); then"),
             "表示と受理は CURSOR が BUFFER の末尾にある場合だけ許可すること"
         );
@@ -535,6 +559,7 @@ CURSOR=${{#BUFFER}}
 full='ls -l /path/to/hoge/fuga'
 for expected in 'ls -l /path/' 'ls -l /path/to/' 'ls -l /path/to/hoge/' 'ls -l /path/to/hoge/fuga'; do
     POSTDISPLAY="${{full#"$BUFFER"}}"
+    _ZSH_TURBO_GHOST_SUFFIX="$POSTDISPLAY"
     region_highlight=("${{#BUFFER}} 100 fg=8")
     _zsh_turbo_accept_right
     [[ "$BUFFER" == "$expected" && $CURSOR == ${{#BUFFER}} && ${{#region_highlight}} == 0 ]] || {{ print -ru2 -- "expected=$expected actual=$BUFFER cursor=$CURSOR highlights=${{(j:,:)region_highlight}}"; exit 1; }}
@@ -542,14 +567,17 @@ done
 BUFFER='ls -l'
 CURSOR=${{#BUFFER}}
 POSTDISPLAY=' /path/to/hoge/fuga'
+_ZSH_TURBO_GHOST_SUFFIX="$POSTDISPLAY"
 _zsh_turbo_accept_tab
 [[ "$BUFFER" == "$full" ]] || exit 2
 POSTDISPLAY=''
+_ZSH_TURBO_GHOST_SUFFIX=''
 _zsh_turbo_accept_tab
 [[ "$ZLE_CALLED" == expand-or-complete ]] || exit 3
 BUFFER='ls -l'
 CURSOR=${{#BUFFER}}
 POSTDISPLAY=' /path/to'
+_ZSH_TURBO_GHOST_SUFFIX="$POSTDISPLAY"
 ZSH_TURBO_KEY_TAB=default
 ZLE_CALLED=''
 _zsh_turbo_accept_tab
