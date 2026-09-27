@@ -66,9 +66,9 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 |---|---|
 | Ghostty, cmux | Supported; choose MesloLGS NF if icons are missing. |
 | [macOS Terminal](https://support.apple.com/guide/terminal/trmltxt/mac) | Select MesloLGS NF in the active profile under **Settings → Profiles → Text → Font → Change**. |
-| [iTerm2](https://iterm2.com/documentation-fonts.html) | Select MesloLGS NF in the active profile under **Settings → Profiles → Text → Font**. |
+| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | Select MesloLGS NF in the active profile under **Settings → Profiles → Text → Font**. If a separate non-ASCII font is enabled, use MesloLGS NF for icons there too. |
 
-The terminal font is configured separately from zsh-turbo. For Nerd Font icons, set **Prompt → Font level** to **Nerd** in `zsh-turbo configure`. If icons show as `?` or boxes, run `zsh-turbo doctor` to inspect sample glyphs. Other zsh terminals can use the `unicode` or `ascii` font level without a Nerd Font.
+The terminal font is configured separately from zsh-turbo. For Nerd Font icons, set **Prompt → Font level** to **Nerd** in `zsh-turbo configure`. If icons show as `?` or boxes, run `zsh-turbo doctor` to inspect sample glyphs. The default `unicode` font level and `ascii` do not need a Nerd Font.
 
 ## Installation
 

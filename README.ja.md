@@ -66,9 +66,9 @@
 |---|---|
 | Ghostty、cmux | 対応。アイコンが表示されない場合は MesloLGS NF を選択してください。 |
 | [macOS 標準ターミナル](https://support.apple.com/ja-jp/guide/terminal/trmltxt/mac) | 使用中のプロファイルで **設定 → プロファイル → テキスト → フォント → 変更** から MesloLGS NF を選択してください。 |
-| [iTerm2](https://iterm2.com/documentation-fonts.html) | 使用中のプロファイルで **Settings → Profiles → Text → Font** から MesloLGS NF を選択してください。 |
+| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | 使用中のプロファイルで **Settings → Profiles → Text → Font** から MesloLGS NF を選択してください。ASCII 以外のフォントを別に指定している場合は、アイコンに MesloLGS NF を使う設定も必要です。 |
 
-ターミナルのフォント設定と zsh-turbo の設定は別です。Nerd Font アイコンを使う場合は `zsh-turbo configure` の **Prompt → Font level** を **Nerd** にします。アイコンが `?` や四角で表示される場合は `zsh-turbo doctor` でサンプル文字を確認してください。そのほかの zsh 対応ターミナルでは、Nerd Font がなくても `unicode` または `ascii` を使えます。
+ターミナルのフォント設定と zsh-turbo の設定は別です。Nerd Font アイコンを使う場合は `zsh-turbo configure` の **Prompt → Font level** を **Nerd** にします。アイコンが `?` や四角で表示される場合は `zsh-turbo doctor` でサンプル文字を確認してください。既定の `unicode` と `ascii` は Nerd Font 不要です。
 
 ## インストール
 

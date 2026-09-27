@@ -25,6 +25,9 @@ pub fn run_doctor() {
     char_test("Unicode diamond", "\u{25c6}");
     char_test("Emoji", "\u{1f680}");
     info(
+        "The Powerline and Nerd Font samples require a compatible font only when using those font levels.",
+    );
+    info(
         "If Nerd Font icons appear as '?' or boxes, install MesloLGS NF and select it in the active terminal profile.",
     );
     #[cfg(target_os = "macos")]

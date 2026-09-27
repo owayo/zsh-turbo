@@ -131,7 +131,7 @@ impl Icons {
             vi_insert: "I",
             vi_normal: "N",
             vi_visual: "V",
-            cpu_arch: "\u{f4bc}",
+            cpu_arch: "\u{f2db}",
             root: "\u{f0e7}",
             lock: "\u{f023}",
             network: "\u{f6ff}",
