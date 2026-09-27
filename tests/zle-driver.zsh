@@ -156,13 +156,20 @@ zpty -b fixture zsh -di || exit 1
     await_fixture ghost 'eck' || exit 39
     zpty -w -n fixture $'\x15task bu'
     await_fixture ghost 'ild' || exit 39
-    zpty -w -n fixture $'\x15ZSH_TURBO_KEY_TAB=default\r'
+    zpty -w -n fixture $'\x15make\r'
     repeat 100; do
         drain_fixture
         [[ "$(<"$TEST_ROOT/boot")" == 4 ]] && break
         zselect -t 5
     done
-    [[ "$(<"$TEST_ROOT/boot")" == 4 ]] || exit 40
+    await_fixture display '' || exit 39
+    zpty -w -n fixture $'\x15ZSH_TURBO_KEY_TAB=default\r'
+    repeat 100; do
+        drain_fixture
+        [[ "$(<"$TEST_ROOT/boot")" == 5 ]] && break
+        zselect -t 5
+    done
+    [[ "$(<"$TEST_ROOT/boot")" == 5 ]] || exit 40
     zpty -w -n fixture $'make bu\t'
     await_fixture buffer 'make build ' || exit 41
     zpty -w -n fixture $'\x15pnpm run de\t'

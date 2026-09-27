@@ -142,6 +142,7 @@ function _zsh_turbo_zle_line_finish() {
     _ZSH_TURBO_ASYNC_FD=0
     _ZSH_TURBO_HIGHLIGHT_FD=0
     _zsh_turbo_clear_suggestion
+    zle -R
     _ZSH_TURBO_LAST_BUFFER=""
     _ZSH_TURBO_LAST_CURSOR=-1
     [[ "$ZSH_TURBO_TRANSIENT" != "1" ]] && return
@@ -251,7 +252,7 @@ function _zsh_turbo_autosuggest_display() {
     _ZSH_TURBO_GHOST_SUFFIX=""
     POSTDISPLAY=""
 
-    (( CURSOR == ${#BUFFER} )) || return
+    (( CURSOR == ${#BUFFER} )) || return 0
 
     # 候補が BUFFER の延長 (prefix 一致) の場合だけ ghost 表示する。
     # substring/fuzzy 戦略は BUFFER で始まらない候補を返すことがあり、そのまま
@@ -270,7 +271,8 @@ function _zsh_turbo_autosuggest_display() {
 
     if (( ${#_ZSH_TURBO_PROJECT_CANDIDATES} )); then
         local candidate
-        local -i count=0 limit=$(( LINES > 6 ? LINES - 6 : 1 ))
+        local -i count=0 limit=$(( LINES - BUFFERLINES - 4 ))
+        (( limit > 0 )) || return 0
         POSTDISPLAY+=$'\n'"$ZSH_TURBO_TASK_LIST_LABEL (${#_ZSH_TURBO_PROJECT_CANDIDATES}):"
         for candidate in "${_ZSH_TURBO_PROJECT_CANDIDATES[@]}"; do
             POSTDISPLAY+=$'\n'"  ${candidate##* }"
