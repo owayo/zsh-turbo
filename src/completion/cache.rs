@@ -1,7 +1,7 @@
 use super::{Registration, Source, expand_path, help, valid_command};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -145,8 +145,12 @@ pub(super) fn refresh(entry: &Registration, root: &Path, force: bool) -> io::Res
         .open(root.join(format!("{}.lock", entry.command)))?;
     if force {
         lock.lock()?;
-    } else if lock.try_lock().is_err() {
-        return Ok("updating");
+    } else {
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok("updating"),
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
     }
     let result = refresh_locked(entry, root, force);
     let error_path = root.join(format!("{}.error", entry.command));
@@ -158,6 +162,7 @@ pub(super) fn refresh(entry: &Registration, root: &Path, force: bool) -> io::Res
             let _ = fs::remove_file(error_path);
         }
     }
+    lock.unlock()?;
     result
 }
 

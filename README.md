@@ -32,6 +32,8 @@
 
 A single Rust binary that provides prompt rendering, input suggestions, syntax highlighting, and completion styling for zsh.
 
+![zsh-turbo prompt with command completions](docs/images/screenshot.png)
+
 ## Features
 
 - **Prompt Styles**: Lean, Classic (powerline), Rainbow, Pure with font-level detection

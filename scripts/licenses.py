@@ -88,7 +88,10 @@ def license_files(package, metadata):
             + " "
             + package["version"]
         )
-    return files
+    return [
+        (name, "\n".join(line.rstrip(" \t") for line in content.split("\n")))
+        for name, content in files
+    ]
 
 
 def generate():
