@@ -53,7 +53,7 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **`zsh-turbo doctor`**: Diagnose terminal, fonts, tools, and config
 - **Enhanced Completions**: Case-insensitive, grouped, cached, color-coded, and optional external completion directories
 
-- **Managed CLI Completions**: Register any CLI in the Completions tab using help, a native generator, or a completion file. Binary changes trigger background cache rebuilds; Tab uses the cache. See [configuration](docs/configuration.md#cli-completion-registration).
+- **Managed CLI Completions**: Register any CLI in the Completions tab using help, a native generator, or a completion file. Select a registration and press Backspace (⌫) or `d` twice to remove it. Binary changes trigger background cache rebuilds; Tab uses the cache. See [configuration](docs/configuration.md#cli-completion-registration).
 
 ## Requirements
 

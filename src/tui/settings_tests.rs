@@ -147,11 +147,11 @@ fn カスタム名の変更と削除で配置を同期し取消しでは維持�
     assert!(!app.config.prompt.left_segments.contains(&name));
     assert!(app.config.prompt.left_segments.contains(&"renamed".into()));
     assert!(app.config.prompt.right_segments.contains(&"renamed".into()));
-    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Backspace);
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.config.prompt.custom.len(), 1);
-    press(&mut app, KeyCode::Delete);
-    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Backspace);
     assert!(app.config.prompt.custom.is_empty());
     assert!(!app.config.prompt.left_segments.contains(&"renamed".into()));
     assert!(!app.config.prompt.right_segments.contains(&"renamed".into()));
@@ -602,9 +602,9 @@ fn 補完登録を編集し切替と削除ができる() {
     press(&mut app, KeyCode::Enter);
     edit(&mut app, 7, 4, "~/completions/_example");
     assert_eq!(app.config.completions[0].file, "~/completions/_example");
-    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Backspace);
     assert_eq!(app.config.completions.len(), 1);
-    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Backspace);
     assert!(app.config.completions.is_empty());
     assert_eq!(app.current_focus(), 0);
 }
@@ -632,6 +632,7 @@ fn 補完一覧から詳細を開き削除確認と新規取消しができる()
     let list = format!("{:?}", terminal.backend().buffer());
     assert!(list.contains("first"));
     assert!(list.contains("second"));
+    assert!(list.contains("⌫/d:削除"));
     press(&mut app, KeyCode::Up);
     assert_eq!(app.completion_index, 0);
     press(&mut app, KeyCode::Enter);
@@ -641,11 +642,11 @@ fn 補完一覧から詳細を開き削除確認と新規取消しができる()
         "first"
     );
     press(&mut app, KeyCode::Esc);
-    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Char('d'));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.config.completions.len(), 2);
-    press(&mut app, KeyCode::Delete);
-    press(&mut app, KeyCode::Delete);
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('d'));
     assert_eq!(app.config.completions[0].command, "second");
     press(&mut app, KeyCode::Char('n'));
     press(&mut app, KeyCode::Esc);

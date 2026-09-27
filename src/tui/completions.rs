@@ -343,8 +343,8 @@ pub(super) fn render(frame: &mut Frame, app: &App, area: Rect) {
         )
     } else {
         app.lang.text(
-        "n: Add  Delete: Remove  r: Refresh  Shift+R: Force  s: Save\nBinary changes → background rebuild (30s checks at prompts).\nRestart the shell after changing registrations. Failed updates keep the last cache.",
-        "n: 追加  Delete: 削除  r: 再生成  Shift+R: 強制再生成  s: 保存\nバイナリ変更で自動再生成（プロンプト表示時、30秒間隔で確認）。\n登録変更後はシェルを再起動。更新失敗時は前の補完を維持します。"
+        "n: Add  Backspace (⌫)/d: Remove  r: Refresh  Shift+R: Force  s: Save\nBinary changes → background rebuild (30s checks at prompts).\nRestart the shell after changing registrations. Failed updates keep the last cache.",
+        "n: 追加  Backspace (⌫)/d: 削除  r: 再生成  Shift+R: 強制再生成  s: 保存\nバイナリ変更で自動再生成（プロンプト表示時、30秒間隔で確認）。\n登録変更後はシェルを再起動。更新失敗時は前の補完を維持します。"
     )
     };
     frame.render_widget(Paragraph::new(help).wrap(Wrap { trim: false }), parts[1]);

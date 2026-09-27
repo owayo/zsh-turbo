@@ -1309,13 +1309,13 @@ fn ui(frame: &mut Frame, app: &mut App) {
         )
     } else if app.custom_delete_pending {
         app.lang.text(
-            "Delete again: remove definition and placements  Any other key: cancel",
-            "再度 Del:定義と配置を削除  その他のキー:戻る",
+            "⌫ again: remove definition and placements  Any other key: cancel",
+            "再度 ⌫:定義と配置を削除  その他のキー:戻る",
         )
     } else if app.completion_delete_pending {
         app.lang.text(
-            "Delete again: remove selected CLI  Any other key: cancel",
-            "再度 Delete:選択中の CLI を削除  その他のキー:取消",
+            "⌫/d again: remove selected CLI  Any other key: cancel",
+            "再度 ⌫/d:選択中の CLI を削除  その他のキー:取消",
         )
     } else if app.editing.is_some() {
         app.lang.text(
@@ -1325,24 +1325,24 @@ fn ui(frame: &mut Frame, app: &mut App) {
     } else if app.tab == 7 {
         if app.completion_detail {
             app.lang.text(
-                "↑/↓:field  Enter:edit  n:add  Del:delete  s:save  Esc:list",
-                "↑/↓:項目  Enter:編集  n:追加  Del:削除  s:保存  Esc:一覧",
+                "↑/↓:field  Enter:edit  n:add  ⌫/d:delete  s:save  Esc:list",
+                "↑/↓:項目  Enter:編集  n:追加  ⌫/d:削除  s:保存  Esc:一覧",
             )
         } else {
             app.lang.text(
-                "↑/↓:select  Enter:settings  n:add  Del:delete  s:save  Esc:quit",
-                "↑/↓:選択  Enter:設定  n:追加  Del:削除  s:保存  Esc:終了",
+                "↑/↓:select  Enter:settings  n:add  ⌫/d:delete  s:save  Esc:quit",
+                "↑/↓:選択  Enter:設定  n:追加  ⌫/d:削除  s:保存  Esc:終了",
             )
         }
     } else if app.tab == 1 {
         app.lang.text(
-            "Tab:switch  hjkl:nav  L/R:add to side  Del:remove  u/d:order  S:save  Esc:quit",
-            "Tab:切替  hjkl:移動  L/R:追加  Del:削除  u/d:順序  S:保存  Esc:終了",
+            "Tab:switch  hjkl:nav  L/R:add to side  ⌫:remove  u/d:order  S:save  Esc:quit",
+            "Tab:切替  hjkl:移動  L/R:追加  ⌫:削除  u/d:順序  S:保存  Esc:終了",
         )
     } else if app.tab == 5 {
         app.lang.text(
-            "Tab:switch  jk:field  hl:select  n:new  Del:delete  Enter:edit  S:save  Esc:quit",
-            "Tab:切替  jk:項目  hl:選択  n:作成  Del:削除  Enter:編集  S:保存 Esc:終了",
+            "Tab:switch  jk:field  hl:select  n:new  ⌫:delete  Enter:edit  S:save  Esc:quit",
+            "Tab:切替  jk:項目  hl:選択  n:作成  ⌫:削除  Enter:編集  S:保存 Esc:終了",
         )
     } else {
         app.lang.text(
@@ -1917,7 +1917,7 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
 
     if app.custom_delete_pending {
         app.custom_delete_pending = false;
-        if key.code == KeyCode::Delete {
+        if matches!(key.code, KeyCode::Delete | KeyCode::Backspace) {
             app.custom_remove();
         }
         return false;
@@ -1925,7 +1925,10 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
 
     if app.completion_delete_pending {
         app.completion_delete_pending = false;
-        if key.code == KeyCode::Delete {
+        if matches!(
+            key.code,
+            KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('d')
+        ) {
             completions::remove(app);
         }
         return false;
@@ -2044,21 +2047,25 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
             app.seg_reorder(false);
         }
         KeyCode::Char('n') if app.tab == 7 => completions::add(app),
-        KeyCode::Delete if app.tab == 7 && !app.config.completions.is_empty() => {
+        KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('d')
+            if app.tab == 7 && !app.config.completions.is_empty() =>
+        {
             app.completion_delete_pending = true;
             app.status_msg = Some(format!(
                 "{}: {}",
                 app.config.completions[app.completion_index].command,
                 app.lang.text(
-                    "Press Delete again to remove this CLI.",
-                    "もう一度 Delete でこの CLI を削除します。"
+                    "Press Backspace (⌫) or d again to remove this CLI.",
+                    "もう一度 ⌫ または d でこの CLI を削除します。"
                 )
             ));
         }
         KeyCode::Char('r') if app.tab == 7 => completions::refresh(app, false),
         KeyCode::Char('R') if app.tab == 7 => completions::refresh(app, true),
         KeyCode::Char('n') if app.tab == 5 => app.custom_add(),
-        KeyCode::Delete if app.tab == 5 && !app.config.prompt.custom.is_empty() => {
+        KeyCode::Delete | KeyCode::Backspace
+            if app.tab == 5 && !app.config.prompt.custom.is_empty() =>
+        {
             app.custom_delete_pending = true;
             app.status_msg = Some(format!(
                 "{}: {}",
