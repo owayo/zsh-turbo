@@ -118,7 +118,8 @@ fn 初期化は設定を補完初期化前に渡しシェル変数を優先す�
     );
     let config = serde_json::json!({
         "prompt": {"transient": true},
-        "suggest": {"strategy": "fuzzy", "highlight_color": payload},
+        "suggest": {"strategy": "fuzzy", "highlight_color": payload,
+            "keys": {"tab": "default", "right": "full", "alt_f": "step", "ctrl_right": "default"}},
         "shell": {"completion_dirs": completion_dir.to_str().unwrap(), "term_shell_integration": "0"}
     });
     std::fs::write(dir.join("config.toml"), toml::to_string(&config).unwrap()).unwrap();
@@ -139,6 +140,7 @@ commands[zsh-turbo]=/usr/bin/true
 setopt SH_GLOB NO_UNSET
 source "$1"
 print -rl -- "$ZSH_TURBO_TRANSIENT" "$ZSH_TURBO_SUGGEST_STRATEGY" "$ZSH_TURBO_SUGGEST_HIGHLIGHT" "$ZSH_TURBO_COMPLETION_DIRS" "$ZSH_TURBO_TERM_SHELL_INTEGRATION"
+print -rl -- "$ZSH_TURBO_KEY_TAB" "$ZSH_TURBO_KEY_RIGHT" "$ZSH_TURBO_KEY_ALT_F" "$ZSH_TURBO_KEY_CTRL_RIGHT"
 print -r -- "${_comps[zt-tui-test]:-missing}"
 "#;
         let mut command = Command::new("zsh");
@@ -155,6 +157,10 @@ print -r -- "${_comps[zt-tui-test]:-missing}"
             "ZSH_TURBO_SUGGEST_HIGHLIGHT",
             "ZSH_TURBO_COMPLETION_DIRS",
             "ZSH_TURBO_TERM_SHELL_INTEGRATION",
+            "ZSH_TURBO_KEY_TAB",
+            "ZSH_TURBO_KEY_RIGHT",
+            "ZSH_TURBO_KEY_ALT_F",
+            "ZSH_TURBO_KEY_CTRL_RIGHT",
         ] {
             command.env_remove(name);
         }
@@ -164,7 +170,11 @@ print -r -- "${_comps[zt-tui-test]:-missing}"
                 .env("ZSH_TURBO_SUGGEST_STRATEGY", "prefix")
                 .env("ZSH_TURBO_SUGGEST_HIGHLIGHT", "fg=3")
                 .env("ZSH_TURBO_COMPLETION_DIRS", "")
-                .env("ZSH_TURBO_TERM_SHELL_INTEGRATION", "1");
+                .env("ZSH_TURBO_TERM_SHELL_INTEGRATION", "1")
+                .env("ZSH_TURBO_KEY_TAB", "full")
+                .env("ZSH_TURBO_KEY_RIGHT", "step")
+                .env("ZSH_TURBO_KEY_ALT_F", "word")
+                .env("ZSH_TURBO_KEY_CTRL_RIGHT", "word");
         }
         let output = command.output().unwrap();
         assert!(
@@ -176,6 +186,7 @@ print -r -- "${_comps[zt-tui-test]:-missing}"
         let lines: Vec<_> = stdout.lines().collect();
         if override_values {
             assert_eq!(&lines[..5], ["0", "prefix", "fg=3", "", "1"]);
+            assert_eq!(&lines[5..9], ["full", "step", "word", "word"]);
         } else {
             assert_eq!(
                 &lines[..5],
@@ -187,8 +198,9 @@ print -r -- "${_comps[zt-tui-test]:-missing}"
                     "0"
                 ]
             );
-            assert_eq!(lines[5], "_zt_tui_test");
+            assert_eq!(&lines[5..9], ["default", "full", "step", "default"]);
         }
+        assert_eq!(lines[9], "_zt_tui_test");
         assert!(!marker.exists());
     }
 }

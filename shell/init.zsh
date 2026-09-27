@@ -8,6 +8,10 @@ typeset -g ZSH_TURBO_CMD="${commands[zsh-turbo]:-zsh-turbo}"
 typeset -g ZSH_TURBO_TRANSIENT="${ZSH_TURBO_TRANSIENT:-0}"
 typeset -g ZSH_TURBO_SUGGEST_STRATEGY="${ZSH_TURBO_SUGGEST_STRATEGY:-prefix}"
 typeset -g ZSH_TURBO_SUGGEST_HIGHLIGHT="${ZSH_TURBO_SUGGEST_HIGHLIGHT:-fg=8}"
+typeset -g ZSH_TURBO_KEY_TAB="${ZSH_TURBO_KEY_TAB:-full}"
+typeset -g ZSH_TURBO_KEY_RIGHT="${ZSH_TURBO_KEY_RIGHT:-step}"
+typeset -g ZSH_TURBO_KEY_ALT_F="${ZSH_TURBO_KEY_ALT_F:-word}"
+typeset -g ZSH_TURBO_KEY_CTRL_RIGHT="${ZSH_TURBO_KEY_CTRL_RIGHT:-word}"
 typeset -g ZSH_TURBO_COMPLETION_DIRS="${ZSH_TURBO_COMPLETION_DIRS:-}"
 typeset -g ZSH_TURBO_TERM_SHELL_INTEGRATION="${ZSH_TURBO_TERM_SHELL_INTEGRATION:-auto}"
 
@@ -249,37 +253,88 @@ function _zsh_turbo_autosuggest_display() {
     POSTDISPLAY=""
 }
 
-# サジェスト全体を受け入れる（右矢印 / 行末）
-function _zsh_turbo_accept_suggestion() {
+# 次の空白またはパス区切りまでを返す。先頭の空白・/ は次の要素に含める。
+function _zsh_turbo_suggestion_step() {
     emulate -L zsh
-    if [[ -n "$POSTDISPLAY" ]] && (( CURSOR == ${#BUFFER} )); then
-        local suffix="$POSTDISPLAY"
-        _zsh_turbo_clear_suggestion
-        BUFFER="${BUFFER}${suffix}"
-        CURSOR=${#BUFFER}
-    else
-        zle forward-char
-    fi
+    local suffix="$1" char quote="" previous=""
+    local -i i seen=0
+    for (( i=1; i<=${#suffix}; i++ )); do
+        char="${suffix[i]}"
+        if [[ "$previous" == '\\' ]]; then
+            previous=""
+            seen=1
+            continue
+        fi
+        if [[ "$char" == '\\' && "$quote" != "'" ]]; then
+            previous='\'
+            continue
+        fi
+        if [[ "$char" == "'" || "$char" == '"' ]]; then
+            if [[ -z "$quote" ]]; then
+                quote="$char"
+            elif [[ "$quote" == "$char" ]]; then
+                quote=""
+            fi
+            continue
+        fi
+        if [[ "$char" == '/' ]]; then
+            (( seen )) && break
+            continue
+        fi
+        if [[ -z "$quote" && "$char" == [[:space:]] ]]; then
+            (( seen )) && break
+            continue
+        fi
+        seen=1
+    done
+    REPLY="${suffix[1,$(( i - 1 ))]}"
 }
 
-# サジェストから 1 単語だけ受け入れる（alt+f / ctrl+right）
-function _zsh_turbo_accept_word() {
+# キーごとの通常操作は、候補がない場合やカーソルが行末以外の場合に使う。
+function _zsh_turbo_accept_by_key() {
     emulate -L zsh
-    if [[ -n "$POSTDISPLAY" ]] && (( CURSOR == ${#BUFFER} )); then
-        local suggestion="$POSTDISPLAY"
-        local word="${suggestion%% *}"
-        _zsh_turbo_clear_suggestion
-        if [[ "$word" == "$suggestion" ]]; then
-            BUFFER="${BUFFER}${suggestion}"
-            CURSOR=${#BUFFER}
-        else
-            BUFFER="${BUFFER}${word} "
-            CURSOR=${#BUFFER}
-        fi
-        # BUFFER 変更後の再サジェスト・再ハイライトは zle-line-pre-redraw が行う
-    else
-        zle forward-word
+    local action="$1" fallback="$2" suffix="$POSTDISPLAY" chunk
+    if [[ "$action" == default || -z "$suffix" ]] || (( CURSOR != ${#BUFFER} )); then
+        zle "$fallback"
+        return
     fi
+    case "$action" in
+        full) chunk="$suffix" ;;
+        word)
+            chunk="${suffix%% *}"
+            [[ "$chunk" == "$suffix" ]] || chunk+=' '
+            ;;
+        step)
+            _zsh_turbo_suggestion_step "$suffix"
+            chunk="$REPLY"
+            ;;
+        *) zle "$fallback"; return ;;
+    esac
+    [[ -n "$chunk" ]] || { zle "$fallback"; return; }
+    _zsh_turbo_clear_suggestion
+    BUFFER="${BUFFER}${chunk}"
+    CURSOR=${#BUFFER}
+    # BUFFER 変更後の再サジェスト・再ハイライトは zle-line-pre-redraw が行う
+}
+
+function _zsh_turbo_accept_tab() {
+    emulate -L zsh
+    _zsh_turbo_accept_by_key "$ZSH_TURBO_KEY_TAB" expand-or-complete
+}
+
+function _zsh_turbo_accept_right() {
+    emulate -L zsh
+    _zsh_turbo_accept_by_key "$ZSH_TURBO_KEY_RIGHT" forward-char
+}
+
+function _zsh_turbo_accept_alt_f() {
+    emulate -L zsh
+    _zsh_turbo_accept_by_key "$ZSH_TURBO_KEY_ALT_F" forward-word
+}
+
+function _zsh_turbo_accept_ctrl_right() {
+    emulate -L zsh
+    _zsh_turbo_accept_by_key "$ZSH_TURBO_KEY_CTRL_RIGHT" forward-word
 }
 
 function _zsh_turbo_clear_suggestion() {
@@ -290,15 +345,18 @@ function _zsh_turbo_clear_suggestion() {
 }
 
 # ウィジェット登録
-zle -N _zsh_turbo_accept_suggestion
-zle -N _zsh_turbo_accept_word
+zle -N _zsh_turbo_accept_tab
+zle -N _zsh_turbo_accept_right
+zle -N _zsh_turbo_accept_alt_f
+zle -N _zsh_turbo_accept_ctrl_right
 zle -N _zsh_turbo_clear_suggestion
 
 # キーバインド
-bindkey '^[[C'    _zsh_turbo_accept_suggestion  # 右矢印
-bindkey '^[OC'    _zsh_turbo_accept_suggestion  # 右矢印（代替）
-bindkey '^[f'     _zsh_turbo_accept_word        # Alt+f
-bindkey '^[[1;5C' _zsh_turbo_accept_word        # Ctrl+右矢印
+bindkey '^I'      _zsh_turbo_accept_tab
+bindkey '^[[C'    _zsh_turbo_accept_right
+bindkey '^[OC'    _zsh_turbo_accept_right
+bindkey '^[f'     _zsh_turbo_accept_alt_f
+bindkey '^[[1;5C' _zsh_turbo_accept_ctrl_right
 
 # BUFFER と CURSOR の変更を一元検知してサジェスト・ハイライトを更新する。
 # 個別ウィジェットのラップでは履歴検索・ペースト・補完・undo 等による
@@ -409,10 +467,14 @@ bindkey -M zsh-turbo-history '^[' send-break
 bindkey -M zsh-turbo-history '^C' send-break
 bindkey -M emacs '^R' _zsh_turbo_history_menu
 bindkey -M viins '^R' _zsh_turbo_history_menu
-bindkey -M emacs '^[[C' _zsh_turbo_accept_suggestion
-bindkey -M viins '^[[C' _zsh_turbo_accept_suggestion
-bindkey -M emacs '^[OC' _zsh_turbo_accept_suggestion
-bindkey -M viins '^[OC' _zsh_turbo_accept_suggestion
+for _zsh_turbo_keymap in emacs viins; do
+    bindkey -M "$_zsh_turbo_keymap" '^I' _zsh_turbo_accept_tab
+    bindkey -M "$_zsh_turbo_keymap" '^[[C' _zsh_turbo_accept_right
+    bindkey -M "$_zsh_turbo_keymap" '^[OC' _zsh_turbo_accept_right
+    bindkey -M "$_zsh_turbo_keymap" '^[f' _zsh_turbo_accept_alt_f
+    bindkey -M "$_zsh_turbo_keymap" '^[[1;5C' _zsh_turbo_accept_ctrl_right
+done
+unset _zsh_turbo_keymap
 
 # ─── シンタックスハイライト（Rust 実装） ───────────────────────
 

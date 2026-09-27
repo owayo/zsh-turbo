@@ -257,6 +257,13 @@ fn render_init(cfg: &config::Config) -> String {
             "ZSH_TURBO_SUGGEST_HIGHLIGHT",
             &suggest_highlight_style(&cfg.suggest.highlight_color),
         ),
+        ("ZSH_TURBO_KEY_TAB", cfg.suggest.keys.tab.as_str()),
+        ("ZSH_TURBO_KEY_RIGHT", cfg.suggest.keys.right.as_str()),
+        ("ZSH_TURBO_KEY_ALT_F", cfg.suggest.keys.alt_f.as_str()),
+        (
+            "ZSH_TURBO_KEY_CTRL_RIGHT",
+            cfg.suggest.keys.ctrl_right.as_str(),
+        ),
         (
             "ZSH_TURBO_COMPLETION_DIRS",
             cfg.shell.completion_dirs.as_str(),
@@ -473,18 +480,7 @@ fi
             ),
             "サジェスト消去時は POSTDISPLAY だけでなく region_highlight も更新する必要がある"
         );
-        assert!(
-            script.contains(
-                "local suffix=\"$POSTDISPLAY\"\n        _zsh_turbo_clear_suggestion\n        BUFFER=\"${BUFFER}${suffix}\""
-            ),
-            "サジェスト全受け入れでは BUFFER を伸ばす前に古いハイライト範囲を消す必要がある"
-        );
-        assert!(
-            script.contains(
-                "local suggestion=\"$POSTDISPLAY\"\n        local word=\"${suggestion%% *}\"\n        _zsh_turbo_clear_suggestion"
-            ),
-            "単語受け入れでも BUFFER 更新前に古いハイライト範囲を消す必要がある"
-        );
+        assert!(script.contains("_zsh_turbo_clear_suggestion\n    BUFFER=\"${BUFFER}${chunk}\""));
     }
 
     #[test]
@@ -492,7 +488,7 @@ fi
         let script = include_str!("../shell/init.zsh");
         assert!(
             script.contains("if (( CURSOR == ${#BUFFER} )) && \\")
-                && script.matches("(( CURSOR == ${#BUFFER} )); then").count() >= 2,
+                && script.contains("(( CURSOR != ${#BUFFER} )); then"),
             "表示と受理は CURSOR が BUFFER の末尾にある場合だけ許可すること"
         );
         assert!(
@@ -500,6 +496,58 @@ fi
                 && script.contains("_ZSH_TURBO_LAST_CURSOR=$CURSOR")
                 && script.contains("_zsh_turbo_autosuggest_display"),
             "BUFFER が同じでも CURSOR 変更時に ghost 表示を更新すること"
+        );
+    }
+
+    #[test]
+    fn init_script_パス候補を階層ごとに受け入れる() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let script = format!(
+            r#"source {}
+function zle() {{ ZLE_CALLED="$1"; }}
+BUFFER='ls -l'
+CURSOR=${{#BUFFER}}
+full='ls -l /path/to/hoge/fuga'
+for expected in 'ls -l /path' 'ls -l /path/to' 'ls -l /path/to/hoge' 'ls -l /path/to/hoge/fuga'; do
+    POSTDISPLAY="${{full#"$BUFFER"}}"
+    region_highlight=("${{#BUFFER}} 100 fg=8")
+    _zsh_turbo_accept_right
+    [[ "$BUFFER" == "$expected" && $CURSOR == ${{#BUFFER}} && ${{#region_highlight}} == 0 ]] || {{ print -ru2 -- "expected=$expected actual=$BUFFER cursor=$CURSOR highlights=${{(j:,:)region_highlight}}"; exit 1; }}
+done
+BUFFER='ls -l'
+CURSOR=${{#BUFFER}}
+POSTDISPLAY=' /path/to/hoge/fuga'
+_zsh_turbo_accept_tab
+[[ "$BUFFER" == "$full" ]] || exit 2
+POSTDISPLAY=''
+_zsh_turbo_accept_tab
+[[ "$ZLE_CALLED" == expand-or-complete ]] || exit 3
+BUFFER='ls -l'
+CURSOR=${{#BUFFER}}
+POSTDISPLAY=' /path/to'
+ZSH_TURBO_KEY_TAB=default
+ZLE_CALLED=''
+_zsh_turbo_accept_tab
+[[ "$BUFFER" == 'ls -l' && "$ZLE_CALLED" == expand-or-complete ]] || exit 4
+ZSH_TURBO_KEY_RIGHT=full
+_zsh_turbo_accept_right
+[[ "$BUFFER" == 'ls -l /path/to' ]] || exit 5
+"#,
+            shell_single_quote(&init_path.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .env("HISTFILE", tmp.path().join("history"))
+            .output()
+            .expect("zsh を実行できるべき");
+        assert!(
+            output.status.success(),
+            "段階採用に失敗: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

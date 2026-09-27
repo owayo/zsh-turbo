@@ -7,7 +7,7 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
     std::fs::create_dir(root.join("candidate-dir")).unwrap();
     std::fs::write(root.join("zsh-turbo/config.toml"), "[prompt]\nleft_segments=[]\nright_segments=[]\nnewline=false\n[suggest]\nmax_suggestions=10\n").unwrap();
     let mut history = Vec::new();
-    for byte in "echo sample-alpha\necho sample-alpha\necho sample-beta\necho 日本語\n".bytes() {
+    for byte in "echo sample-alpha\necho sample-alpha\necho sample-beta\necho 日本語\nls -l /path/to/hoge/fuga\n".bytes() {
         if byte >= 0x80 {
             history.extend([0x83, byte ^ 0x20]);
         } else {

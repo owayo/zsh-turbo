@@ -106,6 +106,48 @@ pub struct SuggestConfig {
     pub highlight_color: String,
     #[serde(default = "default_max_suggestions")]
     pub max_suggestions: usize,
+    #[serde(default)]
+    pub keys: SuggestKeys,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuggestKeyAction {
+    Default,
+    Full,
+    Step,
+    Word,
+}
+
+impl SuggestKeyAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Full => "full",
+            Self::Step => "step",
+            Self::Word => "word",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SuggestKeys {
+    pub tab: SuggestKeyAction,
+    pub right: SuggestKeyAction,
+    pub alt_f: SuggestKeyAction,
+    pub ctrl_right: SuggestKeyAction,
+}
+
+impl Default for SuggestKeys {
+    fn default() -> Self {
+        Self {
+            tab: SuggestKeyAction::Full,
+            right: SuggestKeyAction::Step,
+            alt_f: SuggestKeyAction::Word,
+            ctrl_right: SuggestKeyAction::Word,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -235,6 +277,7 @@ impl Default for SuggestConfig {
             strategy: default_strategy(),
             highlight_color: default_highlight_color(),
             max_suggestions: default_max_suggestions(),
+            keys: SuggestKeys::default(),
         }
     }
 }
@@ -536,6 +579,17 @@ mod tests {
         assert_eq!(s.strategy, "prefix");
         assert_eq!(s.highlight_color, "fg=8");
         assert_eq!(s.max_suggestions, 10);
+        assert_eq!(s.keys.tab, SuggestKeyAction::Full);
+        assert_eq!(s.keys.right, SuggestKeyAction::Step);
+        assert_eq!(s.keys.alt_f, SuggestKeyAction::Word);
+        assert_eq!(s.keys.ctrl_right, SuggestKeyAction::Word);
+    }
+
+    #[test]
+    fn 旧設定でキー操作を補う() {
+        let config: Config = toml::from_str("[suggest]\nstrategy = 'fuzzy'\n").unwrap();
+        assert_eq!(config.suggest.keys.tab, SuggestKeyAction::Full);
+        assert_eq!(config.suggest.keys.right, SuggestKeyAction::Step);
     }
 
     #[test]

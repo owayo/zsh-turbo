@@ -145,15 +145,16 @@ In `zsh-turbo configure`, use **Style → Rainbow palette** to choose from 14 pa
 
 | Key         | Action                  |
 | ----------- | ----------------------- |
-| Right Arrow | Accept full suggestion  |
+| Right Arrow | Accept one path segment or the next word |
 | Alt+F       | Accept one word         |
 | Ctrl+Right  | Accept one word         |
 | Up Arrow    | History search (prefix) |
 | Down Arrow  | History search (prefix) |
 | Ctrl+R      | Ranked history menu (fuzzy search) |
-| Tab         | Standard command, argument, and file completion |
+| Tab         | Accept full suggestion; run standard completion when none is shown |
 
 Suggestions are displayed and accepted only while the cursor is at the end of the buffer. Moving the cursor into existing text clears the ghost text; returning to the end restores the still-valid suggestion.
+For example, if `ls -l` suggests `/path/to/hoge/fuga`, each Right Arrow press accepts `/path`, then `/path/to`, then `/path/to/hoge`. Tab accepts the whole suggestion. You can assign the actions for Tab, Right Arrow, Alt+F, and Ctrl+Right separately in **Suggest** under `zsh-turbo configure`. Restart the shell after changing them.
 
 Equally strong matches are ranked by frequency, then recency. `Ctrl+R` searches history using the current input, or the entire history when the input is empty. Choose with Up/Down or Tab, press Enter to insert, then Enter again to execute. Esc / Ctrl+C restores the original input and cursor. Set the menu limit in **Suggest → Max Suggestions**; the default is 10.
 

@@ -1,4 +1,4 @@
-use crate::config::{self, Config, CustomSegment};
+use crate::config::{self, Config, CustomSegment, SuggestKeyAction};
 use crate::icons::{FontLevel, Icons};
 use crate::style::{self, Color as AppColor};
 
@@ -55,6 +55,12 @@ const TAB_TITLES: &[&str] = &[
 const PROMPT_STYLES: &[&str] = &["lean", "classic", "rainbow", "pure"];
 const FONT_LEVELS: &[&str] = &["nerd", "powerline", "unicode", "ascii"];
 const SUGGEST_STRATEGIES: &[&str] = &["prefix", "substring", "fuzzy"];
+const SUGGEST_KEY_ACTIONS: &[SuggestKeyAction] = &[
+    SuggestKeyAction::Default,
+    SuggestKeyAction::Full,
+    SuggestKeyAction::Step,
+    SuggestKeyAction::Word,
+];
 const SHELL_INTEGRATIONS: &[&str] = &["auto", "1", "0"];
 
 // セグメント名一覧は prompt::ALL_SEGMENT_NAMES を単一ソースとする
@@ -296,7 +302,7 @@ impl App {
         match self.tab {
             0 => 8,
             2 => 2,
-            3 => 2,
+            3 => 6,
             4 => {
                 if self.rainbow_selected().is_some() {
                     8
@@ -1454,7 +1460,7 @@ fn render_git_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn render_suggest_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let items: Vec<ListItem> = vec![
+    let mut items: Vec<ListItem> = vec![
         field_item(
             app.lang.text("Strategy", "候補の検索方法"),
             &app.config.suggest.strategy,
@@ -1483,6 +1489,27 @@ fn render_suggest_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect)
             false,
         ),
     ];
+    for (index, label, action) in [
+        (3, "Tab", app.config.suggest.keys.tab),
+        (
+            4,
+            app.lang.text("Right Arrow", "右矢印"),
+            app.config.suggest.keys.right,
+        ),
+        (5, "Alt+F", app.config.suggest.keys.alt_f),
+        (
+            6,
+            app.lang.text("Ctrl+Right", "Ctrl+右矢印"),
+            app.config.suggest.keys.ctrl_right,
+        ),
+    ] {
+        items.push(field_item(
+            label,
+            suggest_key_action_label(action, app.lang),
+            app.suggest_focus == index,
+            false,
+        ));
+    }
 
     render_fields(
         frame,
@@ -1491,6 +1518,36 @@ fn render_suggest_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect)
         app.suggest_focus,
         area,
     );
+}
+
+fn suggest_key_action_label(action: SuggestKeyAction, lang: Lang) -> &'static str {
+    match action {
+        SuggestKeyAction::Default => lang.text("Normal key action", "通常のキー操作"),
+        SuggestKeyAction::Full => lang.text("Accept all", "全体を採用"),
+        SuggestKeyAction::Step => lang.text("Accept path segment", "階層・単語を採用"),
+        SuggestKeyAction::Word => lang.text("Accept word", "単語を採用"),
+    }
+}
+
+fn cycle_suggest_key(app: &mut App, forward: bool) {
+    let key = match app.suggest_focus {
+        3 => &mut app.config.suggest.keys.tab,
+        4 => &mut app.config.suggest.keys.right,
+        5 => &mut app.config.suggest.keys.alt_f,
+        6 => &mut app.config.suggest.keys.ctrl_right,
+        _ => return,
+    };
+    let index = SUGGEST_KEY_ACTIONS
+        .iter()
+        .position(|candidate| candidate == key)
+        .unwrap_or(0);
+    let next = if forward {
+        (index + 1) % SUGGEST_KEY_ACTIONS.len()
+    } else {
+        (index + SUGGEST_KEY_ACTIONS.len() - 1) % SUGGEST_KEY_ACTIONS.len()
+    };
+    *key = SUGGEST_KEY_ACTIONS[next];
+    app.dirty = true;
 }
 
 fn palette_label(name: &str, lang: Lang) -> &'static str {
@@ -1937,6 +1994,8 @@ fn handle_left(app: &mut App) {
             } else if app.suggest_focus == 2 && app.config.suggest.max_suggestions > 0 {
                 app.config.suggest.max_suggestions -= 1;
                 app.dirty = true;
+            } else if app.suggest_focus >= 3 {
+                cycle_suggest_key(app, false);
             }
         }
         4 if app.style_focus == 4 => {
@@ -2002,6 +2061,8 @@ fn handle_right(app: &mut App) {
                 app.config.suggest.max_suggestions =
                     app.config.suggest.max_suggestions.saturating_add(1);
                 app.dirty = true;
+            } else if app.suggest_focus >= 3 {
+                cycle_suggest_key(app, true);
             }
         }
         4 if app.style_focus == 4 => {
@@ -2076,6 +2137,7 @@ fn handle_activate(app: &mut App) {
             }
             1 => app.activate_edit(EditTarget::HighlightColor),
             2 => app.start_edit(EditTarget::MaxSuggestions),
+            3..=6 => cycle_suggest_key(app, true),
             _ => {}
         },
         4 if app.style_focus == 4 => handle_right(app),
