@@ -533,6 +533,12 @@ _zsh_turbo_accept_tab
 ZSH_TURBO_KEY_RIGHT=full
 _zsh_turbo_accept_right
 [[ "$BUFFER" == 'ls -l /path/to' ]] || exit 5
+_zsh_turbo_suggestion_step '/to/'
+[[ "$REPLY" == '/to/' ]] || exit 6
+_zsh_turbo_suggestion_step ' relative/child'
+[[ "$REPLY" == ' relative' ]] || exit 7
+_zsh_turbo_suggestion_step ' "space name/child"'
+[[ "$REPLY" == ' "space name' ]] || exit 8
 "#,
             shell_single_quote(&init_path.display().to_string())
         );

@@ -278,7 +278,12 @@ function _zsh_turbo_suggestion_step() {
             continue
         fi
         if [[ "$char" == '/' ]]; then
-            (( seen )) && break
+            if (( seen )); then
+                if (( i == ${#suffix} )) || [[ "${suffix[i+1]}" == [[:space:]] ]]; then
+                    (( i++ ))
+                fi
+                break
+            fi
             continue
         fi
         if [[ -z "$quote" && "$char" == [[:space:]] ]]; then
