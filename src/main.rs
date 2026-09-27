@@ -220,11 +220,11 @@ fn main() {
                     result.dest_dir.display()
                 );
                 println!(
-                    "Next: select 'MesloLGS NF' in the active terminal profile, then open a new terminal session."
+                    "The font files are ready. See the README's Terminal Font Setup before changing your terminal font."
                 );
                 #[cfg(target_os = "macos")]
                 println!(
-                    "Terminal.app: Settings > Profiles > Text > Font; iTerm2: Settings > Profiles > Text > Font."
+                    "Terminal.app and iTerm2: select MesloLGS NF in the active profile; Ghostty 1.2+ normally needs no font change."
                 );
                 println!(
                     "For Nerd Font icons, set Prompt > Font level to Nerd in `zsh-turbo configure`."

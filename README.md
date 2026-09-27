@@ -60,15 +60,18 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **Shell**: zsh 5.4+
 - **Rust**: 1.98+ (for building from source, edition 2024; the tested toolchain is pinned in `mise.toml`)
 
-## Supported Terminals
+## Terminal Font Setup
 
-| Terminal | Nerd Font icons |
+The default `unicode` font level and `ascii` do not need a Nerd Font. The `powerline` and `nerd` levels use additional glyphs; select a level under **Prompt → Font level** in `zsh-turbo configure`. `zsh-turbo install-font` installs MesloLGS NF but does not change your terminal's font setting.
+
+| Terminal | Font setting for `powerline` or `nerd` |
 |---|---|
-| Ghostty, cmux | Supported; choose MesloLGS NF if icons are missing. |
-| [macOS Terminal](https://support.apple.com/guide/terminal/trmltxt/mac) | Select MesloLGS NF in the active profile under **Settings → Profiles → Text → Font → Change**. |
-| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | Select MesloLGS NF in the active profile under **Settings → Profiles → Text → Font**. If a separate non-ASCII font is enabled, use MesloLGS NF for icons there too. |
+| [Ghostty 1.2+](https://ghostty.org/docs/install/release-notes/1-2-0) | Nerd Font symbols are built in, so no font change is normally needed. If an icon is missing, add `font-family = MesloLGS NF` to the [Ghostty configuration](https://ghostty.org/docs/config/reference#font-family) and reload it. |
+| [cmux](https://github.com/manaflow-ai/cmux#can-i-customize-cmux) | Uses Ghostty for rendering and reads its font configuration. Check the icons first; if any are missing, add `font-family = MesloLGS NF` to `~/.config/ghostty/config` and restart cmux. |
+| [macOS Terminal](https://support.apple.com/guide/terminal/trmltxt/mac) | In the profile you use, open **Terminal → Settings → Profiles → Text → Font → Change** and select MesloLGS NF. |
+| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | In the active profile, open **Settings → Profiles → Text** and select MesloLGS NF for **Font**. If **Use Non-ASCII Font** is enabled, also select MesloLGS NF for **Non-ASCII Font**, which draws the icons. |
 
-The terminal font is configured separately from zsh-turbo. For Nerd Font icons, set **Prompt → Font level** to **Nerd** in `zsh-turbo configure`. If icons show as `?` or boxes, run `zsh-turbo doctor` to inspect sample glyphs. The default `unicode` font level and `ascii` do not need a Nerd Font.
+Open a new terminal window after changing its font. If icons still appear as `?` or boxes, run `zsh-turbo doctor` to inspect sample glyphs.
 
 ## Installation
 
@@ -201,7 +204,7 @@ The preflight write check uses an exclusively created, unique probe file and nev
 
 The font download is pinned to a reviewed upstream revision. Before downloading fonts, the installer saves the upstream copyright notice and full Apache-2.0 license as `MesloLGS NF License.txt` in the same directory. Running the command again also supplies this document when all fonts are already installed; license documents are excluded from the installed/skipped font counts.
 
-After installation, select **MesloLGS NF** in the profile used by your terminal and open a new terminal session. Installing the font does not change a terminal's selected font. See [Supported Terminals](#supported-terminals) for Terminal and iTerm2 settings.
+After installation, configure the terminal if needed and open a new terminal window. Installing the font does not change a terminal's selected font. See [Terminal Font Setup](#terminal-font-setup) for each terminal's instructions.
 
 ## Configuration
 

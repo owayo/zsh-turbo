@@ -60,15 +60,18 @@
 - **シェル**: zsh 5.4 以上
 - **Rust**: 1.98 以上（ソースからビルドする場合、edition 2024。検証用のバージョンは `mise.toml` で固定）
 
-## 対応ターミナル
+## ターミナルのフォント設定
 
-| ターミナル | Nerd Font アイコンの設定 |
+既定の `unicode` と `ascii` には Nerd Font は不要です。`powerline` と `nerd` は追加のグリフを使います。`zsh-turbo configure` の **Prompt → Font level** でレベルを選んでください。`zsh-turbo install-font` は MesloLGS NF をインストールしますが、ターミナルのフォント設定は変更しません。
+
+| ターミナル | `powerline` / `nerd` 用のフォント設定 |
 |---|---|
-| Ghostty、cmux | 対応。アイコンが表示されない場合は MesloLGS NF を選択してください。 |
-| [macOS 標準ターミナル](https://support.apple.com/ja-jp/guide/terminal/trmltxt/mac) | 使用中のプロファイルで **設定 → プロファイル → テキスト → フォント → 変更** から MesloLGS NF を選択してください。 |
-| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | 使用中のプロファイルで **Settings → Profiles → Text → Font** から MesloLGS NF を選択してください。ASCII 以外のフォントを別に指定している場合は、アイコンに MesloLGS NF を使う設定も必要です。 |
+| [Ghostty 1.2 以降](https://ghostty.org/docs/install/release-notes/1-2-0) | Nerd Font の記号を内蔵しているため、通常はフォント変更不要です。アイコンが欠ける場合は [Ghostty の設定](https://ghostty.org/docs/config/reference#font-family)に `font-family = MesloLGS NF` を追加して再読み込みします。 |
+| [cmux](https://github.com/manaflow-ai/cmux#can-i-customize-cmux) | 描画に Ghostty を使い、そのフォント設定を読み込みます。まずアイコンを確認し、欠ける場合は `~/.config/ghostty/config` に `font-family = MesloLGS NF` を追加して cmux を再起動します。 |
+| [macOS 標準ターミナル](https://support.apple.com/ja-jp/guide/terminal/trmltxt/mac) | 使用するプロファイルで **ターミナル → 設定 → プロファイル → テキスト → フォント → 変更** を開き、MesloLGS NF を選びます。 |
+| [iTerm2](https://iterm2.com/documentation-preferences-profiles-text.html) | 使用中のプロファイルの **Settings → Profiles → Text** で **Font** に MesloLGS NF を選びます。**Use Non-ASCII Font** が有効なら、アイコンを描く **Non-ASCII Font** にも MesloLGS NF を選びます。 |
 
-ターミナルのフォント設定と zsh-turbo の設定は別です。Nerd Font アイコンを使う場合は `zsh-turbo configure` の **Prompt → Font level** を **Nerd** にします。アイコンが `?` や四角で表示される場合は `zsh-turbo doctor` でサンプル文字を確認してください。既定の `unicode` と `ascii` は Nerd Font 不要です。
+フォントを変更したら新しいターミナルウィンドウを開いてください。アイコンがまだ `?` や四角になる場合は、`zsh-turbo doctor` でサンプル文字を確認できます。
 
 ## インストール
 
@@ -201,7 +204,7 @@ zsh-turbo doctor                          # 環境診断
 
 フォントの取得元は確認済みのコミットに固定しています。フォント取得前に、配布元の著作権表示と Apache-2.0 の全文を `MesloLGS NF License.txt` として同じディレクトリへ保存します。フォントがすべてインストール済みでも、再実行するとライセンス文書を補完します。この文書はフォントのインストール／スキップ件数には含めません。
 
-インストール後は、使用中のターミナルのプロファイルで **MesloLGS NF** を選び、新しいターミナルセッションを開いてください。フォントのインストールだけではターミナルのフォント設定は変わりません。標準ターミナルと iTerm2 の設定場所は[対応ターミナル](#対応ターミナル)を参照してください。
+インストール後は、必要に応じてターミナルのフォントを設定し、新しいウィンドウを開いてください。フォントのインストールだけではターミナルのフォント設定は変わりません。各ターミナルの手順は[ターミナルのフォント設定](#ターミナルのフォント設定)を参照してください。
 
 ## 設定
 

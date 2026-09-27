@@ -1,4 +1,5 @@
 use crate::config;
+use crate::icons::FontLevel;
 use crate::style::{Color, plain_colored};
 use std::process::Command;
 
@@ -20,20 +21,28 @@ pub fn run_doctor() {
     check_env_hint("COLORTERM", "truecolor support");
 
     section("Font Rendering");
-    char_test("Powerline arrow", "\u{e0b0}");
-    char_test("Nerd Font folder", "\u{f07c}");
-    char_test("Unicode diamond", "\u{25c6}");
-    char_test("Emoji", "\u{1f680}");
-    info(
-        "The Powerline and Nerd Font samples require a compatible font only when using those font levels.",
-    );
-    info(
-        "If Nerd Font icons appear as '?' or boxes, install MesloLGS NF and select it in the active terminal profile.",
-    );
-    #[cfg(target_os = "macos")]
-    info(
-        "Terminal.app: Settings > Profiles > Text > Font; iTerm2: Settings > Profiles > Text > Font.",
-    );
+    let font_level = config::load_config().prompt.font_level;
+    info(&format!("Configured font level: {font_level}"));
+    match FontLevel::from_str(&font_level) {
+        FontLevel::Ascii => info("No special font is required for the ASCII level."),
+        FontLevel::Unicode => {
+            char_test("Unicode diamond", "\u{25c6}");
+            char_test("Emoji", "\u{1f680}");
+            info("A Nerd Font is not required for the Unicode level.");
+        }
+        FontLevel::Powerline => {
+            char_test("Powerline arrow", "\u{e0b0}");
+            info("If the arrow is missing, select a font with Powerline glyphs in your terminal.");
+        }
+        FontLevel::Nerd => {
+            char_test("Powerline arrow", "\u{e0b0}");
+            char_test("Nerd Font folder", "\u{f07c}");
+            info("If icons are missing, check the terminal font settings in the README.");
+            #[cfg(target_os = "macos")]
+            info("Terminal.app and iTerm2 need MesloLGS NF selected in the active profile.");
+            info("Ghostty 1.2+ includes Nerd Font symbols; a font change is usually unnecessary.");
+        }
+    }
 
     section("Shell");
     check_env("SHELL");
