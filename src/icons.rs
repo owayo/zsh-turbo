@@ -15,19 +15,6 @@ impl FontLevel {
             _ => Self::Unicode,
         }
     }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Nerd => "nerd",
-            Self::Powerline => "powerline",
-            Self::Unicode => "unicode",
-            Self::Ascii => "ascii",
-        }
-    }
-
-    pub fn has_powerline(&self) -> bool {
-        matches!(self, Self::Nerd | Self::Powerline)
-    }
 }
 
 pub struct Icons {
@@ -65,6 +52,22 @@ pub struct Icons {
     pub terraform: &'static str,
     pub docker: &'static str,
     pub os_icon: &'static str,
+    pub gcloud: &'static str,
+    pub direnv: &'static str,
+    pub nix_shell: &'static str,
+    pub load: &'static str,
+    pub battery_low: &'static str,
+    pub battery_charging: &'static str,
+    pub battery_full: &'static str,
+    pub disk: &'static str,
+    pub ram: &'static str,
+    pub vi_insert: &'static str,
+    pub vi_normal: &'static str,
+    pub vi_visual: &'static str,
+    pub cpu_arch: &'static str,
+    pub root: &'static str,
+    pub lock: &'static str,
+    pub network: &'static str,
 }
 
 impl Icons {
@@ -111,7 +114,27 @@ impl Icons {
             aws: "\u{e7ad}",
             terraform: "tf",
             docker: "\u{e7b0}",
-            os_icon: "\u{f179}",
+            os_icon: if cfg!(target_os = "macos") {
+                "\u{f179}" // nf-fa-apple
+            } else {
+                "\u{f17c}" // nf-fa-linux (Tux)
+            },
+            gcloud: "\u{f1a0}",
+            direnv: "\u{f422}",
+            nix_shell: "\u{f313}",
+            load: "\u{f0e4}",
+            battery_low: "\u{f244}",
+            battery_charging: "\u{f1e6}",
+            battery_full: "\u{f240}",
+            disk: "\u{f0a0}",
+            ram: "\u{f538}",
+            vi_insert: "I",
+            vi_normal: "N",
+            vi_visual: "V",
+            cpu_arch: "\u{f4bc}",
+            root: "\u{f0e7}",
+            lock: "\u{f023}",
+            network: "\u{f6ff}",
         }
     }
 
@@ -149,7 +172,28 @@ impl Icons {
             aws: "aws",
             terraform: "tf",
             docker: "docker",
-            os_icon: "\u{e0b0}",
+            // powerline フォントに OS グリフはないため ascii 階層と同じテキスト表記
+            os_icon: if cfg!(target_os = "macos") {
+                "mac"
+            } else {
+                "linux"
+            },
+            gcloud: "gcp",
+            direnv: "env",
+            nix_shell: "nix",
+            load: "load",
+            battery_low: "bat",
+            battery_charging: "bat",
+            battery_full: "bat",
+            disk: "disk",
+            ram: "ram",
+            vi_insert: "I",
+            vi_normal: "N",
+            vi_visual: "V",
+            cpu_arch: "arch",
+            root: "root",
+            lock: "\u{1f512}",
+            network: "net",
         }
     }
 
@@ -187,11 +231,28 @@ impl Icons {
             aws: "aws",
             terraform: "tf",
             docker: "docker",
+            // unicode 階層は Nerd Font 不要が契約のため PUA グリフを使わない
             os_icon: if cfg!(target_os = "macos") {
-                "\u{f179}"
+                "\u{1f34e}"
             } else {
                 "\u{1f427}"
             },
+            gcloud: "gcp",
+            direnv: "env",
+            nix_shell: "nix",
+            load: "load",
+            battery_low: "bat",
+            battery_charging: "bat",
+            battery_full: "bat",
+            disk: "disk",
+            ram: "ram",
+            vi_insert: "I",
+            vi_normal: "N",
+            vi_visual: "V",
+            cpu_arch: "arch",
+            root: "root",
+            lock: "\u{1f512}",
+            network: "net",
         }
     }
 
@@ -234,6 +295,115 @@ impl Icons {
             } else {
                 "linux"
             },
+            gcloud: "gcp",
+            direnv: "env",
+            nix_shell: "nix",
+            load: "load",
+            battery_low: "bat",
+            battery_charging: "bat",
+            battery_full: "bat",
+            disk: "disk",
+            ram: "ram",
+            vi_insert: "I",
+            vi_normal: "N",
+            vi_visual: "V",
+            cpu_arch: "arch",
+            root: "root",
+            lock: "lock",
+            network: "net",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── FontLevel::from_str のテスト ─────────────────────────────
+
+    #[test]
+    fn from_str_known_values() {
+        assert_eq!(FontLevel::from_str("nerd"), FontLevel::Nerd);
+        assert_eq!(FontLevel::from_str("powerline"), FontLevel::Powerline);
+        assert_eq!(FontLevel::from_str("ascii"), FontLevel::Ascii);
+    }
+
+    #[test]
+    fn from_str_unicode_explicit() {
+        assert_eq!(FontLevel::from_str("unicode"), FontLevel::Unicode);
+    }
+
+    #[test]
+    fn from_str_unknown_defaults_to_unicode() {
+        assert_eq!(FontLevel::from_str("unknown"), FontLevel::Unicode);
+        assert_eq!(FontLevel::from_str(""), FontLevel::Unicode);
+        assert_eq!(FontLevel::from_str("NERD"), FontLevel::Unicode);
+    }
+
+    // ── Icons::for_level のテスト ────────────────────────────────
+
+    #[test]
+    fn nerd_icons_have_powerline_separator() {
+        let icons = Icons::for_level(FontLevel::Nerd);
+        assert_eq!(icons.separator_left, "\u{e0b0}");
+        assert_eq!(icons.separator_right, "\u{e0b2}");
+    }
+
+    #[test]
+    fn nerd_icons_have_specific_values() {
+        let icons = Icons::for_level(FontLevel::Nerd);
+        assert_eq!(icons.git_branch, "\u{e0a0}");
+        assert_eq!(icons.dir, "\u{f07c}");
+        assert_eq!(icons.error, "\u{f00d}");
+    }
+
+    #[test]
+    fn powerline_icons_have_powerline_separator() {
+        let icons = Icons::for_level(FontLevel::Powerline);
+        assert_eq!(icons.separator_left, "\u{e0b0}");
+    }
+
+    #[test]
+    fn ascii_icons_use_plain_characters() {
+        let icons = Icons::for_level(FontLevel::Ascii);
+        assert_eq!(icons.separator_left, "|");
+        assert_eq!(icons.git_ahead, "^");
+        assert_eq!(icons.git_behind, "v");
+        assert_eq!(icons.error, "x");
+    }
+
+    #[test]
+    fn unicode_icons_use_unicode_separator() {
+        let icons = Icons::for_level(FontLevel::Unicode);
+        assert_eq!(icons.separator_left, "\u{2502}");
+    }
+
+    // ── os_icon の OS 分岐 ──────────────────────────────────────
+
+    #[test]
+    fn os_icon_はプラットフォームに対応するグリフを返す() {
+        if cfg!(target_os = "macos") {
+            assert_eq!(Icons::nerd().os_icon, "\u{f179}"); // nf-fa-apple
+            assert_eq!(Icons::unicode().os_icon, "\u{1f34e}");
+            assert_eq!(Icons::powerline().os_icon, "mac");
+            assert_eq!(Icons::ascii().os_icon, "mac");
+        } else {
+            assert_eq!(Icons::nerd().os_icon, "\u{f17c}"); // nf-fa-linux
+            assert_eq!(Icons::unicode().os_icon, "\u{1f427}");
+            assert_eq!(Icons::powerline().os_icon, "linux");
+            assert_eq!(Icons::ascii().os_icon, "linux");
+        }
+    }
+
+    #[test]
+    fn unicode_os_icon_はnerd_font専用のpuaグリフを使わない() {
+        // unicode 階層は「Nerd Font 不要」が契約。私用領域 (U+E000..U+F8FF) を禁止する
+        for ch in Icons::unicode().os_icon.chars() {
+            let cp = ch as u32;
+            assert!(
+                !(0xe000..=0xf8ff).contains(&cp),
+                "unicode 階層の os_icon に PUA グリフ U+{cp:04X} が含まれている"
+            );
         }
     }
 }

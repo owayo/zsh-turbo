@@ -24,3 +24,7 @@ target
 # Added by cargo
 
 /target
+
+# 開発環境ごとの設定
+mise.local.toml
+.mise.local.toml

@@ -1,0 +1,176 @@
+# 設定
+
+[README に戻る](../README.ja.md)
+
+設定ファイル: `XDG_CONFIG_HOME` が空でない場合は `${XDG_CONFIG_HOME}/zsh-turbo/config.toml`、未設定または空の場合は `~/.config/zsh-turbo/config.toml`
+
+設定の保存はアトミックに置換します。並行保存では排他的に作成した別々の一時ファイルを使うため、書き込み途中のデータを別の保存処理が上書きしません。
+
+`zsh-turbo configure` で以下のすべての設定を編集できます。設定ファイルを直接編集しても構いません。TUI は読み込んだ設定を編集し、`S` で同じファイルへ保存します。
+
+| タブ | 設定内容 |
+| --- | --- |
+| Prompt | スタイル、フォントレベル、Transient、ホーム記号、省略する長さ・記号、IP インターフェース（空欄で自動）、コマンド入力位置 |
+| Segments | 組込み・カスタムセグメントの左右への配置と順序 |
+| Git | ステータス、ahead/behind、stash の表示 |
+| Suggest | 検索戦略、ハイライト色、補完候補数 |
+| Style | primary / success / error / muted の色、Rainbow の配色 |
+| Custom | カスタムセグメントの追加・削除、名前、コマンド、アイコン、前景色、背景色、表示条件 |
+| Shell | 補完ディレクトリ、端末連携（`auto` / `1` = 有効 / `0` = 無効） |
+| 補完 | CLI の登録・有効化・無効化・削除・再構築 |
+
+`Tab` / `Shift+Tab` でタブを切り替え、上下キーで項目を選びます。`Enter` で編集・切替、左右キーで選択肢や数値を変更します。数値も `Enter` で直接入力できます。編集時は左右キー・`Home`・`End` でカーソルを移動し、`Enter` で確定、`Esc` で取り消します。
+
+Style の 4 色、Suggest のハイライト色、Custom の前景色・背景色には色見本が付きます。`Enter` で 256 色パレットを開き、矢印キーまたは `h/j/k/l` で選択、`Enter` で確定、`Esc` で取り消します。`e` で直接入力に切り替えると、色名（`blue` など）、`0`〜`255`、`#RRGGBB` を指定できます。サジェストでは `fg=8,bg=0,bold` などの指定も使え、パレット操作は前景色だけを変更します。
+
+Primary はディレクトリの文字色（Classic の左側では背景色）、Muted は時刻・実行時間の文字色、Success / Error は成功・失敗時のプロンプト記号の色です。カスタム背景色は Classic の左側で使います。Rainbow の左側は個別指定、選択したパレットの順に色が決まり、右側は各セグメントの文字色を使います。
+
+Custom タブでは `n` で追加、左右キーで対象を切り替え、`Delete` を 2 回押して定義と配置を削除します。名前変更は左右の配置にも反映します。コマンド内の改行は `Alt+Enter` で入力できます。作成したセグメントは Segments タブの Available で選び、`L` で左側、`R` で右側へ追加します。配置済みの項目にも `L` / `R` を使い、左右両方へ表示できます。`Delete` で配置解除、`u` / `d` で順序を変更します。プレビューはサンプル表示で、カスタムコマンドは実行しません。
+
+保存後、スタイルやセグメントは次のプロンプト描画で反映します。Transient、サジェスト、Shell の設定を確実に反映するには新しい zsh セッションを開いてください。初期化前に指定した `ZSH_TURBO_*` の設定変数は TOML より優先します。`prompt.ip_interface` も `ZSH_TURBO_IP_INTERFACE` があればそちらを優先します。
+
+`suggest.max_suggestions` は `Ctrl+R` の履歴メニューと `zsh-turbo complete` の最大件数です（既定10、`0` で候補なし、CLI の `--max` で上書き）。インラインサジェストは上位の前方一致候補を1件、薄い色で表示します。履歴メニューは入力全体を曖昧検索し、前方一致・部分一致・曖昧一致の順、同程度なら使用頻度・新しさの順で選びます。上下キー・Tab で選択し、Enter で入力欄へ戻し、もう一度 Enter で実行します。Esc / Ctrl+C は元の入力を復元します。通常の Tab 補完は維持します。`suggest` は設定の検索戦略を使い、`complete` は既定で前方一致です。どちらも `--strategy prefix|substring|fuzzy` で指定できます。制御文字を含む履歴は表示候補にしません。更新後は `exec zsh` で新しいシェル連携を読み込んでください。
+
+「配色 → Rainbow の配色」は左右キーまたは Enter で選択できます。配色は `default`（標準）、`blue`（青系）、`green`（緑系）、`blue_green`（青緑系）、`purple`（紫系）、`cyan`（シアン系）、`pink`（ピンク系）、`red`（赤系）、`orange`（オレンジ系）、`ocean`（オーシャン）、`forest`（フォレスト）、`sunset`（サンセット）、`pastel`（パステル）、`grayscale`（モノクロ）の14種類です。それぞれ6組の文字色・背景色を順番に使います。隣接するブロックの色相・明暗と、背景に対する文字の読みやすさを調整しています。標準は濃い青・黄・緑・明るい紫・濃い赤・水色の順です。未知の配色名も標準として扱います。
+
+「配色 → Rainbow のブロック」で左右キーを使って左側に配置したブロックを選び、「ブロックの文字色」「ブロックの背景色」を Enter で編集します。色選択画面の上部には、配置済みの全ブロックを実際のプロンプトと同じ並び・配色・区切りで表示します。矢印で色を選んでいる間も、RGB を直接入力している間も、確定前の値をプレビューに反映します。横幅に収まらないブロックは折り返して表示します。Enter で設定に反映し、Esc で取り消すと元の配色に戻ります。見本には文字色と背景色の組み合わせも表示します。表示条件を満たしていないブロックやカスタムブロックも選択できます。個別色はブロック名に紐づくため、並べ替えや一時的な非表示でも別のブロックへ移りません。配色セットを変えても保持されます。「このブロックの個別色を解除」で両方をセットの色へ戻し、`e` による直接入力で空欄にすると片方だけ戻せます。適用対象は Rainbow の左側です。終了コードなどの表示内容と、成功・失敗を示す入力記号の色は維持します。カスタムブロックの改名にも個別色が追従します。
+
+「プロンプト → プロンプト間の空行」で、Enter 後に表示するプロンプトの前へ入れる空行数を0〜10行で指定できます。左右キーで増減し、Enter で数値を直接入力できます。既定は0行です。項目を選択している間は、2つのプロンプトと間の空行をプレビューに表示します。設定キーは `prompt.blank_lines` で、コマンド入力位置とは独立しています。全スタイルに適用され、右プロンプトには空行を追加しません。設定ファイルに10を超える値があっても表示は10行までです。保存後の次のプロンプトから反映され、シェル起動直後と画面消去後にも同じ空行を入れます。過去のプロンプトを簡略化する場合にも間隔を保持します（この版へ更新後、起動済みのシェルには `exec zsh` で新しい連携スクリプトを読み込んでください）。
+
+「プロンプト → コマンド入力位置」で「同じ行」「次の行」を切り替えます。全4スタイルに適用され、`prompt.newline = true` が従来どおりの2行表示、`false` が左側の情報に続けて入力する表示です。右プロンプトは入力行に表示され、過去のプロンプトの簡略表示（transient）は従来どおりです。配色と入力位置は保存後の次のプロンプトから反映されます。
+blank_lines = 0         # 前の出力・プロンプトとの空行数（0〜10）
+
+通常画面では `Esc` で終了します。未保存の変更があれば確認を表示し、もう一度 `Esc` で破棄して終了、ほかのキーで画面に戻ります。編集・色選択中の `Esc` は取消です。`q` では終了しません。
+
+```toml
+[prompt]
+newline = true          # false: 同じ行から入力
+prompt_style = "classic"  # lean, classic, rainbow, pure
+font_level = "nerd"       # nerd, powerline, unicode, ascii
+left_segments = ["os_icon", "dir", "git", "virtualenv"]
+right_segments = ["duration", "status", "time"]
+transient = true
+ip_interface = ""        # 空なら自動、例: en0 / eth0
+
+[prompt.dir]
+truncation_length = 3
+truncation_symbol = "…"
+home_symbol = "~"
+
+[prompt.git]
+show_ahead_behind = true
+show_stash = true
+show_status = true
+
+[suggest]
+strategy = "prefix"      # prefix, substring, fuzzy
+highlight_color = "fg=8" # zsh region_highlight 形式
+max_suggestions = 10
+# 補足: ゴーストテキスト表示は候補が現在の入力の延長 (prefix 一致) の場合のみ。
+# substring/fuzzy の途中一致候補は `zsh-turbo suggest`/`complete` では返るが、
+# インラインのゴーストテキストとしては表示されない。
+
+# カスタムコマンドセグメント
+[[prompt.custom]]
+name = "wifi"
+command = "networksetup -getairportnetwork en0 | cut -d: -f2 | xargs"
+icon = "📶"
+fg = "white"
+bg = "24"
+when = "always"  # または "env:VAR" / "file:path"
+
+[style]
+rainbow_palette = "default" # blue, green, ocean, sunset, pastel など
+primary_color = "blue"
+success_color = "green"
+error_color = "red"
+muted_color = "bright_black"
+
+[style.rainbow_overrides.os_icon]
+fg = "231"
+bg = "24"
+
+[style.rainbow_overrides.dir]
+fg = "16"
+bg = "#f0c674"
+
+[style.rainbow_overrides.git]
+fg = "231"
+bg = "88"
+
+[shell]
+completion_dirs = ""           # 絶対パスを : 区切りで指定（~ や $HOME は展開しない）
+term_shell_integration = "auto" # auto, 1（有効）, 0（無効）
+```
+
+カスタムセグメントのコマンドはシェル経由で実行され、500ms でタイムアウトします。表示に使うのは stdout のみで、失敗・タイムアウト・stderr のみの出力はスキップされます。macOS と Linux では、タイムアウト時にパイプラインや子プロセスを含む同じプロセスグループを終了します。
+
+## 利用可能なセグメント
+
+| セグメント       | 説明                                 |
+| ---------------- | ------------------------------------ |
+| `dir`            | カレントディレクトリ（省略表示付き） |
+| `git`            | ブランチ、staged/modified/untracked  |
+| `status`         | 非ゼロ終了コード                     |
+| `duration`       | コマンド実行時間（2秒以上）          |
+| `time`           | 現在時刻（HH:MM:SS）                |
+| `virtualenv`     | Python venv/conda 環境               |
+| `kubecontext`    | Kubernetes コンテキスト              |
+| `aws`            | AWS プロファイル（`AWS_SSO_PROFILE` > `AWS_VAULT` > `AWSUME_PROFILE` > `AWS_PROFILE` > `AWS_DEFAULT_PROFILE` の優先順） |
+| `gcloud`         | GCP プロジェクト（空でない `CLOUDSDK_CONFIG`、未指定時は `~/.config/gcloud` の active config から取得） |
+| `terraform`      | Terraform / OpenTofu ワークスペース（`*.tf`, `*.tf.json`, `*.tofu`, `*.tofu.json`, `.terraform`） |
+| `docker_context` | Docker コンテキスト                  |
+| `direnv`         | direnv で読み込まれたディレクトリ（`DIRENV_DIR`） |
+| `nix_shell`      | Nix shell モード（`pure` / `impure`） |
+| `ssh`            | SSH セッション（user@host）          |
+| `package`        | package.json の name@version         |
+| `jobs`           | バックグラウンドジョブ数             |
+| `os_icon`        | OS アイコン（macOS/Linux）           |
+| `user`           | ユーザー名（root/SSH 時のみ）        |
+| `host`           | ホスト名（SSH 時のみ）               |
+| `node`           | Node.js バージョン                   |
+| `python`         | Python バージョン                    |
+| `rust`           | Rust バージョン                      |
+| `go`             | Go バージョン                        |
+| `ruby`           | Ruby バージョン                      |
+| `java`           | Java バージョン                      |
+| `php`            | PHP バージョン                       |
+| `swift`          | Swift バージョン                     |
+| `dotnet`         | .NET バージョン                      |
+| `load`           | 1分ロードアベレージ（CPU比 70% で警告、90% で危険） |
+| `battery`        | バッテリー残量と充放電状態（macOS/Linux） |
+| `disk_usage`     | カレントディレクトリのディスク使用率（75%以上のみ表示） |
+| `ram`            | メモリ使用率（75%以上のみ表示）      |
+| `vi_mode`        | vi キーマップ状態（`ZSH_TURBO_VI_MODE` 経由で insert/normal/visual） |
+| `proxy`          | `HTTP(S)_PROXY` / `ALL_PROXY` 設定時に "proxy" を表示 |
+| `cpu_arch`       | CPU アーキテクチャ（例: `arm64`, `x86_64`） |
+| `root_indicator` | `USER=root` のとき表示（`USER` 未設定時のみ uid 0 にフォールバック） |
+| `dir_writable`   | カレントディレクトリが書き込み不可なときに警告アイコンを表示 |
+| `ip`             | プライマリ IPv4（`ZSH_TURBO_IP_INTERFACE` で対象を指定可、未指定時は macOS で `en0`、Linux で scope global） |
+| *(custom)*       | `[[prompt.custom]]` で定義した任意コマンド |
+
+## CLI 補完の登録
+
+`zsh-turbo configure` の「補完」で `n` を押し、`PATH` 上にある CLI 名を入力して補完元を選びます。先頭行の左右キーで登録対象を切り替え、Enter で編集、Delete で削除、`s` で保存、`r` で変更のあるキャッシュを再生成、`Shift+R` で保存済みの全登録を強制再生成します。画面上の「変更を確認して再生成」「キャッシュを強制再生成」を選び、Enter でも実行できます。処理中も TUI は操作でき、進行状態と結果を表示します。登録の追加・無効化・削除後は zsh を再起動してください。登録済み CLI のキャッシュ更新は起動中のシェルにも反映されます。
+
+- **ヘルプ**（既定）: `COMMAND --help` と、そこから見つけたサブコマンドのヘルプを読み、オプション名・サブコマンド・説明・ファイルやパスの引数補完を生成します。一般的な英語のヘルプ形式が対象です。独自形式、動的な候補、親コマンドの共通オプションには公式補完を使ってください。取得は最大4並列、サブコマンド4階層、128ページ、1ページ5秒、全体120秒までです。
+- **生成コマンド**: `["tool", "completion", "zsh"]` のように、実行ファイルと引数を JSON 配列で指定します。シェル展開やパイプは使いません。対象 CLI が提供する補完生成コマンドを指定してください。タイムアウトは10秒です。
+- **補完ファイル**: 信頼できる zsh の `#compdef` ファイルを指定します。`~/` も使用できます。対象 CLI が未インストールでも登録できます。
+
+補完元は明示的に選びます。別の処理を実行する恐れのある生成コマンドの自動推測は行いません。生成コマンドの出力と補完ファイルは、既存の `fpath` の補完と同様に zsh のコードとして実行されます。
+
+```toml
+[[completions]]
+command = "tool"
+enabled = true
+source = "help" # help / generator / file
+# generator = ["tool", "completion", "zsh"]
+# file = "~/completions/_tool"
+watch_files = [] # ラッパーの実体など: ["~/bin/tool-core"]
+```
+
+シェル起動時と、その後のプロンプト表示時に、30秒以上間隔を空けてバックグラウンドで更新を確認します。実行ファイルのパス・サイズ・更新時刻などが変わったときだけ SHA-256 を計算し、内容・参照先・登録内容・追加監視ファイルの変更に応じて再生成します。ラッパー、shim、プラグインを使う CLI では「追加で監視するファイル」に実体や設定ファイルを指定してください。ラッパー自体が変わらない更新は、それだけでは検知できません。補完ファイル方式は、補完ファイルに加え、インストール済みなら対象 CLI の実行ファイルも監視します。
+
+保存先は `${XDG_CACHE_HOME:-~/.cache}/zsh-turbo/managed-completions` です。Tab は読み込み済みの関数を使い、zsh の stat モジュールでキャッシュの変更を確認します。キャッシュ管理のためにキー入力や Tab のたびに CLI・help・ハッシュ計算の外部プロセスを起動することはありません。公式補完スクリプト自身が動的な候補を取得するコマンドは実行されることがあります。同じ CLI の生成処理はロックし、構文検証を通ったファイルをアトミックに公開します。失敗時は前の補完を残し、TUI に理由を表示します。生成完了後の次の Tab で反映され、初回生成に失敗した場合は既存の zsh 補完に戻ります。XDG のキャッシュ設定が未指定または空なら `~/.cache` を使います。
+
+`zsh-turbo completion-refresh` ですぐに変更を確認できます。`--force` を付けると、ファイル情報の変化を待たずに再構築します。結果は登録ごとに表示されます。

@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Dry run (skip actual release)'
+        description: "Dry run (compute the next version only; no commit, tag or release)"
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
@@ -17,146 +17,416 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  MISE_LOCKED: "1"
   BINARY_NAME: zsh-turbo
 
 jobs:
   prepare-release:
-    name: Prepare Release
+    name: Prepare release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.bump.outputs.version }}
       tag: ${{ steps.bump.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Configure Git
+      - name: Check the branch
+        if: ${{ !inputs.dry_run }}
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ "${GITHUB_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::Run the release from ${DEFAULT_BRANCH} (this run is on ${GITHUB_REF})"
+            exit 1
+          fi
 
-      - name: Bump version
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v4
+        with:
+          minimum_release_age: 14d
+          cache: false
+
+      - name: Bump the version
         id: bump
         run: |
-          YEAR=$(date +%y)
-          MONTH=$(date +%-m)
-
-          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          set -euo pipefail
+          YEAR=$(TZ=Asia/Tokyo date +%y)
+          MONTH=$(TZ=Asia/Tokyo date +%-m)
+          CURRENT=$(awk -F '"' '/^version = /{ print $2; exit }' Cargo.toml)
           echo "Current version: ${CURRENT}"
-
-          if echo "${CURRENT}" | grep -qE '^[0-9]{2,4}\.[0-9]{1,2}\.[0-9]+$'; then
-            OLD_YEAR=$(echo "${CURRENT}" | cut -d. -f1)
-            OLD_MONTH=$(echo "${CURRENT}" | cut -d. -f2)
-            OLD_COUNTER=$(echo "${CURRENT}" | cut -d. -f3)
-            OLD_YEAR_2DIGIT=$(echo "${OLD_YEAR}" | sed 's/^20//')
-            if [ "${OLD_YEAR_2DIGIT}" = "${YEAR}" ] && [ "${OLD_MONTH}" = "${MONTH}" ]; then
-              NEW_COUNTER=$((OLD_COUNTER + 1))
-            else
-              NEW_COUNTER=100
+          COUNTER=100
+          if [[ "${CURRENT}" =~ ^([0-9]{2,4})\.([0-9]{1,2})\.([0-9]+)$ ]]; then
+            if [ "${BASH_REMATCH[1]#20}" = "${YEAR}" ] && [ "${BASH_REMATCH[2]}" = "${MONTH}" ]; then
+              COUNTER=$((BASH_REMATCH[3] + 1))
             fi
-          else
-            NEW_COUNTER=100
+          fi
+          VERSION="${YEAR}.${MONTH}.${COUNTER}"
+          TAG="v${VERSION}"
+          echo "Next version: ${VERSION}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null; then
+            echo "::error::Tag ${TAG} already exists. Check the version in Cargo.toml against the existing tags"
+            exit 1
           fi
 
-          NEW_VERSION="${YEAR}.${MONTH}.${NEW_COUNTER}"
-          echo "New version: ${NEW_VERSION}"
+          sed -i "0,/^version = \"[^\"]*\"/s//version = \"${VERSION}\"/" Cargo.toml
+          test "$(awk -F '"' '/^version = /{ print $2; exit }' Cargo.toml)" = "${VERSION}"
+          cargo update --workspace
+          make licenses
+          make licenses-check
+          git diff --stat
 
-          sed -i "s/^version = \"[^\"]*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
-
-          if [ -f "Cargo.lock" ]; then
-            cargo generate-lockfile 2>/dev/null || true
-          fi
-
-          echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-          echo "tag=v${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Commit and tag
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git add Cargo.toml
-          [ -f "Cargo.lock" ] && git add Cargo.lock || true
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock THIRD_PARTY_NOTICES.md licenses
+          git commit -m "Release ${TAG}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push --atomic origin "HEAD:refs/heads/${DEFAULT_BRANCH}" "refs/tags/${TAG}"
 
-          git commit -m "Release ${{ steps.bump.outputs.tag }}"
-          git tag -a "${{ steps.bump.outputs.tag }}" -m "Release ${{ steps.bump.outputs.tag }}"
-          git push origin ${{ github.ref_name }} "${{ steps.bump.outputs.tag }}"
-
-      - name: Dry run info
-        if: ${{ inputs.dry_run == true }}
+      - name: Dry run
+        if: ${{ inputs.dry_run }}
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
         run: |
-          echo "🧪 Dry run mode - skipping commit and tag"
-          echo "Would release: ${{ steps.bump.outputs.tag }}"
+          echo "Dry run: would release ${TAG} (no commit, tag or release)"
+          git diff -- Cargo.toml Cargo.lock THIRD_PARTY_NOTICES.md licenses
 
-  build-and-release:
-    name: Build and Release
+  build:
+    name: Build (${{ matrix.target }})
     needs: prepare-release
-    if: ${{ inputs.dry_run != true }}
+    if: ${{ !inputs.dry_run }}
     runs-on: ${{ matrix.os }}
+    outputs:
+      assets: ${{ strategy.job-total }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: zsh-turbo
-            asset_name: zsh-turbo-linux-amd64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: zsh-turbo
-            asset_name: zsh-turbo-darwin-amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: zsh-turbo
-            asset_name: zsh-turbo-darwin-arm64
-
+          - os: macos-latest
+            target: x86_64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare-release.outputs.tag }}
+          persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v4
         with:
-          targets: ${{ matrix.target }}
+          minimum_release_age: 14d
+          cache: false
+
+      - name: Add the Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Verify license documents
+        run: make licenses-check
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset_name }}
-          path: ./target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
-
-  publish-release:
-    name: Publish Release
-    needs: [prepare-release, build-and-release]
-    if: ${{ inputs.dry_run != true }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Prepare release assets
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          TAR_GZ: ${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz
         run: |
-          mkdir -p release-assets
-          for dir in artifacts/*/; do
-            name=$(basename "$dir")
-            find "$dir" -type f -exec cp {} "release-assets/$name" \;
-          done
-          ls -la release-assets/
+          set -euo pipefail
+          COPYFILE_DISABLE=1 tar -czf "${TAR_GZ}" -C "target/${TARGET}/release" "${BINARY_NAME}" -C "${GITHUB_WORKSPACE}" LICENSE THIRD_PARTY_NOTICES.md licenses
+          echo "asset=${TAR_GZ}" >> "$GITHUB_OUTPUT"
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.package.outputs.asset }}
+          archive: false
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [prepare-release, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      assets: ${{ steps.files.outputs.assets }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          pattern: ${{ env.BINARY_NAME }}-*
+          merge-multiple: true
+          skip-decompress: true
+
+      - name: Write SHA256SUMS
+        id: files
+        env:
+          EXPECTED: ${{ needs.build.outputs.assets }}
+        run: |
+          set -euo pipefail
+          cd release
+          shopt -s nullglob dotglob
+          files=(*)
+          for f in "${files[@]}"; do
+            case "${f}" in
+              "${BINARY_NAME}"-*.tar.gz) ;;
+              *)
+                echo "::error::Unexpected entry in release/: ${f} (expected ${BINARY_NAME}-<target>.tar.gz)"
+                exit 1
+                ;;
+            esac
+            if [ ! -f "${f}" ] || [ -L "${f}" ] || [ ! -s "${f}" ]; then
+              echo "::error::${f} in release/ is not a non-empty regular file"
+              exit 1
+            fi
+          done
+          if [ "${#files[@]}" -ne "${EXPECTED}" ]; then
+            echo "::error::release/ has ${#files[@]} assets, expected ${EXPECTED} (one per build target)"
+            exit 1
+          fi
+          sha256sum -- "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+          echo "assets=$(printf '%s ' *)" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
-          name: Release ${{ needs.prepare-release.outputs.tag }}
-          files: release-assets/*
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ needs.prepare-release.outputs.tag }}
+          body: |
+            ## Install
 
-      - name: Release summary
-        run: echo "🚀 Released ${{ needs.prepare-release.outputs.tag }}"
+            ### Homebrew (macOS / Linux)
+
+            ```bash
+            brew install ${{ github.repository_owner }}/zsh-turbo/zsh-turbo
+            ```
+
+            ### Download
+
+            Download `${{ env.BINARY_NAME }}-<target>.tar.gz` for your platform from the assets below, extract it and put `${{ env.BINARY_NAME }}` on your `PATH`. `SHA256SUMS` lists the checksums of all assets.
+
+            ```bash
+            curl -fLO https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/${{ env.BINARY_NAME }}-aarch64-apple-darwin.tar.gz
+            tar -xzf ${{ env.BINARY_NAME }}-aarch64-apple-darwin.tar.gz
+            ```
+          generate_release_notes: true
+          files: release/*
+          fail_on_unmatched_files: true
+
+      - name: Verify the published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets > "${RUNNER_TEMP}/assets.json"
+          find release -type f -printf '%f %s uploaded\n' | LC_ALL=C sort > "${RUNNER_TEMP}/expected.txt"
+          jq -r '.assets[] | "\(.name) \(.size) \(.state)"' "${RUNNER_TEMP}/assets.json" | LC_ALL=C sort > "${RUNNER_TEMP}/published.txt"
+          if ! diff -u "${RUNNER_TEMP}/expected.txt" "${RUNNER_TEMP}/published.txt"; then
+            echo "::error::The published assets differ from the files in release/"
+            exit 1
+          fi
+          jq -r '.assets[] | select(.digest != null) | "\(.digest | ltrimstr("sha256:"))  \(.name)"' "${RUNNER_TEMP}/assets.json" > "${RUNNER_TEMP}/published.sha256"
+          if [ -s "${RUNNER_TEMP}/published.sha256" ]; then
+            (cd release && sha256sum --check --strict --quiet "${RUNNER_TEMP}/published.sha256")
+          else
+            echo "::warning::GitHub returned no asset digests; skipped the SHA-256 comparison"
+          fi
+
+  update-homebrew:
+    name: Update the Homebrew tap
+    needs: [prepare-release, release]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.prepare-release.outputs.tag }}
+    outputs:
+      state: ${{ steps.formula.outputs.state || steps.app.outputs.state }}
+      tap: ${{ github.repository_owner }}/homebrew-zsh-turbo
+    steps:
+      - name: Check the GitHub App settings
+        id: app
+        env:
+          HAS_CLIENT_ID: ${{ vars.APP_CLIENT_ID != '' }}
+          HAS_PRIVATE_KEY: ${{ secrets.PRIVATE_KEY != '' }}
+        run: |
+          if [ "${HAS_CLIENT_ID}" = "true" ] && [ "${HAS_PRIVATE_KEY}" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The GitHub App for the tap is not configured (variable APP_CLIENT_ID and secret PRIVATE_KEY); skipped the Homebrew tap"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "state=not-configured" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read the checksums
+        id: sums
+        if: steps.app.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern SHA256SUMS --dir "${RUNNER_TEMP}"
+          for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+            asset="${BINARY_NAME}-${target}.tar.gz"
+            sum=$(awk -v f="${asset}" '$2 == f { print $1 }' "${RUNNER_TEMP}/SHA256SUMS")
+            if [ "${#sum}" -ne 64 ]; then
+              echo "::error::SHA256SUMS has no entry for ${asset}"
+              exit 1
+            fi
+            echo "${target//-/_}=${sum}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Create a token for the tap
+        id: app-token
+        if: steps.app.outputs.enabled == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-zsh-turbo
+          permission-contents: write
+
+      - uses: actions/checkout@v7
+        if: steps.app.outputs.enabled == 'true'
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-zsh-turbo
+          token: ${{ steps.app-token.outputs.token }}
+          path: tap
+
+      - name: Update the formula
+        id: formula
+        if: steps.app.outputs.enabled == 'true'
+        working-directory: tap
+        env:
+          HOMEPAGE: ${{ github.server_url }}/${{ github.repository }}
+          URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}
+          SHA_MACOS_ARM: ${{ steps.sums.outputs.aarch64_apple_darwin }}
+          SHA_MACOS_INTEL: ${{ steps.sums.outputs.x86_64_apple_darwin }}
+          SHA_LINUX_ARM: ${{ steps.sums.outputs.aarch64_unknown_linux_gnu }}
+          SHA_LINUX_INTEL: ${{ steps.sums.outputs.x86_64_unknown_linux_gnu }}
+        run: |
+          set -euo pipefail
+          CLASS=$(printf '%s' "zsh-turbo" | sed -E 's/(^|[-_.])([a-z0-9])/\U\2/g')
+          mkdir -p Formula
+          cat > Formula/zsh-turbo.rb <<FORMULA
+          class ${CLASS} < Formula
+            desc "Zsh prompts, autosuggestions, syntax highlighting, and completions"
+            homepage "${HOMEPAGE}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${URL}/${BINARY_NAME}-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_ARM}"
+              else
+                url "${URL}/${BINARY_NAME}-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_INTEL}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${URL}/${BINARY_NAME}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_LINUX_ARM}"
+              else
+                url "${URL}/${BINARY_NAME}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_LINUX_INTEL}"
+              end
+            end
+
+            def install
+              bin.install "${BINARY_NAME}"
+              pkgshare.install "THIRD_PARTY_NOTICES.md", "licenses"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/${BINARY_NAME} --version")
+            end
+          end
+          FORMULA
+          ruby -c Formula/zsh-turbo.rb
+          git add Formula/zsh-turbo.rb
+          if git diff --cached --quiet; then
+            echo "The formula already points at ${TAG}"
+            echo "state=unchanged" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "zsh-turbo ${TAG}"
+          git push
+          echo "state=updated" >> "$GITHUB_OUTPUT"
+
+  release-summary:
+    name: Release summary
+    needs: [prepare-release, build, release, update-homebrew]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write the summary
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          PREPARE_RESULT: ${{ needs.prepare-release.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          ASSETS: ${{ needs.release.outputs.assets }}
+          HOMEBREW_RESULT: ${{ needs.update-homebrew.result }}
+          HOMEBREW_STATE: ${{ needs.update-homebrew.outputs.state }}
+          HOMEBREW_TAP: ${{ needs.update-homebrew.outputs.tap }}
+        run: |
+          set -euo pipefail
+          {
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "## Dry run: ${TAG:-no version}"
+              echo
+              echo "prepare-release: ${PREPARE_RESULT}. Nothing was committed, tagged or released, and the build did not run (ci.yml builds every target)."
+              exit 0
+            fi
+            echo "## ${TAG:-no version}"
+            echo
+            echo "| Job | Result | Note |"
+            echo "|---|---|---|"
+            echo "| prepare-release | ${PREPARE_RESULT} | |"
+            echo "| build | ${BUILD_RESULT} | |"
+            echo "| release | ${RELEASE_RESULT} | |"
+            if [ -n "${HOMEBREW_RESULT:-}" ]; then
+              case "${HOMEBREW_STATE:-}" in
+                updated) note="updated ${HOMEBREW_TAP}" ;;
+                unchanged) note="${HOMEBREW_TAP} already had this version" ;;
+                not-configured) note="skipped: the GitHub App is not configured" ;;
+                *) note="not updated" ;;
+              esac
+              echo "| update-homebrew | ${HOMEBREW_RESULT} | ${note} |"
+            fi
+            if [ -n "${ASSETS:-}" ]; then
+              echo
+              echo "Assets of ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}:"
+              echo
+              read -r -a assets <<< "${ASSETS}"
+              for asset in "${assets[@]}"; do
+                echo "- \`${asset}\`"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

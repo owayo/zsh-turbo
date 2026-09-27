@@ -24,10 +24,13 @@ pub fn run_doctor() {
     char_test("Nerd Font folder", "\u{f07c}");
     char_test("Unicode diamond", "\u{25c6}");
     char_test("Emoji", "\u{1f680}");
+    info("If icons render as boxes, run `zsh-turbo install-font` to install MesloLGS NF.");
 
     section("Shell");
     check_env("SHELL");
-    check_env("ZSH_VERSION");
+    // ZSH_VERSION は zsh が export しないシェル変数のため環境変数では検出できない。
+    // zsh バイナリ自体の存在とバージョンを確認する。
+    check_tool("zsh", &["--version"]);
 
     section("External Tools");
     check_tool("git", &["--version"]);
@@ -35,7 +38,8 @@ pub fn run_doctor() {
     check_tool("python3", &["--version"]);
     check_tool("rustc", &["--version"]);
     check_tool("go", &["version"]);
-    check_tool("kubectl", &["version", "--client", "--short"]);
+    // `--short` は kubectl 1.28 で削除されたため付けない
+    check_tool("kubectl", &["version", "--client"]);
     check_tool("docker", &["--version"]);
     check_tool("terraform", &["--version"]);
 
@@ -132,7 +136,8 @@ fn check_tool(name: &str, args: &[&str]) {
         Ok(output) if output.status.success() => {
             let ver = String::from_utf8_lossy(&output.stdout);
             let ver = ver.trim().lines().next().unwrap_or("").trim();
-            let short = if ver.len() > 60 { &ver[..60] } else { ver };
+            // 文字境界で切ってマルチバイト文字でのパニックを防ぐ
+            let short: String = ver.chars().take(60).collect();
             ok(&format!("{name}: {short}"));
         }
         Ok(_) => fail(&format!("{name}: found but returned error")),
