@@ -1,6 +1,6 @@
 [package]
 name = "zsh-turbo"
-version = "26.9.102"
+version = "26.9.103"
 edition = "2024"
 rust-version = "1.98"
 repository = "https://github.com/owayo/zsh-turbo"
