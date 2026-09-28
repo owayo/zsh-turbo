@@ -9,6 +9,11 @@ eval "$("$TEST_BINARY" init)"
 bindkey -e
 bindkey -M emacs '^[[B' down-line-or-beginning-search
 bindkey -M emacs '^[OB' down-line-or-beginning-search
+function history_redraw_fixture() {
+    _zsh_turbo_line_pre_redraw
+    print -rn -- "$BUFFER" > "$TEST_ROOT/history-buffer"
+}
+zle -N zle-line-pre-redraw history_redraw_fixture
 function snapshot_fixture() {
     print -rn -- "$BUFFER" > "$TEST_ROOT/buffer"
     print -rn -- "$_ZSH_TURBO_GHOST_SUFFIX" > "$TEST_ROOT/ghost"

@@ -208,6 +208,16 @@ function _zsh_turbo_close_async_fd() {
     { exec {fd}<&- } 2>/dev/null
 }
 
+# 非同期描画を直前のキー操作として記録すると、連続する履歴検索が途切れる。
+function _zsh_turbo_async_dispatch() {
+    emulate -L zsh
+    if [[ "$1" == "$_ZSH_TURBO_ASYNC_FD" ]]; then
+        zle _zsh_turbo_async_callback -f nolast -- "$@"
+    elif [[ "$1" == "$_ZSH_TURBO_HIGHLIGHT_FD" ]]; then
+        zle _zsh_turbo_highlight_callback -f nolast -- "$@"
+    fi
+}
+
 function _zsh_turbo_autosuggest_fetch() {
     emulate -L zsh
     local prefix="$BUFFER"
@@ -236,7 +246,7 @@ function _zsh_turbo_autosuggest_fetch() {
     # - `--history-file "$HISTFILE"`: HISTFILE はシェル変数で export されないため、
     #   明示的に渡さないと子プロセスはカスタム履歴パスを解決できない。
     exec {_ZSH_TURBO_ASYNC_FD}< <("$ZSH_TURBO_CMD" suggest --project-list --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" -- "$prefix" 2>/dev/null; printf '\n')
-    zle -F -w "$_ZSH_TURBO_ASYNC_FD" _zsh_turbo_async_callback
+    zle -F "$_ZSH_TURBO_ASYNC_FD" _zsh_turbo_async_dispatch
     _zsh_turbo_project_down_bindings on
 }
 
@@ -627,9 +637,12 @@ function _zsh_turbo_project_menu_or_history() {
             return
         fi
     fi
-    local key="$KEYS"
+    local key="$KEYS" binding fallback
     _zsh_turbo_project_down_bindings off
-    zle -U -- "$key"
+    binding="$(bindkey -M "$KEYMAP" "$key")"
+    fallback="${binding##* }"
+    # キーを再投入すると LASTWIDGET が変わり、検索開始時の prefix を失う。
+    zle "$fallback"
 }
 zle -N _zsh_turbo_project_menu_or_history
 zle -N _zsh_turbo_project_menu
@@ -705,7 +718,7 @@ function _zsh_turbo_highlight() {
             --functions "$_ZSH_TURBO_HIGHLIGHT_FUNCTIONS" -- "$BUFFER" 2>/dev/null
         printf '\n'
     )
-    zle -F -w "$_ZSH_TURBO_HIGHLIGHT_FD" _zsh_turbo_highlight_callback
+    zle -F "$_ZSH_TURBO_HIGHLIGHT_FD" _zsh_turbo_async_dispatch
 }
 
 function _zsh_turbo_highlight_callback() {

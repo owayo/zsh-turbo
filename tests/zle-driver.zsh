@@ -46,6 +46,21 @@ function await_terminal() {
     tail -c 1200 "$TEST_ROOT/terminal" >&2
     return 1
 }
+function history_key_fixture() {
+    local key="$1" expected="$2"
+    zpty -w -n fixture "$key"
+    repeat 100; do
+        drain_fixture
+        if [[ -f "$TEST_ROOT/history-buffer" ]] && [[ "$(<"$TEST_ROOT/history-buffer")" == "$expected" ]]; then
+            zselect -t 20
+            drain_fixture
+            return 0
+        fi
+        zselect -t 5
+    done
+    print -u2 -- "history buffer: $(<"$TEST_ROOT/history-buffer") (expected $expected)"
+    return 1
+}
 zpty -b fixture zsh -di || exit 1
 {
     repeat 100; do
@@ -54,6 +69,23 @@ zpty -b fixture zsh -di || exit 1
         zselect -t 5
     done
     [[ -s "$TEST_ROOT/boot" ]] || { cat "$TEST_ROOT/terminal" >&2; exit 2; }
+    # 観測用ウィジェットを挟まず、非同期描画の完了後に続けて履歴をたどる。
+    for expected_history in 'pnpm deploy' 'make busted' 'ls -l /path/to/hoge/fuga' 'echo 日本語'; do
+        history_key_fixture $'\e[A' "$expected_history" || exit 80
+    done
+    for expected_history in 'ls -l /path/to/hoge/fuga' 'make busted' 'pnpm deploy' ''; do
+        history_key_fixture $'\e[B' "$expected_history" || exit 81
+    done
+    history_key_fixture 'echo sam' 'echo sam' || exit 82
+    history_key_fixture $'\e[A' 'echo sample-beta' || exit 82
+    history_key_fixture $'\e[A' 'echo sample-alpha' || exit 82
+    history_key_fixture $'\e[B' 'echo sample-beta' || exit 83
+    history_key_fixture $'\eOA' 'echo sample-alpha' || exit 83
+    history_key_fixture $'\eOB' 'echo sample-beta' || exit 83
+    history_key_fixture $'\e[B' 'echo sam' || exit 83
+    history_key_fixture $'\x15ls' 'ls' || exit 84
+    history_key_fixture $'\e[A' 'ls -l /path/to/hoge/fuga' || exit 84
+    history_key_fixture $'\x15' '' || exit 84
     zpty -w -n fixture 'make'
     await_fixture project $'make build\nmake check\nmake clean\nmake deploy' || exit 77
     : > "$TEST_ROOT/terminal"

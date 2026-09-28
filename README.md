@@ -169,6 +169,8 @@ In `zsh-turbo configure`, use **Style → Rainbow palette** to choose from 14 pa
 | Ctrl+R      | Ranked history menu (fuzzy search) |
 | Tab         | Accept full suggestion; run standard completion when none is shown |
 
+Starting with an empty input, Up browses all history and Down moves back toward newer entries and the empty input. With text entered, Up/Down retain the initial prefix while browsing matching entries. Editing the input starts a new search; asynchronous suggestions and highlighting do not reset it.
+
 Suggestions are displayed and accepted only while the cursor is at the end of the buffer. Moving the cursor into existing text clears the ghost text; returning to the end restores the still-valid suggestion.
 For example, if `ls -l` suggests `/path/to/hoge/fuga`, each Right Arrow press accepts `/path/`, then `/path/to/`, then `/path/to/hoge/`. If you have already typed `/path`, one press accepts `/to/` and leaves `/path/to/` in the input. Tab accepts the whole suggestion. You can assign the actions for Tab, Right Arrow, Alt+F, and Ctrl+Right separately in **Suggest** under `zsh-turbo configure`. Restart the shell after changing them.
 
