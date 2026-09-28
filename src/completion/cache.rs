@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct Stamp {
+pub(super) struct Stamp {
     path: PathBuf,
     len: u64,
     modified: u128,
@@ -26,7 +26,7 @@ struct Record {
     updated: u64,
 }
 
-fn stamp(path: &Path) -> io::Result<Stamp> {
+pub(super) fn stamp(path: &Path) -> io::Result<Stamp> {
     let path = fs::canonicalize(path)?;
     let meta = fs::metadata(&path)?;
     if !meta.is_file() {

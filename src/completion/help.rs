@@ -9,6 +9,27 @@ pub(super) struct Help {
     commands: Vec<(String, String)>,
 }
 
+impl Help {
+    /// サブコマンドと、フラグごとに分けたオプションを (名前, 説明) の組で返す
+    pub(super) fn into_top_level(self) -> super::TopLevel {
+        let options = self
+            .options
+            .into_iter()
+            .flat_map(|option| {
+                let description = option.description;
+                option
+                    .flags
+                    .into_iter()
+                    .map(move |flag| (flag, description.clone()))
+            })
+            .collect();
+        super::TopLevel {
+            commands: self.commands,
+            options,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct OptionSpec {
     flags: Vec<String>,
@@ -45,21 +66,74 @@ fn split_columns(line: &str) -> (&str, &str) {
     (line, "")
 }
 
+fn is_command_name(name: &str) -> bool {
+    name != "help"
+        && name.bytes().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
+}
+
+/// 折り返された説明の続きを足す先
+#[derive(Clone, Copy)]
+enum Wrapped {
+    Command,
+    Option,
+}
+
 pub(super) fn parse(text: &str) -> Help {
     let mut result = Help::default();
     let mut commands_section = false;
     let mut command_indent = None;
+    // npm の `All commands:` のように名前だけをカンマ区切りで並べる節
+    let mut name_list = false;
+    // 直前の行の説明が始まる列。同じ列から始まる次の行は、折り返された説明の続き
+    let mut wrapped: Option<(usize, Wrapped)> = None;
     for raw in clean(text).lines() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
         }
-        if !raw.starts_with(char::is_whitespace) && line.ends_with(':') {
+        let indented = raw.starts_with(char::is_whitespace);
+        let indent = raw.len() - raw.trim_start().len();
+        // yarn v1 は `Commands:` の見出し自体を字下げする
+        let indented_commands =
+            indented && line.to_ascii_lowercase().ends_with("commands:") && !line.contains("  ");
+        if (!indented && line.ends_with(':')) || indented_commands {
             commands_section = line.to_ascii_lowercase().contains("commands");
             command_indent = None;
+            name_list = false;
+            wrapped = None;
             continue;
         }
-        if !raw.starts_with(char::is_whitespace) {
+        if !indented {
+            continue;
+        }
+        if let Some((column, target)) = wrapped.take()
+            && indent == column
+        {
+            let last = match target {
+                Wrapped::Command => result.commands.last_mut().map(|(_, text)| text),
+                Wrapped::Option => result
+                    .options
+                    .last_mut()
+                    .map(|option| &mut option.description),
+            };
+            if let Some(text) = last {
+                text.push(' ');
+                text.push_str(line);
+            }
+            wrapped = Some((column, target));
+            continue;
+        }
+        // 説明の列の位置 (説明は行末までの部分)
+        let column_of = |description: &str| raw.trim_end().len() - description.len();
+        // yarn v1 の `- add` のような箇条書き
+        if commands_section
+            && let Some(name) = line.strip_prefix("- ")
+            && is_command_name(name)
+        {
+            result.commands.push((name.into(), String::new()));
             continue;
         }
         let (syntax, description) = split_columns(line);
@@ -93,6 +167,9 @@ pub(super) fn parse(text: &str) -> Help {
                         })
                         .map(str::to_string)
                 });
+            if !description.is_empty() {
+                wrapped = Some((column_of(description), Wrapped::Option));
+            }
             result.options.push(OptionSpec {
                 flags,
                 value,
@@ -100,11 +177,30 @@ pub(super) fn parse(text: &str) -> Help {
                 description: description.into(),
             });
         } else if commands_section {
-            let indent = raw.len() - raw.trim_start().len();
             let expected = *command_indent.get_or_insert(indent);
-            if indent != expected || description.is_empty() {
+            if indent != expected {
                 continue;
             }
+            if description.is_empty() && (name_list || line.contains(',')) {
+                name_list = true;
+                result.commands.extend(
+                    line.split(',')
+                        .map(str::trim)
+                        .filter(|name| is_command_name(name))
+                        .map(|name| (name.to_owned(), String::new())),
+                );
+                continue;
+            }
+            if description.is_empty() {
+                continue;
+            }
+            // bun のように使用例の列を挟む表では、最後の広い空白の後ろを説明とする
+            // (文中の 2 つの空白は区切りとみなさない)
+            let description = description
+                .rsplit("   ")
+                .next()
+                .unwrap_or(description)
+                .trim();
             let name = syntax
                 .split_whitespace()
                 .next()
@@ -112,12 +208,8 @@ pub(super) fn parse(text: &str) -> Help {
                 .split('|')
                 .next()
                 .unwrap_or("");
-            if name != "help"
-                && name.bytes().next().is_some_and(|c| c.is_ascii_alphabetic())
-                && name
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
-            {
+            if is_command_name(name) {
+                wrapped = Some((column_of(description), Wrapped::Command));
                 result.commands.push((name.into(), description.into()));
             }
         }
@@ -303,5 +395,58 @@ mod tests {
         assert_eq!(help.options[1].value.as_deref(), Some("PATH"));
         assert_eq!(help.options[2].value.as_deref(), Some("MODE"));
         assert_eq!(help.commands.len(), 1);
+    }
+
+    #[test]
+    fn npmのカンマ区切りとyarnの箇条書きのコマンド一覧を読む() {
+        let npm = parse(
+            "npm <command>\n\nUsage:\n\nnpm install        install all the dependencies\n\nAll commands:\n\n    access, adduser, audit,\n    ci, help, install,\n    whoami\n\nSpecify configs in the ini-formatted file:\n    /home/you/.npmrc\n",
+        );
+        let names: Vec<_> = npm.commands.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["access", "adduser", "audit", "ci", "install", "whoami"]
+        );
+
+        let yarn = parse(
+            "\n  Usage: yarn [command] [flags]\n\n  Options:\n\n    -v, --version  output the version number\n  Commands:\n\n    - access\n    - add\n    - help\n\n  Run `yarn help COMMAND` for more information on specific commands.\n",
+        );
+        let names: Vec<_> = yarn
+            .commands
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(names, ["access", "add"]);
+        assert_eq!(yarn.options.len(), 1);
+    }
+
+    #[test]
+    fn 使用例の列を除き折り返された説明をつなげる() {
+        // bun: 名前・使用例・説明の 3 列。深い字下げの行は別の使用例
+        let bun = parse(
+            "Usage: bun <command>\n\nCommands:\n  run       ./my-script.ts       Execute a file with Bun\n            lint                 Run a package.json script\n  test                           Run unit tests with Bun\n",
+        );
+        assert_eq!(
+            bun.commands,
+            [
+                ("run".to_owned(), "Execute a file with Bun".to_owned()),
+                ("test".to_owned(), "Run unit tests with Bun".to_owned())
+            ]
+        );
+        // mise・uv: 説明の列にそろえて折り返す
+        let wrapped = parse(
+            "Commands:\n  activate      Print the script to activate mise in an\n                interactive shell\n  cache         Manage the mise cache\n\nOptions:\n  -n, --no-cache  Avoid reading the cache,\n                  instead using a temporary directory\n  -q  Quiet.  Less output\n",
+        );
+        assert_eq!(
+            wrapped.commands[0].1,
+            "Print the script to activate mise in an interactive shell"
+        );
+        assert_eq!(wrapped.commands[1].1, "Manage the mise cache");
+        assert_eq!(
+            wrapped.options[0].description,
+            "Avoid reading the cache, instead using a temporary directory"
+        );
+        // 文中の 2 つの空白は列の区切りとみなさない
+        assert_eq!(wrapped.options[1].description, "Quiet.  Less output");
     }
 }

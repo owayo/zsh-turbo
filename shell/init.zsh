@@ -8,7 +8,6 @@ typeset -g ZSH_TURBO_CMD="${commands[zsh-turbo]:-zsh-turbo}"
 typeset -g ZSH_TURBO_TRANSIENT="${ZSH_TURBO_TRANSIENT:-0}"
 typeset -g ZSH_TURBO_SUGGEST_STRATEGY="${ZSH_TURBO_SUGGEST_STRATEGY:-prefix}"
 typeset -g ZSH_TURBO_SUGGEST_HIGHLIGHT="${ZSH_TURBO_SUGGEST_HIGHLIGHT:-fg=8}"
-typeset -g ZSH_TURBO_TASK_LIST_LABEL="${ZSH_TURBO_TASK_LIST_LABEL:-Tasks}"
 typeset -g ZSH_TURBO_KEY_TAB="${ZSH_TURBO_KEY_TAB:-full}"
 typeset -g ZSH_TURBO_KEY_RIGHT="${ZSH_TURBO_KEY_RIGHT:-step}"
 typeset -g ZSH_TURBO_KEY_ALT_F="${ZSH_TURBO_KEY_ALT_F:-word}"
@@ -159,30 +158,49 @@ zle -N zle-line-finish _zsh_turbo_zle_line_finish
 
 typeset -g _ZSH_TURBO_SUGGESTION=""
 typeset -g _ZSH_TURBO_GHOST_SUFFIX=""
-typeset -ga _ZSH_TURBO_PROJECT_CANDIDATES=()
+# 入力欄の下に出す一覧 (tasks / commands / files)。表示名と採用後の BUFFER を同じ添字で持つ。
+# 見出し・表示名の切り詰め・並び順は Rust 側 (`suggest --ui-list`) が決める。
+typeset -g _ZSH_TURBO_LIST_KIND=""
+typeset -g _ZSH_TURBO_LIST_TITLE=""
+typeset -ga _ZSH_TURBO_LIST_LABELS=()
+typeset -ga _ZSH_TURBO_LIST_VALUES=()
+typeset -gi _ZSH_TURBO_LIST_TOTAL=0
+typeset -gi _ZSH_TURBO_LIST_PARTIAL=0
+typeset -gi _ZSH_TURBO_LIST_ROWS=10
 typeset -gA _ZSH_TURBO_DOWN_FALLBACK
-typeset -gi _ZSH_TURBO_PROJECT_KEYS_ACTIVE=${_ZSH_TURBO_PROJECT_KEYS_ACTIVE:-0}
+typeset -gi _ZSH_TURBO_LIST_KEYS_ACTIVE=${_ZSH_TURBO_LIST_KEYS_ACTIVE:-0}
+# ↓ が一覧を開かず履歴検索へ回したときの widget 名 (開いたときは空)
+typeset -g _ZSH_TURBO_DOWN_WIDGET=""
+# 直前の再描画で出した POSTDISPLAY の改行数。BUFFERLINES はこの行も数えるため、
+# 一覧の行数を決めるときに差し引く (差し引かないと描くたびに行数が増減する)
+typeset -gi _ZSH_TURBO_DRAWN_LINES=0
+# メニューを Ctrl+C で閉じたときの BUFFER。入力を変えるまで一覧を出さない
+typeset -g _ZSH_TURBO_LIST_DISMISSED=""
 typeset -gi _ZSH_TURBO_ASYNC_FD=0
 typeset -g _ZSH_TURBO_ASYNC_BUFFER=""
 
-function _zsh_turbo_project_down_bindings() {
+# 非同期応答の一括読み込み (sysread) と、↓ で結果を待つ処理 (zselect) に使う
+zmodload zsh/system 2>/dev/null
+zmodload zsh/zselect 2>/dev/null
+
+function _zsh_turbo_list_down_bindings() {
     emulate -L zsh
     local action="$1" keymap key binding widget fallback
     if [[ "$action" == on ]]; then
-        (( _ZSH_TURBO_PROJECT_KEYS_ACTIVE )) && return 0
+        (( _ZSH_TURBO_LIST_KEYS_ACTIVE )) && return 0
     else
-        (( _ZSH_TURBO_PROJECT_KEYS_ACTIVE )) || return 0
+        (( _ZSH_TURBO_LIST_KEYS_ACTIVE )) || return 0
     fi
     for keymap in emacs viins; do
         for key in $'\e[B' $'\eOB'; do
             binding="$(bindkey -M "$keymap" "$key")"
             widget="${binding##* }"
             if [[ "$action" == on ]]; then
-                [[ "$widget" == _zsh_turbo_project_menu_or_history ]] && continue
+                [[ "$widget" == _zsh_turbo_list_menu_or_history ]] && continue
                 [[ "$widget" == '"'* ]] && continue
                 _ZSH_TURBO_DOWN_FALLBACK[$keymap:$key]="$widget"
-                bindkey -M "$keymap" "$key" _zsh_turbo_project_menu_or_history
-            elif [[ "$widget" == _zsh_turbo_project_menu_or_history ]]; then
+                bindkey -M "$keymap" "$key" _zsh_turbo_list_menu_or_history
+            elif [[ "$widget" == _zsh_turbo_list_menu_or_history ]]; then
                 fallback="${_ZSH_TURBO_DOWN_FALLBACK[$keymap:$key]:-undefined-key}"
                 if [[ "$fallback" == undefined-key ]]; then
                     bindkey -r -M "$keymap" "$key"
@@ -193,10 +211,20 @@ function _zsh_turbo_project_down_bindings() {
         done
     done
     if [[ "$action" == on ]]; then
-        _ZSH_TURBO_PROJECT_KEYS_ACTIVE=1
+        _ZSH_TURBO_LIST_KEYS_ACTIVE=1
     else
-        _ZSH_TURBO_PROJECT_KEYS_ACTIVE=0
+        _ZSH_TURBO_LIST_KEYS_ACTIVE=0
     fi
+}
+
+function _zsh_turbo_reset_list() {
+    emulate -L zsh
+    _ZSH_TURBO_LIST_KIND=""
+    _ZSH_TURBO_LIST_TITLE=""
+    _ZSH_TURBO_LIST_LABELS=()
+    _ZSH_TURBO_LIST_VALUES=()
+    _ZSH_TURBO_LIST_TOTAL=0
+    _ZSH_TURBO_LIST_PARTIAL=0
 }
 
 function _zsh_turbo_close_async_fd() {
@@ -225,46 +253,105 @@ function _zsh_turbo_autosuggest_fetch() {
     _ZSH_TURBO_ASYNC_FD=0
     if [[ -z "$prefix" ]]; then
         _ZSH_TURBO_SUGGESTION=""
-        _ZSH_TURBO_PROJECT_CANDIDATES=()
+        _zsh_turbo_reset_list
         _ZSH_TURBO_GHOST_SUFFIX=""
         POSTDISPLAY=""
-        _zsh_turbo_project_down_bindings off
+        _zsh_turbo_list_down_bindings off
         return
     fi
 
     # 新しい検索結果が返るまで古い候補を表示しない
     _ZSH_TURBO_SUGGESTION=""
-    _ZSH_TURBO_PROJECT_CANDIDATES=()
+    _zsh_turbo_reset_list
     _ZSH_TURBO_GHOST_SUFFIX=""
     POSTDISPLAY=""
 
     _ZSH_TURBO_ASYNC_BUFFER="$prefix"
+
+    # 履歴移動で呼び出した行かどうかは Rust 側が widget 名から判定する。
+    # ↓ が履歴検索へ回した場合は、実際に動いた widget 名を渡す。
+    local last_widget="${LASTWIDGET:-}"
+    [[ "$last_widget" == _zsh_turbo_list_menu_or_history ]] && last_widget="$_ZSH_TURBO_DOWN_WIDGET"
 
     # 非同期取得を開始。
     # - `--` 区切り: BUFFER が `-h` 等の登録済みフラグと一致したときに clap の
     #   help が stdout へ漏れ、候補として表示されるのを防ぐ。
     # - `--history-file "$HISTFILE"`: HISTFILE はシェル変数で export されないため、
     #   明示的に渡さないと子プロセスはカスタム履歴パスを解決できない。
-    exec {_ZSH_TURBO_ASYNC_FD}< <("$ZSH_TURBO_CMD" suggest --project-list --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" -- "$prefix" 2>/dev/null; printf '\n')
+    exec {_ZSH_TURBO_ASYNC_FD}< <("$ZSH_TURBO_CMD" suggest --ui-list --columns "${COLUMNS:-0}" --last-widget "$last_widget" --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" -- "$prefix" 2>/dev/null)
     zle -F "$_ZSH_TURBO_ASYNC_FD" _zsh_turbo_async_dispatch
-    _zsh_turbo_project_down_bindings on
+    _zsh_turbo_list_down_bindings on
+}
+
+# 応答を終端行 `end` か EOF まで読み、1 行ずつ reply に入れる。
+# read は pipe から 1 バイトずつ読むため、100KB 規模の一覧で 100ms を超える。
+function _zsh_turbo_read_response() {
+    emulate -L zsh
+    local fd="$1" data="" chunk line
+    reply=()
+    if (( ${+builtins[sysread]} )); then
+        while sysread -i "$fd" -s 65536 chunk 2>/dev/null; do
+            data+="$chunk"
+            [[ "$data" == end$'\n' || "$data" == *$'\n'end$'\n' ]] && break
+        done
+        reply=("${(@f)data}")
+    else
+        while IFS= read -r -u "$fd" line 2>/dev/null; do
+            reply+=("$line")
+            [[ "$line" == end ]] && break
+        done
+    fi
+}
+
+# `suggest --ui-list` の応答を候補の状態へ反映する。
+# 1 行目: v1<TAB>種類<TAB>件数<TAB>complete|partial<TAB>入力中の表示行数<TAB>見出し
+# 続く行: ghost<TAB>BUFFER / item<TAB>表示名<TAB>BUFFER / end
+function _zsh_turbo_apply_response() {
+    emulate -L zsh
+    local line rest ghost=""
+    local -a fields labels values
+    fields=("${(@ps:\t:)${1:-}}")
+    _zsh_turbo_reset_list
+    _ZSH_TURBO_SUGGESTION=""
+    [[ "${fields[1]:-}" == v1 ]] || return 0
+    shift
+    for line in "$@"; do
+        case "$line" in
+            end) break ;;
+            ghost$'\t'*) ghost="${line#ghost$'\t'}" ;;
+            item$'\t'*$'\t'*)
+                rest="${line#item$'\t'}"
+                labels+=("${rest%%$'\t'*}")
+                values+=("${rest#*$'\t'}")
+                ;;
+        esac
+    done
+    _ZSH_TURBO_SUGGESTION="$ghost"
+    [[ "${fields[5]:-}" == <-> ]] && _ZSH_TURBO_LIST_ROWS=${fields[5]}
+    case "${fields[2]:-}" in
+        tasks|commands|files) ;;
+        *) return 0 ;;
+    esac
+    [[ -n "$_ZSH_TURBO_LIST_DISMISSED" && "$BUFFER" == "$_ZSH_TURBO_LIST_DISMISSED" ]] && return 0
+    (( ${#values} )) || return 0
+    _ZSH_TURBO_LIST_KIND="${fields[2]}"
+    _ZSH_TURBO_LIST_TITLE="${fields[6]:-}"
+    _ZSH_TURBO_LIST_LABELS=("${labels[@]}")
+    _ZSH_TURBO_LIST_VALUES=("${values[@]}")
+    if [[ "${fields[3]:-}" == <-> ]]; then
+        _ZSH_TURBO_LIST_TOTAL=${fields[3]}
+    else
+        _ZSH_TURBO_LIST_TOTAL=${#values}
+    fi
+    [[ "${fields[4]:-}" == partial ]] && _ZSH_TURBO_LIST_PARTIAL=1
+    return 0
 }
 
 function _zsh_turbo_async_callback() {
     emulate -L zsh
     local fd="$1"
-    local suggestion="" kind="" candidate
-    local -a project_candidates
-
-    IFS= read -r -u "$fd" kind 2>/dev/null
-    if [[ "$kind" == project ]]; then
-        while IFS= read -r -u "$fd" candidate 2>/dev/null; do
-            [[ -n "$candidate" ]] && project_candidates+=("$candidate")
-        done
-        suggestion="${project_candidates[1]:-}"
-    elif [[ "$kind" == history ]]; then
-        IFS= read -r -u "$fd" suggestion 2>/dev/null
-    fi
+    local -a reply
+    _zsh_turbo_read_response "$fd"
 
     # fd を片付ける
     _zsh_turbo_close_async_fd "$fd"
@@ -272,18 +359,41 @@ function _zsh_turbo_async_callback() {
 
     # リクエスト後にバッファが変わっていない場合だけ反映する
     if [[ "$BUFFER" == "$_ZSH_TURBO_ASYNC_BUFFER" ]]; then
-        _ZSH_TURBO_PROJECT_CANDIDATES=("${project_candidates[@]}")
-        if [[ -n "$suggestion" ]]; then
-            _ZSH_TURBO_SUGGESTION="$suggestion"
-        else
-            _ZSH_TURBO_SUGGESTION=""
-            POSTDISPLAY=""
-        fi
+        _zsh_turbo_apply_response "${reply[@]}"
         _zsh_turbo_autosuggest_display
         zle -R
     fi
 }
 zle -N _zsh_turbo_async_callback
+
+# 実行中の非同期取得を最大 1 秒待ち、届いた結果を反映する
+function _zsh_turbo_await_async() {
+    emulate -L zsh
+    local fd="$_ZSH_TURBO_ASYNC_FD"
+    (( fd > 0 )) || return 0
+    if (( ${+builtins[zselect]} )); then
+        zselect -t 100 -r "$fd" 2>/dev/null || return 0
+    fi
+    _zsh_turbo_async_callback "$fd"
+}
+
+# プロンプト・BUFFER・ghost が使う行数を REPLY に返す
+function _zsh_turbo_edit_lines() {
+    emulate -L zsh
+    local -i lines=$(( BUFFERLINES - _ZSH_TURBO_DRAWN_LINES ))
+    (( lines > 0 )) || lines=1
+    REPLY=$lines
+}
+
+# 一覧の見出し。選択中は位置 (例: Files (3/19):) を添える。
+function _zsh_turbo_list_header() {
+    emulate -L zsh
+    local title="$1" total="$2" partial="$3" index="${4:-}" count
+    count="$total"
+    (( partial )) && count+='+'
+    [[ -n "$index" ]] && count="$index/$count"
+    REPLY="$title ($count):"
+}
 
 function _zsh_turbo_autosuggest_display() {
     emulate -L zsh
@@ -317,19 +427,28 @@ function _zsh_turbo_autosuggest_display() {
         fi
     fi
 
-    if (( ${#_ZSH_TURBO_PROJECT_CANDIDATES} )); then
-        local candidate
-        local -i count=0 limit=$(( LINES - BUFFERLINES - 4 ))
-        if (( limit <= 0 )); then
-            _zsh_turbo_project_down_bindings off
+    if (( ${#_ZSH_TURBO_LIST_VALUES} )); then
+        _zsh_turbo_edit_lines
+        local -i avail=$(( LINES - REPLY - 4 )) count=${#_ZSH_TURBO_LIST_LABELS}
+        local -i rows=$count more=0 i
+        if (( avail <= 0 )); then
+            _zsh_turbo_list_down_bindings off
             return 0
         fi
-        _zsh_turbo_project_down_bindings on
-        POSTDISPLAY+=$'\n'"$ZSH_TURBO_TASK_LIST_LABEL (${#_ZSH_TURBO_PROJECT_CANDIDATES}):"
-        for candidate in "${_ZSH_TURBO_PROJECT_CANDIDATES[@]}"; do
-            POSTDISPLAY+=$'\n'"  ${candidate##* }"
-            (( ++count >= limit )) && break
+        _zsh_turbo_list_down_bindings on
+        # 入力中は既定の行数 (候補の最大数) まで出し、残りは ↓ のメニューで選ぶ
+        (( _ZSH_TURBO_LIST_ROWS > 0 && rows > _ZSH_TURBO_LIST_ROWS )) && rows=$_ZSH_TURBO_LIST_ROWS
+        (( rows < count || _ZSH_TURBO_LIST_TOTAL > count || _ZSH_TURBO_LIST_PARTIAL )) && more=1
+        if (( rows + more > avail )); then
+            rows=$(( avail - 1 ))
+            more=1
+        fi
+        _zsh_turbo_list_header "$_ZSH_TURBO_LIST_TITLE" "$_ZSH_TURBO_LIST_TOTAL" "$_ZSH_TURBO_LIST_PARTIAL"
+        POSTDISPLAY+=$'\n'"$REPLY"
+        for (( i = 1; i <= rows; i++ )); do
+            POSTDISPLAY+=$'\n'"  ${_ZSH_TURBO_LIST_LABELS[i]}"
         done
+        (( more )) && POSTDISPLAY+=$'\n'"  …"
     fi
     return 0
 }
@@ -423,10 +542,10 @@ function _zsh_turbo_accept_ctrl_right() {
 
 function _zsh_turbo_clear_suggestion() {
     emulate -L zsh
-    _zsh_turbo_project_down_bindings off
+    _zsh_turbo_list_down_bindings off
     POSTDISPLAY=""
     _ZSH_TURBO_SUGGESTION=""
-    _ZSH_TURBO_PROJECT_CANDIDATES=()
+    _zsh_turbo_reset_list
     _ZSH_TURBO_GHOST_SUFFIX=""
     _zsh_turbo_autosuggest_display
 }
@@ -450,21 +569,32 @@ bindkey '^[[1;5C' _zsh_turbo_accept_ctrl_right
 # BUFFER 変更を拾えず、古い ghost や構文スパンが残ってしまう。
 typeset -g _ZSH_TURBO_LAST_BUFFER=""
 typeset -gi _ZSH_TURBO_LAST_CURSOR=-1
+typeset -gi _ZSH_TURBO_LAST_HISTNO=-1
 
 function _zsh_turbo_line_pre_redraw() {
     emulate -L zsh
-    [[ "${_ZSH_TURBO_MENU_ACTIVE:-0}" == 1 ]] && return
-    if [[ "$BUFFER" != "$_ZSH_TURBO_LAST_BUFFER" ]]; then
-        # 非同期コールバックの `zle -R` でも本フックは発火するため、
-        # 先に更新して再帰・多重起動を防ぐ
-        _ZSH_TURBO_LAST_BUFFER="$BUFFER"
+    {
+        [[ "${_ZSH_TURBO_MENU_ACTIVE:-0}" == 1 ]] && return
+        # 同じ文字列の履歴へ移ると BUFFER は変わらないが HISTNO は変わる。取り直して
+        # 入力中に出していたファイル・サブコマンドの一覧 (と取得中の応答) を捨てる
+        if [[ "$BUFFER" != "$_ZSH_TURBO_LAST_BUFFER" ]] || (( HISTNO != _ZSH_TURBO_LAST_HISTNO )); then
+            # 非同期コールバックの `zle -R` でも本フックは発火するため、
+            # 先に更新して再帰・多重起動を防ぐ
+            _ZSH_TURBO_LAST_BUFFER="$BUFFER"
+            _ZSH_TURBO_LAST_HISTNO=$HISTNO
+            _ZSH_TURBO_LAST_CURSOR=$CURSOR
+            # Ctrl+C で閉じた一覧は、入力が変わったら再び出す
+            [[ "$BUFFER" == "$_ZSH_TURBO_LIST_DISMISSED" ]] || _ZSH_TURBO_LIST_DISMISSED=""
+            _zsh_turbo_after_modify
+            return
+        fi
+        (( CURSOR == _ZSH_TURBO_LAST_CURSOR )) && return
         _ZSH_TURBO_LAST_CURSOR=$CURSOR
-        _zsh_turbo_after_modify
-        return
-    fi
-    (( CURSOR == _ZSH_TURBO_LAST_CURSOR )) && return
-    _ZSH_TURBO_LAST_CURSOR=$CURSOR
-    _zsh_turbo_autosuggest_display
+        _zsh_turbo_autosuggest_display
+    } always {
+        # この直後の再描画で出す一覧の行数 (_zsh_turbo_edit_lines が差し引く)
+        _ZSH_TURBO_DRAWN_LINES=${#${POSTDISPLAY//[^$'\n']/}}
+    }
 }
 zle -N zle-line-pre-redraw _zsh_turbo_line_pre_redraw
 
@@ -540,25 +670,27 @@ function _zsh_turbo_history_menu() {
 }
 zle -N _zsh_turbo_history_menu
 
-function _zsh_turbo_project_menu_show() {
+function _zsh_turbo_list_menu_show() {
     emulate -L zsh
     region_highlight=("${menu_syntax_hl[@]}")
-    local -i page_size=$(( LINES - BUFFERLINES - 4 ))
-    (( page_size > 0 )) || page_size=1
-    local -i first=$(( menu_index > page_size ? menu_index - page_size + 1 : 1 ))
-    local -i last=$(( first + page_size - 1 ))
-    (( last > ${#menu_candidates} )) && last=${#menu_candidates}
+    local -i count=${#menu_values} page=$menu_page
+    (( page > 0 )) || page=1
+    (( page > count )) && page=$count
+    # 選択行が窓の外へ出たときだけ窓を動かす
+    (( menu_index < menu_first )) && menu_first=$menu_index
+    (( menu_index > menu_first + page - 1 )) && menu_first=$(( menu_index - page + 1 ))
+    local -i last=$(( menu_first + page - 1 ))
     local row marker
-    local -i row_start
-    local -i i
-    POSTDISPLAY=$'\n'"$ZSH_TURBO_TASK_LIST_LABEL (${#menu_candidates}):"
-    for (( i=first; i<=last; i++ )); do
+    local -i row_start i
+    _zsh_turbo_list_header "$menu_title" "$menu_total" "$menu_partial" "$menu_index"
+    POSTDISPLAY=$'\n'"$REPLY"
+    for (( i = menu_first; i <= last; i++ )); do
         if (( i == menu_index )); then
             marker='> '
         else
             marker='  '
         fi
-        row="${marker}${menu_candidates[$i]##* }"
+        row="${marker}${menu_labels[i]}"
         row_start=$(( ${#BUFFER} + ${#POSTDISPLAY} + 1 ))
         POSTDISPLAY+=$'\n'"$row"
         if (( i == menu_index )); then
@@ -568,12 +700,18 @@ function _zsh_turbo_project_menu_show() {
     zle -R
 }
 
-function _zsh_turbo_project_menu() {
+function _zsh_turbo_list_menu() {
     emulate -L zsh
-    local -a menu_candidates=("${_ZSH_TURBO_PROJECT_CANDIDATES[@]}")
+    local -a menu_labels=("${_ZSH_TURBO_LIST_LABELS[@]}") menu_values=("${_ZSH_TURBO_LIST_VALUES[@]}")
+    local menu_title="$_ZSH_TURBO_LIST_TITLE"
+    local -i menu_total=$_ZSH_TURBO_LIST_TOTAL menu_partial=$_ZSH_TURBO_LIST_PARTIAL
     local original_buffer="$BUFFER" original_keymap="$KEYMAP"
-    local -i original_cursor=$CURSOR menu_index=1 _ZSH_TURBO_MENU_ACTIVE=1 menu_cancelled=0
+    local -i original_cursor=$CURSOR menu_index=1 menu_first=1 _ZSH_TURBO_MENU_ACTIVE=1 menu_cancelled=0
     local menu_cancel_key=$'\e'
+    # 表示行数は開いた時点で決めて固定する。描くたびに測り直すと、BUFFERLINES が
+    # 直前のメニューの行を含むため行数が交互に増減する
+    _zsh_turbo_edit_lines
+    local -i menu_page=$(( LINES - REPLY - 4 ))
     setopt localtraps
     trap 'menu_cancelled=1; zle -U -- "$menu_cancel_key"' INT
     _zsh_turbo_close_async_fd "$_ZSH_TURBO_ASYNC_FD"
@@ -583,27 +721,34 @@ function _zsh_turbo_project_menu() {
     _zsh_turbo_clear_suggestion
     local -a menu_syntax_hl=("${region_highlight[@]}")
     {
-        zle -K zsh-turbo-project
+        zle -K zsh-turbo-list
         local REPLY
         while true; do
-            _zsh_turbo_project_menu_show
+            _zsh_turbo_list_menu_show
             if ! zle .read-command; then
                 REPLY=send-break
             fi
-            (( menu_cancelled )) && REPLY=send-break
+            # 端末が Ctrl+C を SIGINT として送った場合も、キー入力と同じく取り消す
+            (( menu_cancelled )) && REPLY=_zsh_turbo_list_cancel
             case "$REPLY" in
                 accept-line)
-                    BUFFER="${menu_candidates[$menu_index]}"
+                    BUFFER="${menu_values[$menu_index]}"
                     CURSOR=${#BUFFER}
                     break ;;
                 send-break)
                     BUFFER="$original_buffer"
                     CURSOR=$original_cursor
                     break ;;
+                _zsh_turbo_list_cancel)
+                    # Ctrl+C は元の入力に戻し、入力を変えるまで一覧も閉じる
+                    BUFFER="$original_buffer"
+                    CURSOR=$original_cursor
+                    _ZSH_TURBO_LIST_DISMISSED="$original_buffer"
+                    break ;;
                 down-line-or-history)
-                    (( menu_index = menu_index % ${#menu_candidates} + 1 )) ;;
+                    (( menu_index = menu_index % ${#menu_values} + 1 )) ;;
                 up-line-or-history)
-                    (( menu_index = (menu_index + ${#menu_candidates} - 2) % ${#menu_candidates} + 1 )) ;;
+                    (( menu_index = (menu_index + ${#menu_values} - 2) % ${#menu_values} + 1 )) ;;
                 *) zle beep ;;
             esac
         done
@@ -620,32 +765,36 @@ function _zsh_turbo_project_menu() {
     }
 }
 
-function _zsh_turbo_project_menu_or_history() {
+# 一覧が出ていれば ↓ でメニューへ入り、なければ元の ↓ (履歴検索) を実行する。
+function _zsh_turbo_list_menu_or_history() {
     emulate -L zsh
+    _ZSH_TURBO_DOWN_WIDGET=""
     if (( CURSOR == ${#BUFFER} )) && [[ -n "$BUFFER" ]]; then
-        if [[ "$_ZSH_TURBO_ASYNC_BUFFER" != "$BUFFER" ]]; then
-            _ZSH_TURBO_PROJECT_CANDIDATES=()
-        fi
-        if (( ! ${#_ZSH_TURBO_PROJECT_CANDIDATES} )) &&
-           { (( _ZSH_TURBO_ASYNC_FD > 0 )) || [[ "$_ZSH_TURBO_ASYNC_BUFFER" != "$BUFFER" ]]; }; then
-            local candidates
-            candidates="$("$ZSH_TURBO_CMD" complete --project-only -- "$BUFFER" 2>/dev/null)"
-            [[ -n "$candidates" ]] && _ZSH_TURBO_PROJECT_CANDIDATES=("${(@f)candidates}")
-        fi
-        if (( ${#_ZSH_TURBO_PROJECT_CANDIDATES} )); then
-            _zsh_turbo_project_menu
+        # 連続入力で再描画 (と取得の開始) が省かれた直後にも一覧を開けるよう、
+        # 現在の BUFFER の取得を始めて結果を待つ
+        [[ "$_ZSH_TURBO_ASYNC_BUFFER" == "$BUFFER" ]] || _zsh_turbo_autosuggest_fetch
+        _zsh_turbo_await_async
+        if (( ${#_ZSH_TURBO_LIST_VALUES} )); then
+            _zsh_turbo_list_menu
             return
         fi
     fi
     local key="$KEYS" binding fallback
-    _zsh_turbo_project_down_bindings off
+    _zsh_turbo_list_down_bindings off
     binding="$(bindkey -M "$KEYMAP" "$key")"
     fallback="${binding##* }"
+    _ZSH_TURBO_DOWN_WIDGET="$fallback"
     # キーを再投入すると LASTWIDGET が変わり、検索開始時の prefix を失う。
     zle "$fallback"
 }
-zle -N _zsh_turbo_project_menu_or_history
-zle -N _zsh_turbo_project_menu
+zle -N _zsh_turbo_list_menu_or_history
+zle -N _zsh_turbo_list_menu
+
+# メニューの Ctrl+C を Esc と区別するための名前。read-command が返すだけで実行はしない
+function _zsh_turbo_list_cancel() {
+    emulate -L zsh
+}
+zle -N _zsh_turbo_list_cancel
 bindkey -N zsh-turbo-history
 bindkey -M zsh-turbo-history '^I' down-line-or-history
 bindkey -M zsh-turbo-history '^[[B' down-line-or-history
@@ -659,19 +808,19 @@ bindkey -M zsh-turbo-history '^M' accept-line
 bindkey -M zsh-turbo-history '^J' accept-line
 bindkey -M zsh-turbo-history '^[' send-break
 bindkey -M zsh-turbo-history '^C' send-break
-bindkey -N zsh-turbo-project
-bindkey -M zsh-turbo-project '^I' down-line-or-history
-bindkey -M zsh-turbo-project '^[[B' down-line-or-history
-bindkey -M zsh-turbo-project '^[OB' down-line-or-history
-bindkey -M zsh-turbo-project '^N' down-line-or-history
-bindkey -M zsh-turbo-project '^[[A' up-line-or-history
-bindkey -M zsh-turbo-project '^[OA' up-line-or-history
-bindkey -M zsh-turbo-project '^[[Z' up-line-or-history
-bindkey -M zsh-turbo-project '^P' up-line-or-history
-bindkey -M zsh-turbo-project '^M' accept-line
-bindkey -M zsh-turbo-project '^J' accept-line
-bindkey -M zsh-turbo-project '^[' send-break
-bindkey -M zsh-turbo-project '^C' send-break
+bindkey -N zsh-turbo-list
+bindkey -M zsh-turbo-list '^I' down-line-or-history
+bindkey -M zsh-turbo-list '^[[B' down-line-or-history
+bindkey -M zsh-turbo-list '^[OB' down-line-or-history
+bindkey -M zsh-turbo-list '^N' down-line-or-history
+bindkey -M zsh-turbo-list '^[[A' up-line-or-history
+bindkey -M zsh-turbo-list '^[OA' up-line-or-history
+bindkey -M zsh-turbo-list '^[[Z' up-line-or-history
+bindkey -M zsh-turbo-list '^P' up-line-or-history
+bindkey -M zsh-turbo-list '^M' accept-line
+bindkey -M zsh-turbo-list '^J' accept-line
+bindkey -M zsh-turbo-list '^[' send-break
+bindkey -M zsh-turbo-list '^C' _zsh_turbo_list_cancel
 bindkey -M emacs '^R' _zsh_turbo_history_menu
 bindkey -M viins '^R' _zsh_turbo_history_menu
 for _zsh_turbo_keymap in emacs viins; do

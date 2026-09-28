@@ -7,11 +7,13 @@ mod font_install;
 mod font_wizard;
 mod highlight;
 mod icons;
+mod path_candidates;
 mod project_tasks;
 mod prompt;
 mod style;
 mod suggest;
 mod tui;
+mod ui_list;
 
 #[derive(Parser)]
 #[command(
@@ -59,9 +61,24 @@ enum Commands {
         /// 検索戦略（prefix, substring, fuzzy）
         #[arg(long, allow_hyphen_values = true)]
         strategy: Option<String>,
-        /// プロジェクトのタスク候補を一覧用プロトコルで返す
+        /// プロジェクトのタスク候補を一覧用プロトコルで返す (旧シェル連携との互換用)
         #[arg(long, hide = true)]
         project_list: bool,
+        /// ZLE の候補一覧 (タスク・ファイル・履歴) を行プロトコルで返す
+        #[arg(long, hide = true, conflicts_with = "project_list")]
+        ui_list: bool,
+        /// 一覧の表示名を収める端末の桁数（0 は切り詰めない）
+        #[arg(long, hide = true, default_value_t = 0, requires = "ui_list")]
+        columns: usize,
+        /// 直前に実行された ZLE widget 名
+        #[arg(
+            long,
+            hide = true,
+            default_value = "",
+            allow_hyphen_values = true,
+            requires = "ui_list"
+        )]
+        last_widget: String,
     },
     /// 履歴ベースの補完候補を一覧表示する
     Complete {
@@ -184,7 +201,29 @@ fn main() {
             history_file,
             strategy,
             project_list,
+            ui_list,
+            columns,
+            last_widget,
         } => {
+            if ui_list {
+                let config = config::load_config();
+                let strategy = suggest::Strategy::from_str(
+                    strategy.as_deref().unwrap_or(&config.suggest.strategy),
+                );
+                print!(
+                    "{}",
+                    ui_list::response(&ui_list::Request {
+                        buffer: &prefix,
+                        history_file: history_file.as_deref(),
+                        strategy: &strategy,
+                        max: config.suggest.max_suggestions,
+                        columns,
+                        last_widget: &last_widget,
+                        language: config.ui.language,
+                    })
+                );
+                return;
+            }
             let strategy = strategy.unwrap_or_else(|| config::load_config().suggest.strategy);
             let strat = suggest::Strategy::from_str(&strategy);
             if project_list {
@@ -298,7 +337,6 @@ fn render_init(cfg: &config::Config) -> String {
         ("ZSH_TURBO_SUGGEST_STRATEGY", cfg.suggest.strategy.as_str()),
         ("ZSH_TURBO_HISTORY_MENU_HELP", tui::history_menu_help()),
         ("ZSH_TURBO_HISTORY_MENU_EMPTY", tui::history_menu_empty()),
-        ("ZSH_TURBO_TASK_LIST_LABEL", tui::project_task_list_label()),
         (
             "ZSH_TURBO_SUGGEST_HIGHLIGHT",
             &suggest_highlight_style(&cfg.suggest.highlight_color),
@@ -604,6 +642,140 @@ _zsh_turbo_suggestion_step ' "space name/child"'
         assert!(
             output.status.success(),
             "段階採用に失敗: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn init_script_一覧の応答を解釈して見出しと表示行数を反映する() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let script = format!(
+            r#"source {}
+function zle() {{ :; }}
+BUFFER='ls books/'
+CURSOR=${{#BUFFER}}
+LINES=24
+BUFFERLINES=1
+tab=$'\t'
+_zsh_turbo_apply_response "v1${{tab}}files${{tab}}3${{tab}}complete${{tab}}2${{tab}}Files" \
+    "ghost${{tab}}ls books/a\ b.txt " \
+    "item${{tab}}a b.txt${{tab}}ls books/a\ b.txt " \
+    "item${{tab}}c.txt${{tab}}ls books/c.txt " \
+    "item${{tab}}sub/${{tab}}ls books/sub/" end
+[[ "$_ZSH_TURBO_LIST_KIND" == files && $_ZSH_TURBO_LIST_TOTAL == 3 && $_ZSH_TURBO_LIST_ROWS == 2 ]] || exit 1
+[[ "${{_ZSH_TURBO_LIST_VALUES[1]}}" == 'ls books/a\ b.txt ' && "${{_ZSH_TURBO_LIST_LABELS[3]}}" == sub/ ]] || exit 2
+_zsh_turbo_autosuggest_display
+# 入力中は既定の行数 (2) まで表示し、続きを … で示す
+[[ "$POSTDISPLAY" == $'a\\ b.txt \nFiles (3):\n  a b.txt\n  c.txt\n  …' ]] || {{ print -r -- "$POSTDISPLAY" >&2; exit 3; }}
+_zsh_turbo_list_header Files 19 0 3
+[[ "$REPLY" == 'Files (3/19):' ]] || exit 4
+_zsh_turbo_list_header Files 256 1
+[[ "$REPLY" == 'Files (256+):' ]] || exit 5
+# 旧形式・壊れた応答では一覧を出さない
+_zsh_turbo_apply_response "project" "make build"
+(( ${{#_ZSH_TURBO_LIST_VALUES}} == 0 )) && [[ -z "$_ZSH_TURBO_SUGGESTION" ]] || exit 6
+_zsh_turbo_apply_response "v1${{tab}}none${{tab}}0${{tab}}complete${{tab}}10${{tab}}" "ghost${{tab}}ls books/x" end
+(( ${{#_ZSH_TURBO_LIST_VALUES}} == 0 )) && [[ "$_ZSH_TURBO_SUGGESTION" == 'ls books/x' ]] || exit 7
+"#,
+            shell_single_quote(&init_path.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .env("HISTFILE", tmp.path().join("history"))
+            .output()
+            .expect("zsh を実行できるべき");
+        assert!(
+            output.status.success(),
+            "応答の解釈に失敗: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn init_script_直前に描いた一覧の行を差し引いて表示行数を決める() {
+        // BUFFERLINES は直前に描いた一覧 (POSTDISPLAY) の行も数える。差し引かないと
+        // 描くたびに表示行数が増減し、一覧の末尾が出たり消えたりする。
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let script = format!(
+            r#"source {}
+function zle() {{ :; }}
+BUFFER='uv'
+CURSOR=2
+LINES=20
+BUFFERLINES=13
+_ZSH_TURBO_DRAWN_LINES=12
+_zsh_turbo_edit_lines
+(( REPLY == 1 )) || exit 1
+tab=$'\t'
+local -a lines=("v1${{tab}}commands${{tab}}10${{tab}}complete${{tab}}10${{tab}}Commands")
+for name in a b c d e f g h i j; do lines+=("item${{tab}}$name${{tab}}uv $name "); done
+lines+=(end)
+_zsh_turbo_apply_response "${{lines[@]}}"
+_zsh_turbo_autosuggest_display
+# 見出し + 10 行をすべて表示する (差し引かないと 20-13-4=3 行に削られる)
+[[ ${{#${{POSTDISPLAY//[^$'\n']/}}}} == 11 ]] || {{ print -r -- "$POSTDISPLAY" >&2; exit 2; }}
+# Ctrl+C で閉じた入力のままなら一覧を出さない
+_ZSH_TURBO_LIST_DISMISSED='uv'
+_zsh_turbo_apply_response "${{lines[@]}}"
+(( ${{#_ZSH_TURBO_LIST_VALUES}} == 0 )) || exit 3
+"#,
+            shell_single_quote(&init_path.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .env("HISTFILE", tmp.path().join("history"))
+            .output()
+            .expect("zsh を実行できるべき");
+        assert!(
+            output.status.success(),
+            "表示行数の計算が直前の一覧に引きずられている: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn init_script_同じ文字列の履歴へ移っても一覧を取り直す() {
+        // HIST_IGNORE_DUPS を外した環境などでは、同じ文字列の履歴へ移ると BUFFER は
+        // 変わらず HISTNO だけが変わる。その場合も取り直し、入力中の一覧を残さない。
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let script = format!(
+            r#"source {}
+function zle() {{ :; }}
+typeset -gi calls=0
+function _zsh_turbo_after_modify() {{ (( calls += 1 )); }}
+BUFFER='ls books/'
+CURSOR=${{#BUFFER}}
+HISTNO=14
+_zsh_turbo_line_pre_redraw
+(( calls == 1 )) || exit 1
+_zsh_turbo_line_pre_redraw
+(( calls == 1 )) || exit 2
+HISTNO=13
+_zsh_turbo_line_pre_redraw
+(( calls == 2 )) || exit 3
+"#,
+            shell_single_quote(&init_path.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .env("HISTFILE", tmp.path().join("history"))
+            .output()
+            .expect("zsh を実行できるべき");
+        assert!(
+            output.status.success(),
+            "HISTNO の変化で取り直していない: status={:?}, stderr={}",
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );

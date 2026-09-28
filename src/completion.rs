@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 mod cache;
 mod help;
+mod subcommands;
+
+pub use subcommands::{TopLevel, top_level};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

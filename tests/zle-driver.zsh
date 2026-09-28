@@ -1,6 +1,9 @@
 emulate -L zsh
 zmodload zsh/zpty || exit 1
 zmodload zsh/zselect || exit 1
+# 各待ちの上限 (0.05 秒単位)。条件が揃えばすぐ抜けるので、高負荷の端末で初回 compinit が
+# 数秒かかっても落ちないよう余裕を持たせる。
+typeset -gi fixture_wait=400
 local_output=''
 function drain_fixture() {
     while zpty -r fixture local_output 2>/dev/null; do
@@ -10,7 +13,7 @@ function drain_fixture() {
 function snapshot_fixture() {
     : > "$TEST_ROOT/ready"
     zpty -w -n fixture $'\e[24~'
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         [[ -s "$TEST_ROOT/ready" ]] && return 0
         zselect -t 5
@@ -21,7 +24,7 @@ function snapshot_fixture() {
 }
 function await_fixture() {
     local field="$1" expected="$2" mode="${3:-exact}" actual
-    repeat 100; do
+    repeat $fixture_wait; do
         snapshot_fixture || return 1
         actual="$(<"$TEST_ROOT/$field")"
         [[ "$actual" == "$expected" ]] && return 0
@@ -35,7 +38,7 @@ function await_terminal() {
     emulate -L zsh
     setopt extendedglob
     local expected="$1" actual
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         actual="$(<"$TEST_ROOT/terminal")"
         actual="${actual//$'\e'\[[0-9\;]##m/}"
@@ -49,7 +52,7 @@ function await_terminal() {
 function history_key_fixture() {
     local key="$1" expected="$2"
     zpty -w -n fixture "$key"
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         if [[ -f "$TEST_ROOT/history-buffer" ]] && [[ "$(<"$TEST_ROOT/history-buffer")" == "$expected" ]]; then
             zselect -t 20
@@ -63,7 +66,7 @@ function history_key_fixture() {
 }
 zpty -b fixture zsh -di || exit 1
 {
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         [[ -s "$TEST_ROOT/boot" ]] && break
         zselect -t 5
@@ -110,7 +113,7 @@ zpty -b fixture zsh -di || exit 1
     await_fixture buffer 'echo sam' || exit 10
     await_fixture ghost 'ple-alpha' || exit 11
     zpty -w -n fixture $'\x15echo newer-fixture\r'
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         [[ "$(<"$TEST_ROOT/boot")" == 2 ]] && break
         zselect -t 5
@@ -130,7 +133,7 @@ zpty -b fixture zsh -di || exit 1
     drain_fixture
     : > "$TEST_ROOT/terminal"
     zpty -w -n fixture $'\x15echo sam\x12\e[B'
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         [[ "$(<"$TEST_ROOT/terminal")" == *'[2/2]'* ]] && break
         zselect -t 5
@@ -146,7 +149,7 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture $'\x05\x15'
     await_fixture fds '0 0' || exit 23
     zpty -w -n fixture $'print -u2 -- stderr-visible-$((20+5))\r'
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         [[ "$(<"$TEST_ROOT/boot")" == 3 ]] && break
         zselect -t 5
@@ -213,18 +216,18 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture $'\t'
     await_fixture buffer 'make build' || exit 52
     await_fixture project '' || exit 52
-    zpty -w -n fixture $'\x15pnpm'
-    await_fixture project $'pnpm dev\npnpm test' || exit 53
+    zpty -w -n fixture $'\x15pnpm run'
+    await_fixture project $'pnpm run dev\npnpm run test' || exit 53
     await_fixture display $' dev\nTasks (2):\n  dev\n  test' || exit 54
     zpty -w -n fixture $'\e[B\e[B\r'
-    await_fixture buffer 'pnpm test' || exit 64
+    await_fixture buffer 'pnpm run test' || exit 64
     await_fixture project '' || exit 65
     zpty -w -n fixture $'\x15echo sam'
     await_fixture project '' || exit 55
     await_fixture display 'ple-alpha' || exit 55
     zpty -w -n fixture $'\t'
     await_fixture buffer 'echo sample-alpha' || exit 36
-    zpty -w -n fixture $'\x15pnpm de'
+    zpty -w -n fixture $'\x15pnpm run de'
     await_fixture ghost 'v' || exit 37
     zpty -w -n fixture $'\x15bun run de'
     await_fixture ghost 'v' || exit 38
@@ -232,7 +235,7 @@ zpty -b fixture zsh -di || exit 1
     await_fixture ghost 'llo' || exit 39
     zpty -w -n fixture $'\x15npm run de'
     await_fixture ghost 'v' || exit 39
-    zpty -w -n fixture $'\x15yarn de'
+    zpty -w -n fixture $'\x15yarn run de'
     await_fixture ghost 'v' || exit 39
     zpty -w -n fixture $'\x15deno task ch'
     await_fixture ghost 'eck' || exit 39
@@ -243,14 +246,14 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture $'\x15task bu'
     await_fixture ghost 'ild' || exit 39
     zpty -w -n fixture $'\x15make\r'
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         [[ "$(<"$TEST_ROOT/boot")" == 4 ]] && break
         zselect -t 5
     done
     await_fixture display '' || exit 39
     zpty -w -n fixture $'make build\r'
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         [[ "$(<"$TEST_ROOT/boot")" == 5 ]] && break
         zselect -t 5
@@ -271,7 +274,7 @@ zpty -b fixture zsh -di || exit 1
     await_fixture buffer 'make' || exit 74
     await_fixture project $'make build\nmake check\nmake clean\nmake deploy' || exit 72
     zpty -w -n fixture $'\x15ZSH_TURBO_KEY_TAB=default\r'
-    repeat 100; do
+    repeat $fixture_wait; do
         drain_fixture
         [[ "$(<"$TEST_ROOT/boot")" == 6 ]] && break
         zselect -t 5
@@ -287,8 +290,8 @@ zpty -b fixture zsh -di || exit 1
     await_fixture buffer 'uv run hello ' || exit 44
     zpty -w -n fixture $'\x15npm run de\t'
     await_fixture buffer 'npm run dev ' || exit 45
-    zpty -w -n fixture $'\x15yarn de\t'
-    await_fixture buffer 'yarn dev ' || exit 46
+    zpty -w -n fixture $'\x15yarn run de\t'
+    await_fixture buffer 'yarn run dev ' || exit 46
     zpty -w -n fixture $'\x15deno task ch\t'
     await_fixture buffer 'deno task check ' || exit 47
     zpty -w -n fixture $'\x15mise run bu\t'
@@ -297,6 +300,81 @@ zpty -b fixture zsh -di || exit 1
     await_fixture buffer 'just check ' || exit 49
     zpty -w -n fixture $'\x15task bu\t'
     await_fixture buffer 'task build ' || exit 50
+    # ファイル一覧: 入力中のパスのディレクトリ内を下に出し、↓ で選んで Enter で入れる
+    zpty -w -n fixture $'\x15ls -l books/'
+    await_fixture labels $'sub/\nAlpha Beta.txt\nalpha.md\nパン.txt' || exit 85
+    await_fixture project $'ls -l books/sub/\nls -l books/Alpha\\ Beta.txt \nls -l books/alpha.md \nls -l books/パン.txt ' || exit 85
+    await_fixture display $'sub/\nFiles (4):\n  sub/\n  Alpha Beta.txt\n  alpha.md\n  パン.txt' || exit 86
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\e[B'
+    await_terminal '> sub/' || exit 87
+    zpty -w -n fixture $'\e[B\r'
+    await_fixture buffer 'ls -l books/Alpha\ Beta.txt ' || exit 88
+    await_fixture fds '0 0' || exit 88
+    await_fixture project '' || exit 88
+    # 前方一致で絞り、大文字小文字まで一致するものを先に出す
+    zpty -w -n fixture $'\x15ls -l books/al'
+    await_fixture labels $'alpha.md\nAlpha Beta.txt' || exit 89
+    await_fixture ghost 'pha.md ' || exit 89
+    # IME の NFC 入力で NFD のファイル名を選び、ディスク上の名前のまま入れる
+    zpty -w -n fixture $'\x15ls -l books/パ'
+    await_fixture labels $'パン.txt' || exit 90
+    zpty -w -n fixture $'\e[B\r'
+    await_fixture buffer $'ls -l books/パン.txt ' || exit 90
+    # ディレクトリを選ぶとその中の一覧へ切り替わる
+    zpty -w -n fixture $'\x15ls -l books/s'
+    await_fixture labels 'sub/' || exit 91
+    zpty -w -n fixture $'\e[B\r'
+    await_fixture buffer 'ls -l books/sub/' || exit 91
+    await_fixture labels 'inner.txt' || exit 92
+    zpty -w -n fixture $'\x15ls -l books/.'
+    await_fixture labels '.hidden' || exit 93
+    # Esc で元の入力へ戻し、一覧も戻る。入力直後の ↓ でも結果を待って開く
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\x15ls -l books/\e[B'
+    await_terminal '> sub/' || exit 94
+    zpty -w -n fixture $'\e'
+    await_fixture buffer 'ls -l books/' || exit 94
+    await_fixture labels 'sub/' contains || exit 94
+    # 履歴で呼び出した行には一覧を出さず、↓ は履歴を戻る
+    zpty -w -n fixture $'\x15: books/\r'
+    repeat $fixture_wait; do
+        drain_fixture
+        [[ "$(<"$TEST_ROOT/boot")" == 7 ]] && break
+        zselect -t 5
+    done
+    [[ "$(<"$TEST_ROOT/boot")" == 7 ]] || exit 95
+    zpty -w -n fixture $'\e[A'
+    await_fixture buffer ': books/' || exit 95
+    await_fixture fds '0 0' || exit 95
+    await_fixture project '' || exit 95
+    zpty -w -n fixture $'\e[B'
+    await_fixture buffer '' || exit 96
+    zpty -w -n fixture ': books/'
+    await_fixture labels 'sub/' contains || exit 97
+    # `run` 等を要する CLI は名前だけならサブコマンドを、`run` まで入れるとスクリプトを出す
+    zpty -w -n fixture $'\x15uv'
+    await_fixture labels $'run   Run a command or script\nself  Manage the uv executable\nsync  Update the project\'s environment' || exit 98
+    await_fixture project $'uv run \nuv self \nuv sync ' || exit 98
+    await_fixture display $' run \nCommands (3):\n  run   Run a command or script\n  self  Manage the uv executable\n  sync  Update the project\'s environment' || exit 98
+    zpty -w -n fixture $'\x15uv s'
+    await_fixture project $'uv self \nuv sync ' || exit 99
+    zpty -w -n fixture $'\e[B\e[B\r'
+    await_fixture buffer 'uv sync ' || exit 99
+    zpty -w -n fixture $'\x15uv --'
+    await_fixture project 'uv --quiet ' || exit 101
+    zpty -w -n fixture $'\x15uv run'
+    await_fixture project 'uv run hello' || exit 102
+    # メニューの Ctrl+C は元の入力に戻し、入力を変えるまで一覧を閉じる (Esc は一覧を残す)
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\x15uv\e[B'
+    await_terminal '> run' || exit 104
+    zpty -w -n fixture $'\x03'
+    await_fixture buffer 'uv' || exit 104
+    await_fixture fds '0 0' || exit 104
+    await_fixture project '' || exit 104
+    zpty -w -n fixture ' s'
+    await_fixture project $'uv self \nuv sync ' || exit 105
     zpty -w -n fixture $'\x15exit\r'
     print 'ZLE OK'
 } always {

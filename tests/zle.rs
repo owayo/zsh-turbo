@@ -5,6 +5,17 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
     let root = tmp.path();
     std::fs::create_dir(root.join("zsh-turbo")).unwrap();
     std::fs::create_dir(root.join("candidate-dir")).unwrap();
+    // ファイル一覧の選択用。パン.txt は macOS でよく見る NFD 形式の名前で置く。
+    std::fs::create_dir_all(root.join("books/sub")).unwrap();
+    for name in [
+        "Alpha Beta.txt",
+        "alpha.md",
+        ".hidden",
+        "\u{30cf}\u{309a}\u{30f3}.txt",
+        "sub/inner.txt",
+    ] {
+        std::fs::write(root.join("books").join(name), "").unwrap();
+    }
     std::fs::write(
         root.join("Makefile"),
         "build:\n\t@true\ncheck:\n\t@true\nclean:\n\t@true\ndeploy:\n\t@true\n",
@@ -42,6 +53,19 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
         }
     }
     std::fs::write(root.join("history"), history).unwrap();
+    // サブコマンド一覧の確認用に、実物の uv の代わりに決まった --help を返す偽物を置く
+    let fake_bin = root.join("fakebin");
+    std::fs::create_dir(&fake_bin).unwrap();
+    let fake_uv = fake_bin.join("uv");
+    std::fs::write(
+        &fake_uv,
+        "#!/bin/sh\n[ \"$1\" = --help ] || exit 1\ncat <<'EOF'\nUsage: uv [OPTIONS] <COMMAND>\n\nCommands:\n  run   Run a command or script\n  sync  Update the project's environment\n  self  Manage the uv executable\n\nOptions:\n  -q, --quiet  Use quiet output\nEOF\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     std::fs::write(root.join(".zshrc"), include_str!("zle-init.zsh")).unwrap();
     let harness = root.join("test.zsh");
     std::fs::write(&harness, include_str!("zle-driver.zsh")).unwrap();
@@ -54,6 +78,7 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
         .env("TEST_BINARY", binary)
         .env("ZDOTDIR", root)
         .env("XDG_CONFIG_HOME", root)
+        .env("XDG_CACHE_HOME", root.join("cache"))
         .env("ZSH_TURBO_TERM_SHELL_INTEGRATION", "0")
         .env("ZSH_TURBO_TRANSIENT", "0")
         .env("ZSH_TURBO_SUGGEST_STRATEGY", "prefix")
@@ -63,7 +88,8 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
         .env(
             "PATH",
             format!(
-                "{}:{}",
+                "{}:{}:{}",
+                fake_bin.display(),
                 bin_dir.display(),
                 std::env::var("PATH").unwrap_or_default()
             ),

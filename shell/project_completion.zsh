@@ -4,18 +4,16 @@ function _zsh_turbo_project_completion() {
     setopt extendedglob ${_comp_options[@]}
     local target="${words[1]:t}" query="" full delegate
     local -a names
+    # make・just・task はターゲットを直接取る。ほかは `run` 等の後だけスクリプトを補完し、
+    # 2 語目 (サブコマンド) は各 CLI 本来の補完に任せる。
     case "$target" in
-        make|pnpm|bun|yarn|just|task)
-            if (( CURRENT == 2 )); then
-                query="$target $PREFIX"
-            elif [[ "$target" == pnpm || "$target" == bun || "$target" == yarn ]] && [[ "${words[2]}" == run ]] && (( CURRENT == 3 )); then
-                query="$target run $PREFIX"
-            fi
+        make|just|task)
+            (( CURRENT == 2 )) && query="$target $PREFIX"
             ;;
-        uv|npm|deno|mise)
+        pnpm|bun|yarn|uv|npm|deno|mise)
             if (( CURRENT == 3 )); then
                 case "$target:${words[2]}" in
-                    uv:run|npm:run|npm:run-script|deno:task|mise:run|mise:r)
+                    pnpm:run|bun:run|yarn:run|uv:run|npm:run|npm:run-script|deno:task|mise:run|mise:r)
                         query="$target ${words[2]} $PREFIX"
                         ;;
                 esac

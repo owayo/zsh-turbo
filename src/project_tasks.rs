@@ -5,86 +5,102 @@ use std::path::Path;
 const MAX_PROJECT_FILE_BYTES: u64 = 1024 * 1024;
 
 pub fn candidates(query: &str, max: usize) -> Vec<String> {
+    labeled_candidates(query, max)
+        .into_iter()
+        .map(|(_, command)| command)
+        .collect()
+}
+
+/// タスク名と、採用後のコマンド全体の組を返す (一覧表示用)。
+pub fn labeled_candidates(query: &str, max: usize) -> Vec<(String, String)> {
     let Ok(cwd) = std::env::current_dir() else {
         return Vec::new();
     };
-    candidates_in(query, &cwd, max)
+    labeled_in(query, &cwd, max)
 }
 
+#[cfg(test)]
 fn candidates_in(query: &str, cwd: &Path, max: usize) -> Vec<String> {
+    labeled_in(query, cwd, max)
+        .into_iter()
+        .map(|(_, command)| command)
+        .collect()
+}
+
+/// スクリプト・タスクの前に `run` などのサブコマンドが要る CLI と、そのサブコマンド。
+/// 名前だけを入力した段階では、CLI 自身のサブコマンドを一覧にする (`subcommand_query`)。
+fn run_keywords(command: &str) -> Option<&'static [&'static str]> {
+    Some(match command {
+        "npm" => &["run", "run-script"],
+        "pnpm" | "bun" | "yarn" | "uv" => &["run"],
+        "deno" => &["task"],
+        "mise" => &["run", "r"],
+        _ => return None,
+    })
+}
+
+fn labeled_in(query: &str, cwd: &Path, max: usize) -> Vec<(String, String)> {
     if max == 0 || query.chars().any(char::is_control) {
         return Vec::new();
     }
     let (command, rest) = query.split_once(char::is_whitespace).unwrap_or((query, ""));
     let rest = rest.trim_start_matches(char::is_whitespace);
-    let (names, prefix, bare_head) = match command {
-        "make" => (make_targets(cwd), rest, "make "),
-        "pnpm" | "bun" | "yarn" => (
-            package_scripts(cwd, command == "pnpm"),
-            after_keyword(rest, "run").unwrap_or(rest),
-            match command {
-                "pnpm" => "pnpm ",
-                "bun" => "bun ",
-                _ => "yarn ",
-            },
-        ),
-        "npm" => {
-            let Some(prefix) = rest
-                .is_empty()
-                .then_some("")
-                .or_else(|| after_keyword(rest, "run"))
-                .or_else(|| after_keyword(rest, "run-script"))
-            else {
-                return Vec::new();
-            };
-            (package_scripts(cwd, false), prefix, "npm run ")
-        }
-        "uv" => {
-            let Some(prefix) = rest
-                .is_empty()
-                .then_some("")
-                .or_else(|| after_keyword(rest, "run"))
-            else {
-                return Vec::new();
-            };
-            (uv_scripts(cwd), prefix, "uv run ")
-        }
-        "deno" => {
-            let Some(prefix) = rest
-                .is_empty()
-                .then_some("")
-                .or_else(|| after_keyword(rest, "task"))
-            else {
-                return Vec::new();
-            };
-            (deno_tasks(cwd), prefix, "deno task ")
-        }
-        "mise" => {
-            let Some(prefix) = rest
-                .is_empty()
-                .then_some("")
-                .or_else(|| after_keyword(rest, "run"))
-                .or_else(|| after_keyword(rest, "r"))
-            else {
-                return Vec::new();
-            };
-            (mise_tasks(cwd), prefix, "mise run ")
-        }
-        "just" => (just_recipes(cwd), rest, "just "),
-        "task" => (taskfile_tasks(cwd), rest, "task "),
-        _ => return Vec::new(),
+    // make・just・task はターゲットやレシピを直接引数に取る
+    let direct = match command {
+        "make" => Some(make_targets(cwd)),
+        "just" => Some(just_recipes(cwd)),
+        "task" => Some(taskfile_tasks(cwd)),
+        _ => None,
     };
-    let head = if query == command
-        || (rest.is_empty() && matches!(command, "npm" | "uv" | "deno" | "mise"))
-    {
-        bare_head
-    } else if prefix.is_empty() && !query.ends_with(char::is_whitespace) {
-        // `npm run` など、サブコマンド直後も候補を表示する。
-        return matching(&format!("{query} "), prefix, names, max);
+    if let Some(names) = direct {
+        let head = if query == command {
+            format!("{command} ")
+        } else {
+            query[..query.len() - rest.len()].to_owned()
+        };
+        return matching(&head, rest, names, max);
+    }
+    let Some(prefix) = run_keywords(command)
+        .into_iter()
+        .flatten()
+        .find_map(|keyword| after_keyword(rest, keyword))
+    else {
+        return Vec::new();
+    };
+    let names = match command {
+        "npm" | "bun" | "yarn" => package_scripts(cwd, false),
+        "pnpm" => package_scripts(cwd, true),
+        "uv" => uv_scripts(cwd),
+        "deno" => deno_tasks(cwd),
+        _ => mise_tasks(cwd),
+    };
+    let head = if prefix.is_empty() && !query.ends_with(char::is_whitespace) {
+        // `npm run` のように、サブコマンド直後でも候補を表示する
+        format!("{query} ")
     } else {
-        &query[..query.len() - prefix.len()]
+        query[..query.len() - prefix.len()].to_owned()
     };
-    matching(head, prefix, names, max)
+    matching(&head, prefix, names, max)
+}
+
+/// `uv` や `npm i` のように、`run` 等を要する CLI の名前か 2 語目を入力中なら
+/// (CLI 名, 候補の前に残す部分, 入力中の語) を返す。一覧には CLI のサブコマンドを出す。
+pub fn subcommand_query(query: &str) -> Option<(&str, String, &str)> {
+    if query.chars().any(char::is_control) {
+        return None;
+    }
+    let (command, rest) = query.split_once(char::is_whitespace).unwrap_or((query, ""));
+    run_keywords(command)?;
+    let word = rest.trim_start_matches(char::is_whitespace);
+    if word.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let head = if query == command {
+        format!("{command} ")
+    } else {
+        query[..query.len() - word.len()].to_owned()
+    };
+    Some((command, head, word))
 }
 
 fn after_keyword<'a>(rest: &'a str, keyword: &str) -> Option<&'a str> {
@@ -95,7 +111,7 @@ fn after_keyword<'a>(rest: &'a str, keyword: &str) -> Option<&'a str> {
     Some(after.trim_start_matches(char::is_whitespace))
 }
 
-fn matching(head: &str, prefix: &str, names: Vec<String>, max: usize) -> Vec<String> {
+fn matching(head: &str, prefix: &str, names: Vec<String>, max: usize) -> Vec<(String, String)> {
     if prefix.chars().any(char::is_whitespace) || prefix.starts_with('-') {
         return Vec::new();
     }
@@ -103,7 +119,10 @@ fn matching(head: &str, prefix: &str, names: Vec<String>, max: usize) -> Vec<Str
         .into_iter()
         .filter(|name| name.starts_with(prefix) && name != prefix)
         .take(max)
-        .map(|name| format!("{head}{name}"))
+        .map(|name| {
+            let command = format!("{head}{name}");
+            (name, command)
+        })
         .collect()
 }
 
@@ -431,23 +450,19 @@ mod tests {
             ["make all", "make build", "make test"]
         );
         assert_eq!(
-            candidates_in("pnpm", tmp.path(), 10),
-            ["pnpm deploy", "pnpm dev"]
-        );
-        assert_eq!(
-            candidates_in("npm", tmp.path(), 10),
-            ["npm run .hidden", "npm run deploy", "npm run dev"]
+            candidates_in("pnpm run", tmp.path(), 10),
+            ["pnpm run deploy", "pnpm run dev"]
         );
         assert_eq!(
             candidates_in("npm run", tmp.path(), 10),
             ["npm run .hidden", "npm run deploy", "npm run dev"]
         );
         assert_eq!(
-            candidates_in("uv", tmp.path(), 10),
+            candidates_in("uv run", tmp.path(), 10),
             ["uv run hello", "uv run hello-world"]
         );
         assert_eq!(
-            candidates_in("deno", tmp.path(), 10),
+            candidates_in("deno task", tmp.path(), 10),
             [
                 "deno task .hidden",
                 "deno task check",
@@ -456,13 +471,15 @@ mod tests {
             ]
         );
         assert_eq!(
-            candidates_in("mise", tmp.path(), 10),
+            candidates_in("mise run", tmp.path(), 10),
             ["mise run check", "mise run deploy", "mise run test"]
         );
-        assert_eq!(
-            candidates_in("pnpm de", tmp.path(), 10),
-            ["pnpm deploy", "pnpm dev"]
-        );
+        // `run` 等を要する CLI は名前だけ・2 語目ではタスクを出さない (サブコマンドの一覧に任せる)
+        for query in [
+            "npm", "pnpm", "bun", "yarn", "uv", "deno", "mise", "pnpm de", "npm i", "uv sy",
+        ] {
+            assert!(candidates_in(query, tmp.path(), 10).is_empty(), "{query}");
+        }
         assert_eq!(
             candidates_in("pnpm run de", tmp.path(), 10),
             ["pnpm run deploy", "pnpm run dev"]
@@ -480,8 +497,8 @@ mod tests {
             ["npm run deploy", "npm run dev"]
         );
         assert_eq!(
-            candidates_in("yarn de", tmp.path(), 10),
-            ["yarn deploy", "yarn dev"]
+            candidates_in("yarn run de", tmp.path(), 10),
+            ["yarn run deploy", "yarn run dev"]
         );
         assert_eq!(
             candidates_in("deno task ch", tmp.path(), 10),
@@ -501,6 +518,33 @@ mod tests {
         assert!(candidates_in("echo make bu", tmp.path(), 10).is_empty());
         assert!(candidates_in("make -j", tmp.path(), 10).is_empty());
         assert!(candidates_in("make bu other", tmp.path(), 10).is_empty());
+        // 一覧にはタスク名を表示し、採用時はサブコマンドを含むコマンド全体に置き換える
+        assert_eq!(
+            labeled_in("npm run", tmp.path(), 10)[1],
+            ("deploy".to_owned(), "npm run deploy".to_owned())
+        );
+        assert_eq!(
+            labeled_in("mise r te", tmp.path(), 10),
+            [("test".to_owned(), "mise r test".to_owned())]
+        );
+    }
+
+    #[test]
+    fn run等を要するcliの名前と2語目はサブコマンドの入力として返す() {
+        assert_eq!(subcommand_query("uv"), Some(("uv", "uv ".to_owned(), "")));
+        assert_eq!(subcommand_query("uv "), Some(("uv", "uv ".to_owned(), "")));
+        assert_eq!(
+            subcommand_query("npm  i"),
+            Some(("npm", "npm  ".to_owned(), "i"))
+        );
+        assert_eq!(
+            subcommand_query("mise --"),
+            Some(("mise", "mise ".to_owned(), "--"))
+        );
+        assert_eq!(subcommand_query("uv sync "), None);
+        assert_eq!(subcommand_query("make"), None);
+        assert_eq!(subcommand_query("uvx"), None);
+        assert_eq!(subcommand_query("uv\ta"), None);
     }
 
     #[test]

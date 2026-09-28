@@ -165,7 +165,7 @@ In `zsh-turbo configure`, use **Style → Rainbow palette** to choose from 14 pa
 | Alt+F       | Accept one word         |
 | Ctrl+Right  | Accept one word         |
 | Up Arrow    | History search (prefix) |
-| Down Arrow  | Select a visible project task; otherwise search history (prefix) |
+| Down Arrow  | Select from a visible list (tasks, commands, files); otherwise search history (prefix) |
 | Ctrl+R      | Ranked history menu (fuzzy search) |
 | Tab         | Accept full suggestion; run standard completion when none is shown |
 
@@ -178,15 +178,13 @@ Equally strong matches are ranked by frequency, then recency. `Ctrl+R` searches 
 
 History suggestions prefer a prefix match over substring and fuzzy matches across the entire history file. Incomplete final entries and fragments of multiline commands are excluded, including fragments at the 64 KiB read boundary. Only the top candidates are selected, avoiding a full sort of all matches.
 
-Project tasks in the current directory take priority over history suggestions. Typing `make` shows targets from the Makefile below the input; `pnpm` and other supported commands show their tasks the same way. Further input filters the list by prefix. Press Down while the list is visible to select its first task, then use Up/Down (or Tab/Shift+Tab) to move through the tasks. The list stays in one column, with the selected task highlighted in cyan. Enter inserts the selected command without running it; Esc / Ctrl+C restores the original input. Task files are parsed without running the tools. Tab accepts the ghost suggestion before entering the list; **Suggest → Tab: Default** uses normal zsh completion. See [supported commands and task files](docs/configuration.md#project-task-completion).
+Project tasks in the current directory take priority over history suggestions. Typing `make` shows targets from the Makefile below the input, and `just` and `task` show their recipes and tasks the same way. Commands that run scripts through a subcommand show them after it: `npm run`, `pnpm run`, `bun run`, `yarn run`, `uv run`, `deno task`, and `mise run`. Typing only the command name, such as `uv` or `npm`, lists its subcommands with descriptions instead (options after `-`), read from its `--help` and cached. Further input filters the list by prefix. Press Down while the list is visible to select its first task, then use Up/Down (or Tab/Shift+Tab) to move through the tasks. The list stays in one column, with the selected task highlighted in cyan. Enter inserts the selected command without running it; Esc restores the original input, and Ctrl+C also closes the list until you edit the input. Task files are parsed without running the tools. Tab accepts the ghost suggestion before entering the list; **Suggest → Tab: Default** uses normal zsh completion. See [supported commands and task files](docs/configuration.md#project-task-completion).
 
 Makefile targets with `make`:
 
 ![Makefile targets listed below a make prompt](docs/images/make.png)
 
-Package scripts with `pnpm`:
-
-![Package scripts listed below a pnpm prompt](docs/images/pnpm.png)
+Typing a path lists the entries of its directory below the input in the same way. `ls -l ~/Documents/` lists the files in `~/Documents`, and `ls -l ~/Documents/rep` narrows the list to names starting with `rep`. Directories come first and end with `/`. Press Down to select an entry, then Enter to insert it with any escaping it needs. Choosing a directory switches the list to its contents; a file is followed by a space. See [file list](docs/configuration.md#file-list) for the matching rules.
 
 When no history suggestion is shown, Tab also completes subcommands and options, such as `zsh-turbo conf<Tab>` and `zsh-turbo install-font --fo<Tab>`. Completion is generated from the CLI definition. Other commands use standard zsh completion and your `fpath`. Clearing or accepting the input unregisters pending suggestion handlers and preserves normal command error output. Both sides of the prompt are rendered with one CLI invocation.
 

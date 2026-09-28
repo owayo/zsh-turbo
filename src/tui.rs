@@ -34,8 +34,24 @@ pub fn history_menu_empty() -> &'static str {
         .text("No matching history", "一致する履歴がありません")
 }
 
-pub fn project_task_list_label() -> &'static str {
-    Lang::from_preference(config::load_config().ui.language).text("Tasks", "タスク")
+/// 入力欄の下に出すタスク一覧の見出し
+pub fn task_list_title(language: UiLanguage) -> &'static str {
+    Lang::from_preference(language).text("Tasks", "タスク")
+}
+
+/// 入力欄の下に出すファイル一覧の見出し
+pub fn file_list_title(language: UiLanguage) -> &'static str {
+    Lang::from_preference(language).text("Files", "ファイル")
+}
+
+/// 入力欄の下に出すサブコマンド一覧の見出し
+pub fn command_list_title(language: UiLanguage) -> &'static str {
+    Lang::from_preference(language).text("Commands", "コマンド")
+}
+
+/// 入力欄の下に出すオプション一覧の見出し
+pub fn option_list_title(language: UiLanguage) -> &'static str {
+    Lang::from_preference(language).text("Options", "オプション")
 }
 
 #[cfg(test)]

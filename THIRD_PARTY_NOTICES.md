@@ -11,7 +11,7 @@ Identical license documents are reproduced once, with references from each packa
 OR (and the legacy / notation) denotes alternative licenses; AND denotes combined terms.
 Reproducing alternative license texts does not turn OR into AND.
 
-Cargo.lock SHA-256: `31b9fc98664326a0f34c92762ad9b320b5ee4a0806e4e21c9f003fabaad660bc`
+Cargo.lock SHA-256: `0ddb1c755503e1900867735535dc6e8f84f09a6e0912cfa3b4bce0414222da95`
 
 ## MPL source availability
 
@@ -26,7 +26,7 @@ MesloLGS NF is downloaded separately and is not included in the release archive.
 Its upstream attribution and Apache-2.0 terms are in licenses/MesloLGS-NF.txt.
 The installer also saves these terms beside the fonts.
 
-## Packages (152)
+## Packages (154)
 
 The source archive links contain the exact published crate versions used by Cargo.lock.
 The two winapi GNU import-library crates omit license files from their archives;
@@ -47,14 +47,14 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | block-buffer 0.12.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/block-buffer/block-buffer-0.12.1.crate) | [LICENSE-APACHE](#document-10); [LICENSE-MIT](#document-11) |
 | bumpalo 3.20.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/bumpalo/bumpalo-3.20.3.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-12) |
 | castaway 0.2.4 | MIT | [source](https://static.crates.io/crates/castaway/castaway-0.2.4.crate) | [LICENSE](#document-13) |
-| cc 1.4.5 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/cc/cc-1.4.5.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
+| cc 1.4.6 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/cc/cc-1.4.6.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
 | cfg-if 1.0.4 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/cfg-if/cfg-if-1.0.4.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
 | chrono 0.4.45 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/chrono/chrono-0.4.45.crate) | [LICENSE.txt](#document-15) |
-| clap 4.6.6 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap/clap-4.6.6.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
-| clap_builder 4.6.6 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap_builder/clap_builder-4.6.6.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
+| clap 4.6.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap/clap-4.6.7.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
+| clap_builder 4.6.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap_builder/clap_builder-4.6.7.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | clap_complete 4.6.11 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap_complete/clap_complete-4.6.11.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
-| clap_derive 4.6.4 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap_derive/clap_derive-4.6.4.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
-| clap_lex 1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap_lex/clap_lex-1.1.0.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
+| clap_derive 4.6.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap_derive/clap_derive-4.6.7.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
+| clap_lex 1.1.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap_lex/clap_lex-1.1.1.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | colorchoice 1.0.5 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/colorchoice/colorchoice-1.0.5.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
 | compact_str 0.9.1 | MIT | [source](https://static.crates.io/crates/compact_str/compact_str-0.9.1.crate) | [LICENSE](#document-17) |
 | const-oid 0.10.2 | Apache-2.0 OR MIT | [source](https://static.crates.io/crates/const-oid/const-oid-0.10.2.crate) | [LICENSE-APACHE](#document-10); [LICENSE-MIT](#document-18) |
@@ -158,34 +158,36 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | thiserror-impl 2.0.21 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/thiserror-impl/thiserror-impl-2.0.21.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | time 0.3.55 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/time/time-0.3.55.crate) | [LICENSE-Apache](#document-65); [LICENSE-MIT](#document-90) |
 | time-core 0.1.9 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/time-core/time-core-0.1.9.crate) | [LICENSE-Apache](#document-65); [LICENSE-MIT](#document-90) |
+| tinyvec 1.13.3 | Zlib OR Apache-2.0 OR MIT | [source](https://static.crates.io/crates/tinyvec/tinyvec-1.13.3.crate) | [LICENSE-APACHE.md](#document-86); [LICENSE-MIT.md](#document-91); [LICENSE-ZLIB.md](#document-92) |
 | toml 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml/toml-1.1.6+spec-1.1.0.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
 | toml_datetime 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_datetime/toml_datetime-1.1.1+spec-1.1.0.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
 | toml_parser 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
 | toml_writer 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_writer/toml_writer-1.1.2+spec-1.1.0.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
-| typenum 1.20.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/typenum/typenum-1.20.1.crate) | [LICENSE](#document-91); [LICENSE-APACHE](#document-92); [LICENSE-MIT](#document-93) |
+| typenum 1.20.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/typenum/typenum-1.20.1.crate) | [LICENSE](#document-93); [LICENSE-APACHE](#document-94); [LICENSE-MIT](#document-95) |
 | ucd-trie 0.1.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/ucd-trie/ucd-trie-0.1.7.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-62) |
-| unicode-ident 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | [source](https://static.crates.io/crates/unicode-ident/unicode-ident-1.0.26.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2); [LICENSE-UNICODE](#document-94) |
-| unicode-segmentation 1.13.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-segmentation/unicode-segmentation-1.13.3.crate) | [COPYRIGHT](#document-95); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-42) |
-| unicode-truncate 2.0.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-truncate/unicode-truncate-2.0.1.crate) | [COPYRIGHT](#document-95); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-96) |
-| unicode-width 0.2.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-width/unicode-width-0.2.2.crate) | [COPYRIGHT](#document-95); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-42) |
+| unicode-ident 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | [source](https://static.crates.io/crates/unicode-ident/unicode-ident-1.0.26.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2); [LICENSE-UNICODE](#document-96) |
+| unicode-normalization 0.1.25 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-normalization/unicode-normalization-0.1.25.crate) | [COPYRIGHT](#document-97); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-42) |
+| unicode-segmentation 1.13.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-segmentation/unicode-segmentation-1.13.3.crate) | [COPYRIGHT](#document-97); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-42) |
+| unicode-truncate 2.0.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-truncate/unicode-truncate-2.0.1.crate) | [COPYRIGHT](#document-97); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-98) |
+| unicode-width 0.2.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-width/unicode-width-0.2.2.crate) | [COPYRIGHT](#document-97); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-42) |
 | unsafe-libyaml 0.2.11 | MIT | [source](https://static.crates.io/crates/unsafe-libyaml/unsafe-libyaml-0.2.11.crate) | [LICENSE-MIT](#document-2) |
-| utf8parse 0.2.2 | Apache-2.0 OR MIT | [source](https://static.crates.io/crates/utf8parse/utf8parse-0.2.2.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-97) |
+| utf8parse 0.2.2 | Apache-2.0 OR MIT | [source](https://static.crates.io/crates/utf8parse/utf8parse-0.2.2.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-99) |
 | wasi 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [source](https://static.crates.io/crates/wasi/wasi-0.11.1+wasi-snapshot-preview1.crate) | [LICENSE-APACHE](#document-7); [LICENSE-Apache-2.0_WITH_LLVM-exception](#document-57); [LICENSE-MIT](#document-2) |
 | wasm-bindgen 0.2.128 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/wasm-bindgen/wasm-bindgen-0.2.128.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
 | wasm-bindgen-macro 0.2.128 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/wasm-bindgen-macro/wasm-bindgen-macro-0.2.128.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
 | wasm-bindgen-macro-support 0.2.128 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/wasm-bindgen-macro-support/wasm-bindgen-macro-support-0.2.128.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
 | wasm-bindgen-shared 0.2.128 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/wasm-bindgen-shared/wasm-bindgen-shared-0.2.128.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
-| winapi 0.3.9 | MIT/Apache-2.0 | [source](https://static.crates.io/crates/winapi/winapi-0.3.9.crate) | [LICENSE-APACHE](#document-98); [LICENSE-MIT](#document-99) |
-| winapi-i686-pc-windows-gnu 0.4.0 | MIT/Apache-2.0 | [source](https://static.crates.io/crates/winapi-i686-pc-windows-gnu/winapi-i686-pc-windows-gnu-0.4.0.crate) | [winapi-rs 0.3.9 / LICENSE-MIT (shared upstream license)](#document-99) |
-| winapi-x86_64-pc-windows-gnu 0.4.0 | MIT/Apache-2.0 | [source](https://static.crates.io/crates/winapi-x86_64-pc-windows-gnu/winapi-x86_64-pc-windows-gnu-0.4.0.crate) | [winapi-rs 0.3.9 / LICENSE-MIT (shared upstream license)](#document-99) |
-| windows-core 0.62.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-core/windows-core-0.62.2.crate) | [license-apache-2.0](#document-100); [license-mit](#document-101) |
-| windows-implement 0.60.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-implement/windows-implement-0.60.2.crate) | [license-apache-2.0](#document-100); [license-mit](#document-101) |
-| windows-interface 0.59.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-interface/windows-interface-0.59.3.crate) | [license-apache-2.0](#document-100); [license-mit](#document-101) |
-| windows-link 0.2.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-link/windows-link-0.2.1.crate) | [license-apache-2.0](#document-100); [license-mit](#document-101) |
-| windows-result 0.4.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-result/windows-result-0.4.1.crate) | [license-apache-2.0](#document-100); [license-mit](#document-101) |
-| windows-strings 0.5.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-strings/windows-strings-0.5.1.crate) | [license-apache-2.0](#document-100); [license-mit](#document-101) |
-| windows-sys 0.61.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-sys/windows-sys-0.61.2.crate) | [license-apache-2.0](#document-100); [license-mit](#document-101) |
-| winnow 1.0.4 | MIT | [source](https://static.crates.io/crates/winnow/winnow-1.0.4.crate) | [LICENSE-MIT](#document-102) |
+| winapi 0.3.9 | MIT/Apache-2.0 | [source](https://static.crates.io/crates/winapi/winapi-0.3.9.crate) | [LICENSE-APACHE](#document-100); [LICENSE-MIT](#document-101) |
+| winapi-i686-pc-windows-gnu 0.4.0 | MIT/Apache-2.0 | [source](https://static.crates.io/crates/winapi-i686-pc-windows-gnu/winapi-i686-pc-windows-gnu-0.4.0.crate) | [winapi-rs 0.3.9 / LICENSE-MIT (shared upstream license)](#document-101) |
+| winapi-x86_64-pc-windows-gnu 0.4.0 | MIT/Apache-2.0 | [source](https://static.crates.io/crates/winapi-x86_64-pc-windows-gnu/winapi-x86_64-pc-windows-gnu-0.4.0.crate) | [winapi-rs 0.3.9 / LICENSE-MIT (shared upstream license)](#document-101) |
+| windows-core 0.62.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-core/windows-core-0.62.2.crate) | [license-apache-2.0](#document-102); [license-mit](#document-103) |
+| windows-implement 0.60.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-implement/windows-implement-0.60.2.crate) | [license-apache-2.0](#document-102); [license-mit](#document-103) |
+| windows-interface 0.59.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-interface/windows-interface-0.59.3.crate) | [license-apache-2.0](#document-102); [license-mit](#document-103) |
+| windows-link 0.2.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-link/windows-link-0.2.1.crate) | [license-apache-2.0](#document-102); [license-mit](#document-103) |
+| windows-result 0.4.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-result/windows-result-0.4.1.crate) | [license-apache-2.0](#document-102); [license-mit](#document-103) |
+| windows-strings 0.5.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-strings/windows-strings-0.5.1.crate) | [license-apache-2.0](#document-102); [license-mit](#document-103) |
+| windows-sys 0.61.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/windows-sys/windows-sys-0.61.2.crate) | [license-apache-2.0](#document-102); [license-mit](#document-103) |
+| winnow 1.0.4 | MIT | [source](https://static.crates.io/crates/winnow/winnow-1.0.4.crate) | [LICENSE-MIT](#document-104) |
 | zmij 1.0.23 | MIT | [source](https://static.crates.io/crates/zmij/zmij-1.0.23.crate) | [LICENSE-MIT](#document-2) |
 
 ## License and notice texts
@@ -6252,10 +6254,36 @@ SOFTWARE.
 ### Document 91
 
 ````text
-MIT OR Apache-2.0
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ````
 
 ### Document 92
+
+````text
+Copyright (c) 2019 Daniel "Lokathor" Gee.
+
+This software is provided 'as-is', without any express or implied warranty. In no event will the authors be held liable for any damages arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose, including commercial applications, and to alter it and redistribute it freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not claim that you wrote the original software. If you use this software in a product, an acknowledgment in the product documentation would be appreciated but is not required.
+
+2. Altered source versions must be plainly marked as such, and must not be misrepresented as being the original software.
+
+3. This notice may not be removed or altered from any source distribution.
+````
+
+### Document 93
+
+````text
+MIT OR Apache-2.0
+````
+
+### Document 94
 
 ````text
                               Apache License
@@ -6461,7 +6489,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ````
 
-### Document 93
+### Document 95
 
 ````text
 The MIT License (MIT)
@@ -6487,7 +6515,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ````
 
-### Document 94
+### Document 96
 
 ````text
 UNICODE LICENSE V3
@@ -6531,7 +6559,7 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 ````
 
-### Document 95
+### Document 97
 
 ````text
 Licensed under the Apache License, Version 2.0
@@ -6543,7 +6571,7 @@ notice may not be copied, modified, or distributed except
 according to those terms.
 ````
 
-### Document 96
+### Document 98
 
 ````text
 Copyright (c) 2019 Aetf <aetf at unlimitedcodeworks dot xyz>
@@ -6573,7 +6601,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-### Document 97
+### Document 99
 
 ````text
 Copyright (c) 2016 Joe Wilm
@@ -6603,7 +6631,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-### Document 98
+### Document 100
 
 ````text
                                  Apache License
@@ -6809,7 +6837,7 @@ DEALINGS IN THE SOFTWARE.
    limitations under the License.
 ````
 
-### Document 99
+### Document 101
 
 ````text
 Copyright (c) 2015-2018 The winapi-rs Developers
@@ -6833,7 +6861,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ````
 
-### Document 100
+### Document 102
 
 ````text
                                  Apache License
@@ -7039,7 +7067,7 @@ SOFTWARE.
    limitations under the License.
 ````
 
-### Document 101
+### Document 103
 
 ````text
     MIT License
@@ -7065,7 +7093,7 @@ SOFTWARE.
     SOFTWARE
 ````
 
-### Document 102
+### Document 104
 
 ````text
 Permission is hereby granted, free of charge, to any person obtaining
