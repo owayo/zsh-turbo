@@ -7,6 +7,8 @@ fpath=(
 )
 eval "$("$TEST_BINARY" init)"
 bindkey -e
+bindkey -M emacs '^[[B' down-line-or-beginning-search
+bindkey -M emacs '^[OB' down-line-or-beginning-search
 function snapshot_fixture() {
     print -rn -- "$BUFFER" > "$TEST_ROOT/buffer"
     print -rn -- "$_ZSH_TURBO_GHOST_SUFFIX" > "$TEST_ROOT/ghost"

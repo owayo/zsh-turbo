@@ -165,7 +165,7 @@ In `zsh-turbo configure`, use **Style → Rainbow palette** to choose from 14 pa
 | Alt+F       | Accept one word         |
 | Ctrl+Right  | Accept one word         |
 | Up Arrow    | History search (prefix) |
-| Down Arrow  | History search (prefix) |
+| Down Arrow  | Select a visible project task; otherwise search history (prefix) |
 | Ctrl+R      | Ranked history menu (fuzzy search) |
 | Tab         | Accept full suggestion; run standard completion when none is shown |
 
@@ -176,7 +176,7 @@ Equally strong matches are ranked by frequency, then recency. `Ctrl+R` searches 
 
 History suggestions prefer a prefix match over substring and fuzzy matches across the entire history file. Incomplete final entries and fragments of multiline commands are excluded, including fragments at the 64 KiB read boundary. Only the top candidates are selected, avoiding a full sort of all matches.
 
-Project tasks in the current directory take priority over history suggestions. Typing `make` shows targets from the Makefile below the input; `pnpm` and other supported commands show their tasks the same way. Further input filters the list by prefix. Task files are parsed without running the tools. Tab accepts the ghost suggestion; **Suggest → Tab: Default** uses normal zsh completion. See [supported commands and task files](docs/configuration.md#project-task-completion).
+Project tasks in the current directory take priority over history suggestions. Typing `make` shows targets from the Makefile below the input; `pnpm` and other supported commands show their tasks the same way. Further input filters the list by prefix. Press Down while the list is visible to select its first task, then use Up/Down (or Tab/Shift+Tab) to move through the tasks. The list stays in one column, with the selected task highlighted in cyan. Enter inserts the selected command without running it; Esc / Ctrl+C restores the original input. Task files are parsed without running the tools. Tab accepts the ghost suggestion before entering the list; **Suggest → Tab: Default** uses normal zsh completion. See [supported commands and task files](docs/configuration.md#project-task-completion).
 
 Makefile targets with `make`:
 

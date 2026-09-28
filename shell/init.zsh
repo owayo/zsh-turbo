@@ -160,8 +160,44 @@ zle -N zle-line-finish _zsh_turbo_zle_line_finish
 typeset -g _ZSH_TURBO_SUGGESTION=""
 typeset -g _ZSH_TURBO_GHOST_SUFFIX=""
 typeset -ga _ZSH_TURBO_PROJECT_CANDIDATES=()
+typeset -gA _ZSH_TURBO_DOWN_FALLBACK
+typeset -gi _ZSH_TURBO_PROJECT_KEYS_ACTIVE=${_ZSH_TURBO_PROJECT_KEYS_ACTIVE:-0}
 typeset -gi _ZSH_TURBO_ASYNC_FD=0
 typeset -g _ZSH_TURBO_ASYNC_BUFFER=""
+
+function _zsh_turbo_project_down_bindings() {
+    emulate -L zsh
+    local action="$1" keymap key binding widget fallback
+    if [[ "$action" == on ]]; then
+        (( _ZSH_TURBO_PROJECT_KEYS_ACTIVE )) && return 0
+    else
+        (( _ZSH_TURBO_PROJECT_KEYS_ACTIVE )) || return 0
+    fi
+    for keymap in emacs viins; do
+        for key in $'\e[B' $'\eOB'; do
+            binding="$(bindkey -M "$keymap" "$key")"
+            widget="${binding##* }"
+            if [[ "$action" == on ]]; then
+                [[ "$widget" == _zsh_turbo_project_menu_or_history ]] && continue
+                [[ "$widget" == '"'* ]] && continue
+                _ZSH_TURBO_DOWN_FALLBACK[$keymap:$key]="$widget"
+                bindkey -M "$keymap" "$key" _zsh_turbo_project_menu_or_history
+            elif [[ "$widget" == _zsh_turbo_project_menu_or_history ]]; then
+                fallback="${_ZSH_TURBO_DOWN_FALLBACK[$keymap:$key]:-undefined-key}"
+                if [[ "$fallback" == undefined-key ]]; then
+                    bindkey -r -M "$keymap" "$key"
+                else
+                    bindkey -M "$keymap" "$key" "$fallback"
+                fi
+            fi
+        done
+    done
+    if [[ "$action" == on ]]; then
+        _ZSH_TURBO_PROJECT_KEYS_ACTIVE=1
+    else
+        _ZSH_TURBO_PROJECT_KEYS_ACTIVE=0
+    fi
+}
 
 function _zsh_turbo_close_async_fd() {
     emulate -L zsh
@@ -182,6 +218,7 @@ function _zsh_turbo_autosuggest_fetch() {
         _ZSH_TURBO_PROJECT_CANDIDATES=()
         _ZSH_TURBO_GHOST_SUFFIX=""
         POSTDISPLAY=""
+        _zsh_turbo_project_down_bindings off
         return
     fi
 
@@ -200,6 +237,7 @@ function _zsh_turbo_autosuggest_fetch() {
     #   明示的に渡さないと子プロセスはカスタム履歴パスを解決できない。
     exec {_ZSH_TURBO_ASYNC_FD}< <("$ZSH_TURBO_CMD" suggest --project-list --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" -- "$prefix" 2>/dev/null; printf '\n')
     zle -F -w "$_ZSH_TURBO_ASYNC_FD" _zsh_turbo_async_callback
+    _zsh_turbo_project_down_bindings on
 }
 
 function _zsh_turbo_async_callback() {
@@ -272,7 +310,11 @@ function _zsh_turbo_autosuggest_display() {
     if (( ${#_ZSH_TURBO_PROJECT_CANDIDATES} )); then
         local candidate
         local -i count=0 limit=$(( LINES - BUFFERLINES - 4 ))
-        (( limit > 0 )) || return 0
+        if (( limit <= 0 )); then
+            _zsh_turbo_project_down_bindings off
+            return 0
+        fi
+        _zsh_turbo_project_down_bindings on
         POSTDISPLAY+=$'\n'"$ZSH_TURBO_TASK_LIST_LABEL (${#_ZSH_TURBO_PROJECT_CANDIDATES}):"
         for candidate in "${_ZSH_TURBO_PROJECT_CANDIDATES[@]}"; do
             POSTDISPLAY+=$'\n'"  ${candidate##* }"
@@ -371,6 +413,7 @@ function _zsh_turbo_accept_ctrl_right() {
 
 function _zsh_turbo_clear_suggestion() {
     emulate -L zsh
+    _zsh_turbo_project_down_bindings off
     POSTDISPLAY=""
     _ZSH_TURBO_SUGGESTION=""
     _ZSH_TURBO_PROJECT_CANDIDATES=()
@@ -486,6 +529,110 @@ function _zsh_turbo_history_menu() {
     }
 }
 zle -N _zsh_turbo_history_menu
+
+function _zsh_turbo_project_menu_show() {
+    emulate -L zsh
+    region_highlight=("${menu_syntax_hl[@]}")
+    local -i page_size=$(( LINES - BUFFERLINES - 4 ))
+    (( page_size > 0 )) || page_size=1
+    local -i first=$(( menu_index > page_size ? menu_index - page_size + 1 : 1 ))
+    local -i last=$(( first + page_size - 1 ))
+    (( last > ${#menu_candidates} )) && last=${#menu_candidates}
+    local row marker
+    local -i row_start
+    local -i i
+    POSTDISPLAY=$'\n'"$ZSH_TURBO_TASK_LIST_LABEL (${#menu_candidates}):"
+    for (( i=first; i<=last; i++ )); do
+        if (( i == menu_index )); then
+            marker='> '
+        else
+            marker='  '
+        fi
+        row="${marker}${menu_candidates[$i]##* }"
+        row_start=$(( ${#BUFFER} + ${#POSTDISPLAY} + 1 ))
+        POSTDISPLAY+=$'\n'"$row"
+        if (( i == menu_index )); then
+            region_highlight+=("$row_start $(( row_start + ${#row} )) fg=cyan,bold")
+        fi
+    done
+    zle -R
+}
+
+function _zsh_turbo_project_menu() {
+    emulate -L zsh
+    local -a menu_candidates=("${_ZSH_TURBO_PROJECT_CANDIDATES[@]}")
+    local original_buffer="$BUFFER" original_keymap="$KEYMAP"
+    local -i original_cursor=$CURSOR menu_index=1 _ZSH_TURBO_MENU_ACTIVE=1 menu_cancelled=0
+    local menu_cancel_key=$'\e'
+    setopt localtraps
+    trap 'menu_cancelled=1; zle -U -- "$menu_cancel_key"' INT
+    _zsh_turbo_close_async_fd "$_ZSH_TURBO_ASYNC_FD"
+    _zsh_turbo_close_async_fd "$_ZSH_TURBO_HIGHLIGHT_FD"
+    _ZSH_TURBO_ASYNC_FD=0
+    _ZSH_TURBO_HIGHLIGHT_FD=0
+    _zsh_turbo_clear_suggestion
+    local -a menu_syntax_hl=("${region_highlight[@]}")
+    {
+        zle -K zsh-turbo-project
+        local REPLY
+        while true; do
+            _zsh_turbo_project_menu_show
+            if ! zle .read-command; then
+                REPLY=send-break
+            fi
+            (( menu_cancelled )) && REPLY=send-break
+            case "$REPLY" in
+                accept-line)
+                    BUFFER="${menu_candidates[$menu_index]}"
+                    CURSOR=${#BUFFER}
+                    break ;;
+                send-break)
+                    BUFFER="$original_buffer"
+                    CURSOR=$original_cursor
+                    break ;;
+                down-line-or-history)
+                    (( menu_index = menu_index % ${#menu_candidates} + 1 )) ;;
+                up-line-or-history)
+                    (( menu_index = (menu_index + ${#menu_candidates} - 2) % ${#menu_candidates} + 1 )) ;;
+                *) zle beep ;;
+            esac
+        done
+    } always {
+        zle -K "$original_keymap"
+        POSTDISPLAY=""
+        if [[ "$BUFFER" == "$original_buffer" ]]; then
+            region_highlight=("${menu_syntax_hl[@]}")
+        else
+            region_highlight=()
+        fi
+        zle -R -c
+        _ZSH_TURBO_LAST_BUFFER=""
+    }
+}
+
+function _zsh_turbo_project_menu_or_history() {
+    emulate -L zsh
+    if (( CURSOR == ${#BUFFER} )) && [[ -n "$BUFFER" ]]; then
+        if [[ "$_ZSH_TURBO_ASYNC_BUFFER" != "$BUFFER" ]]; then
+            _ZSH_TURBO_PROJECT_CANDIDATES=()
+        fi
+        if (( ! ${#_ZSH_TURBO_PROJECT_CANDIDATES} )) &&
+           { (( _ZSH_TURBO_ASYNC_FD > 0 )) || [[ "$_ZSH_TURBO_ASYNC_BUFFER" != "$BUFFER" ]]; }; then
+            local candidates
+            candidates="$("$ZSH_TURBO_CMD" complete --project-only -- "$BUFFER" 2>/dev/null)"
+            [[ -n "$candidates" ]] && _ZSH_TURBO_PROJECT_CANDIDATES=("${(@f)candidates}")
+        fi
+        if (( ${#_ZSH_TURBO_PROJECT_CANDIDATES} )); then
+            _zsh_turbo_project_menu
+            return
+        fi
+    fi
+    local key="$KEYS"
+    _zsh_turbo_project_down_bindings off
+    zle -U -- "$key"
+}
+zle -N _zsh_turbo_project_menu_or_history
+zle -N _zsh_turbo_project_menu
 bindkey -N zsh-turbo-history
 bindkey -M zsh-turbo-history '^I' down-line-or-history
 bindkey -M zsh-turbo-history '^[[B' down-line-or-history
@@ -499,6 +646,19 @@ bindkey -M zsh-turbo-history '^M' accept-line
 bindkey -M zsh-turbo-history '^J' accept-line
 bindkey -M zsh-turbo-history '^[' send-break
 bindkey -M zsh-turbo-history '^C' send-break
+bindkey -N zsh-turbo-project
+bindkey -M zsh-turbo-project '^I' down-line-or-history
+bindkey -M zsh-turbo-project '^[[B' down-line-or-history
+bindkey -M zsh-turbo-project '^[OB' down-line-or-history
+bindkey -M zsh-turbo-project '^N' down-line-or-history
+bindkey -M zsh-turbo-project '^[[A' up-line-or-history
+bindkey -M zsh-turbo-project '^[OA' up-line-or-history
+bindkey -M zsh-turbo-project '^[[Z' up-line-or-history
+bindkey -M zsh-turbo-project '^P' up-line-or-history
+bindkey -M zsh-turbo-project '^M' accept-line
+bindkey -M zsh-turbo-project '^J' accept-line
+bindkey -M zsh-turbo-project '^[' send-break
+bindkey -M zsh-turbo-project '^C' send-break
 bindkey -M emacs '^R' _zsh_turbo_history_menu
 bindkey -M viins '^R' _zsh_turbo_history_menu
 for _zsh_turbo_keymap in emacs viins; do

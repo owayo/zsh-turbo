@@ -5,7 +5,11 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
     let root = tmp.path();
     std::fs::create_dir(root.join("zsh-turbo")).unwrap();
     std::fs::create_dir(root.join("candidate-dir")).unwrap();
-    std::fs::write(root.join("Makefile"), "build:\n\t@true\n").unwrap();
+    std::fs::write(
+        root.join("Makefile"),
+        "build:\n\t@true\ncheck:\n\t@true\nclean:\n\t@true\ndeploy:\n\t@true\n",
+    )
+    .unwrap();
     std::fs::write(
         root.join("package.json"),
         r#"{"scripts":{"dev":"vite","test":"node test.js"}}"#,

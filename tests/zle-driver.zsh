@@ -31,6 +31,21 @@ function await_fixture() {
     print -u2 -- "unexpected $field: $(<"$TEST_ROOT/$field") (expected $expected)"
     return 1
 }
+function await_terminal() {
+    emulate -L zsh
+    setopt extendedglob
+    local expected="$1" actual
+    repeat 100; do
+        drain_fixture
+        actual="$(<"$TEST_ROOT/terminal")"
+        actual="${actual//$'\e'\[[0-9\;]##m/}"
+        [[ "$actual" == *"$expected"* ]] && return 0
+        zselect -t 5
+    done
+    print -u2 -- "terminal missing $expected"
+    tail -c 1200 "$TEST_ROOT/terminal" >&2
+    return 1
+}
 zpty -b fixture zsh -di || exit 1
 {
     repeat 100; do
@@ -38,7 +53,15 @@ zpty -b fixture zsh -di || exit 1
         [[ -s "$TEST_ROOT/boot" ]] && break
         zselect -t 5
     done
-    [[ -s "$TEST_ROOT/boot" ]] || exit 2
+    [[ -s "$TEST_ROOT/boot" ]] || { cat "$TEST_ROOT/terminal" >&2; exit 2; }
+    zpty -w -n fixture 'make'
+    await_fixture project $'make build\nmake check\nmake clean\nmake deploy' || exit 77
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\e[B'
+    await_terminal '> build' || exit 78
+    zpty -w -n fixture $'\e[B\r'
+    await_fixture buffer 'make check' || exit 79
+    zpty -w -n fixture $'\x15'
     zpty -w -n fixture 'echo sam'
     await_fixture ghost 'ple-alpha' || exit 3
     await_fixture highlight '0 4 ' contains || exit 4
@@ -98,7 +121,16 @@ zpty -b fixture zsh -di || exit 1
     done
     await_fixture buffer '' || exit 24
     [[ "$(<"$TEST_ROOT/terminal")" == *'stderr-visible-25'* ]] || exit 25
-    zpty -w -n fixture $'\e[23~echo sam'
+    zpty -w -n fixture $'\e[23~make'
+    await_fixture project 'make build' contains || exit 66
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\e[B'
+    await_terminal '> build' || exit 67
+    zpty -w -n fixture $'\e[Z'
+    await_terminal '> deploy' || exit 68
+    zpty -w -n fixture $'\r'
+    await_fixture buffer 'make deploy' || exit 69
+    zpty -w -n fixture $'\x15echo sam'
     await_fixture ghost 'ple-alpha' || exit 26
     zpty -w -n fixture $'\e[C'
     await_fixture buffer 'echo sample-alpha' || exit 27
@@ -119,20 +151,42 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture $'\x15make bu'
     await_fixture ghost 'ild' || exit 35
     zpty -w -n fixture $'\x15make'
-    await_fixture project 'make build' || exit 51
-    await_fixture display $' build\nTasks (1):\n  build' || exit 52
+    await_fixture project $'make build\nmake check\nmake clean\nmake deploy' || exit 51
+    await_fixture display $' build\nTasks (4):\n  build\n  check\n  clean\n  deploy' || exit 52
     drain_fixture
-    [[ "$(<"$TEST_ROOT/terminal")" == *'Tasks (1):'* ]] || exit 52
+    [[ "$(<"$TEST_ROOT/terminal")" == *'Tasks (4):'* ]] || exit 52
     zpty -w -n fixture $'\e[D'
     await_fixture display '' || exit 52
     zpty -w -n fixture $'\e[C'
-    await_fixture display $' build\nTasks (1):\n  build' || exit 52
+    await_fixture display $' build\nTasks (4):\n  build\n  check\n  clean\n  deploy' || exit 52
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\e[B'
+    await_terminal '> build' || exit 56
+    [[ "$(<"$TEST_ROOT/terminal")" == *$'\e[36m'* ]] || exit 56
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\e[B'
+    await_terminal '> check' || exit 57
+    [[ "$(<"$TEST_ROOT/terminal")" == *$'\e[36m'* ]] || exit 57
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\e[A'
+    await_terminal '> build' || exit 58
+    zpty -w -n fixture $'\e'
+    await_fixture buffer 'make' || exit 59
+    await_fixture project 'make build' contains || exit 60
+    zpty -w -n fixture $'\e[B\e[B\r'
+    await_fixture buffer 'make check' || exit 61
+    await_fixture project '' || exit 62
+    zpty -w -n fixture $'\x15make'
+    await_fixture project 'make build' contains || exit 63
     zpty -w -n fixture $'\t'
     await_fixture buffer 'make build' || exit 52
     await_fixture project '' || exit 52
     zpty -w -n fixture $'\x15pnpm'
     await_fixture project $'pnpm dev\npnpm test' || exit 53
     await_fixture display $' dev\nTasks (2):\n  dev\n  test' || exit 54
+    zpty -w -n fixture $'\e[B\e[B\r'
+    await_fixture buffer 'pnpm test' || exit 64
+    await_fixture project '' || exit 65
     zpty -w -n fixture $'\x15echo sam'
     await_fixture project '' || exit 55
     await_fixture display 'ple-alpha' || exit 55
@@ -163,13 +217,34 @@ zpty -b fixture zsh -di || exit 1
         zselect -t 5
     done
     await_fixture display '' || exit 39
-    zpty -w -n fixture $'\x15ZSH_TURBO_KEY_TAB=default\r'
+    zpty -w -n fixture $'make build\r'
     repeat 100; do
         drain_fixture
         [[ "$(<"$TEST_ROOT/boot")" == 5 ]] && break
         zselect -t 5
     done
-    [[ "$(<"$TEST_ROOT/boot")" == 5 ]] || exit 40
+    [[ "$(<"$TEST_ROOT/boot")" == 5 ]] || exit 70
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'make\e[B'
+    await_terminal '> build' || exit 75
+    zpty -w -n fixture $'\e'
+    await_fixture buffer 'make' || exit 76
+    zpty -w -n fixture $'\x15'
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\e[A\e[A'
+    await_terminal 'Tasks (4):' || exit 71
+    zpty -w -n fixture $'\e[B'
+    await_terminal '> build' || exit 73
+    zpty -w -n fixture $'\e'
+    await_fixture buffer 'make' || exit 74
+    await_fixture project $'make build\nmake check\nmake clean\nmake deploy' || exit 72
+    zpty -w -n fixture $'\x15ZSH_TURBO_KEY_TAB=default\r'
+    repeat 100; do
+        drain_fixture
+        [[ "$(<"$TEST_ROOT/boot")" == 6 ]] && break
+        zselect -t 5
+    done
+    [[ "$(<"$TEST_ROOT/boot")" == 6 ]] || exit 40
     zpty -w -n fixture $'make bu\t'
     await_fixture buffer 'make build ' || exit 41
     zpty -w -n fixture $'\x15pnpm run de\t'
