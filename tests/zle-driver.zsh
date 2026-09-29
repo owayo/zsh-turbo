@@ -34,6 +34,32 @@ function await_fixture() {
     print -u2 -- "unexpected $field: $(<"$TEST_ROOT/$field") (expected $expected)"
     return 1
 }
+# メニューの描画 (入力欄と一覧) が期待どおりになるまで待つ
+function await_menu() {
+    local expected="$1" actual=""
+    repeat $fixture_wait; do
+        drain_fixture
+        [[ -f "$TEST_ROOT/menu" ]] && actual="$(<"$TEST_ROOT/menu")"
+        [[ "$actual" == "$expected" ]] && return 0
+        zselect -t 5
+    done
+    print -u2 -- "unexpected menu: $actual (expected $expected)"
+    return 1
+}
+# メニューで項目が選ばれて描かれるまで待つ。入力中の一覧で既にその色が付いていると、
+# ZLE は差分だけを描くため、端末出力に `> 項目` が一続きで現れない
+function await_selected() {
+    local expected="$1" actual=""
+    repeat $fixture_wait; do
+        drain_fixture
+        [[ -f "$TEST_ROOT/menu" ]] && actual="$(<"$TEST_ROOT/menu")"
+        # サブコマンドの行は説明が続くため、名前の後ろは空白か行末で区切る
+        [[ $'\n'"$actual"$'\n' == *$'\n> '"$expected"[$' \n']* ]] && return 0
+        zselect -t 5
+    done
+    print -u2 -- "unexpected menu: $actual (expected > $expected)"
+    return 1
+}
 function await_terminal() {
     emulate -L zsh
     setopt extendedglob
@@ -92,8 +118,9 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture 'make'
     await_fixture project $'make build\nmake check\nmake clean\nmake deploy' || exit 77
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
-    await_terminal '> build' || exit 78
+    await_selected 'build' || exit 78
     zpty -w -n fixture $'\e[B\r'
     await_fixture buffer 'make check' || exit 79
     zpty -w -n fixture $'\x15'
@@ -132,6 +159,7 @@ zpty -b fixture zsh -di || exit 1
     await_fixture buffer 'zsh-turbo install-font --force ' || exit 17
     drain_fixture
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\x15echo sam\x12\e[B'
     repeat $fixture_wait; do
         drain_fixture
@@ -159,10 +187,11 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture $'\e[23~make'
     await_fixture project 'make build' contains || exit 66
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
-    await_terminal '> build' || exit 67
+    await_selected 'build' || exit 67
     zpty -w -n fixture $'\e[Z'
-    await_terminal '> deploy' || exit 68
+    await_selected 'deploy' || exit 68
     zpty -w -n fixture $'\r'
     await_fixture buffer 'make deploy' || exit 69
     zpty -w -n fixture $'\x15echo sam'
@@ -195,16 +224,19 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture $'\e[C'
     await_fixture display $' build\nTasks (4):\n  build\n  check\n  clean\n  deploy' || exit 52
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
-    await_terminal '> build' || exit 56
+    await_selected 'build' || exit 56
     [[ "$(<"$TEST_ROOT/terminal")" == *$'\e[36m'* ]] || exit 56
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
-    await_terminal '> check' || exit 57
+    await_selected 'check' || exit 57
     [[ "$(<"$TEST_ROOT/terminal")" == *$'\e[36m'* ]] || exit 57
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[A'
-    await_terminal '> build' || exit 58
+    await_selected 'build' || exit 58
     zpty -w -n fixture $'\e'
     await_fixture buffer 'make' || exit 59
     await_fixture project 'make build' contains || exit 60
@@ -260,16 +292,18 @@ zpty -b fixture zsh -di || exit 1
     done
     [[ "$(<"$TEST_ROOT/boot")" == 5 ]] || exit 70
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'make\e[B'
-    await_terminal '> build' || exit 75
+    await_selected 'build' || exit 75
     zpty -w -n fixture $'\e'
     await_fixture buffer 'make' || exit 76
     zpty -w -n fixture $'\x15'
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[A\e[A'
     await_terminal 'Tasks (4):' || exit 71
     zpty -w -n fixture $'\e[B'
-    await_terminal '> build' || exit 73
+    await_selected 'build' || exit 73
     zpty -w -n fixture $'\e'
     await_fixture buffer 'make' || exit 74
     await_fixture project $'make build\nmake check\nmake clean\nmake deploy' || exit 72
@@ -306,8 +340,9 @@ zpty -b fixture zsh -di || exit 1
     await_fixture project $'ls -l books/sub/\nls -l books/Alpha\\ Beta.txt \nls -l books/alpha.md \nls -l books/パン.txt ' || exit 85
     await_fixture display $'sub/\nFiles (4):\n  sub/\n  Alpha Beta.txt\n  alpha.md\n  パン.txt' || exit 86
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
-    await_terminal '> sub/' || exit 87
+    await_selected 'sub/' || exit 87
     zpty -w -n fixture $'\e[B\r'
     await_fixture buffer 'ls -l books/Alpha\ Beta.txt ' || exit 88
     await_fixture fds '0 0' || exit 88
@@ -331,8 +366,9 @@ zpty -b fixture zsh -di || exit 1
     await_fixture labels '.hidden' || exit 93
     # Esc で元の入力へ戻し、一覧も戻る。入力直後の ↓ でも結果を待って開く
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\x15ls -l books/\e[B'
-    await_terminal '> sub/' || exit 94
+    await_selected 'sub/' || exit 94
     zpty -w -n fixture $'\e'
     await_fixture buffer 'ls -l books/' || exit 94
     await_fixture labels 'sub/' contains || exit 94
@@ -367,8 +403,9 @@ zpty -b fixture zsh -di || exit 1
     await_fixture project 'uv run hello' || exit 102
     # メニューの Ctrl+C は元の入力に戻し、入力を変えるまで一覧を閉じる (Esc は一覧を残す)
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\x15uv\e[B'
-    await_terminal '> run' || exit 104
+    await_selected 'run' || exit 104
     zpty -w -n fixture $'\x03'
     await_fixture buffer 'uv' || exit 104
     await_fixture fds '0 0' || exit 104
@@ -395,13 +432,58 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture 'make'
     await_fixture ghost ' deploy' || exit 108
     await_fixture display $' deploy\nTasks (4):\n  build\n  check\n  clean\n  deploy' || exit 108
+    await_fixture highlight 'fg=cyan,bold' contains || exit 108
     : > "$TEST_ROOT/terminal"
+    : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
-    await_terminal '> deploy' || exit 109
+    await_selected 'deploy' || exit 109
     zpty -w -n fixture $'\e[A'
-    await_terminal '> clean' || exit 109
+    await_selected 'clean' || exit 109
     zpty -w -n fixture $'\r'
     await_fixture buffer 'make clean' || exit 110
+    # メニューの中で文字を打つと、区切りの空白を補って入力欄を編集し、一覧を絞り込む
+    menu_deploy=$'make\n\nTasks (4/4):\n  build\n  check\n  clean\n> deploy'
+    : > "$TEST_ROOT/menu"
+    zpty -w -n fixture $'\x15make\e[B'
+    await_menu "$menu_deploy" || exit 111
+    zpty -w -n fixture 'c'
+    await_menu $'make c\n\nTasks (1/2):\n> check\n  clean' || exit 112
+    zpty -w -n fixture 'l'
+    await_menu $'make cl\n\nTasks (1/1):\n> clean' || exit 113
+    zpty -w -n fixture $'\r'
+    await_fixture buffer 'make clean' || exit 114
+    # Backspace で戻すと一覧も戻り、選んでいた項目を選び続ける。Esc は打った文字を残して閉じる
+    : > "$TEST_ROOT/menu"
+    zpty -w -n fixture $'\x15make\e[B'
+    await_menu "$menu_deploy" || exit 115
+    zpty -w -n fixture 'cl'
+    await_menu $'make cl\n\nTasks (1/1):\n> clean' || exit 115
+    zpty -w -n fixture $'\x7f\x7f'
+    await_menu $'make \n\nTasks (3/4):\n  build\n  check\n> clean\n  deploy' || exit 116
+    zpty -w -n fixture $'\e'
+    await_fixture buffer 'make ' || exit 116
+    # 応答を待たずに続けて打っても文字を失わず、Enter は新しい一覧が届いてから選ぶ
+    : > "$TEST_ROOT/menu"
+    zpty -w -n fixture $'\x15make\e[B'
+    await_menu "$menu_deploy" || exit 117
+    zpty -w -n fixture $'cl\r'
+    await_fixture buffer 'make clean' || exit 117
+    # 貼り付けも同じく絞り込む
+    : > "$TEST_ROOT/menu"
+    zpty -w -n fixture $'\x15make\e[B'
+    await_menu "$menu_deploy" || exit 118
+    zpty -w -n fixture $'\e[200~ch\e[201~'
+    await_menu $'make ch\n\nTasks (1/1):\n> check' || exit 118
+    zpty -w -n fixture $'\r'
+    await_fixture buffer 'make check' || exit 118
+    # 候補が無くなればメニューを閉じ、打った文字 (日本語を含む) は残す
+    : > "$TEST_ROOT/menu"
+    zpty -w -n fixture $'\x15make\e[B'
+    await_menu "$menu_deploy" || exit 119
+    zpty -w -n fixture 'zあ'
+    await_menu closed || exit 119
+    await_fixture buffer 'make zあ' || exit 119
+    await_fixture display '' || exit 119
     zpty -w -n fixture $'\x15exit\r'
     print 'ZLE OK'
 } always {

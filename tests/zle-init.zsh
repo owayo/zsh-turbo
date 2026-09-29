@@ -14,6 +14,18 @@ function history_redraw_fixture() {
     print -rn -- "$BUFFER" > "$TEST_ROOT/history-buffer"
 }
 zle -N zle-line-pre-redraw history_redraw_fixture
+# メニュー中は観測用の widget を呼べないため、描くたびに入力欄と一覧を書き出す
+functions[_zsh_turbo_list_menu_show_fixture]=$functions[_zsh_turbo_list_menu_show]
+function _zsh_turbo_list_menu_show() {
+    _zsh_turbo_list_menu_show_fixture
+    print -rn -- "$BUFFER"$'\n'"$POSTDISPLAY" > "$TEST_ROOT/menu"
+}
+# メニューが閉じるまでに送ったキーはメニューが読むため、閉じたことも書き出す
+functions[_zsh_turbo_list_menu_fixture]=$functions[_zsh_turbo_list_menu]
+function _zsh_turbo_list_menu() {
+    _zsh_turbo_list_menu_fixture
+    print -rn -- closed > "$TEST_ROOT/menu"
+}
 function snapshot_fixture() {
     print -rn -- "$BUFFER" > "$TEST_ROOT/buffer"
     print -rn -- "$_ZSH_TURBO_GHOST_SUFFIX" > "$TEST_ROOT/ghost"

@@ -1,7 +1,9 @@
 //! ZLE の候補一覧 (`suggest --ui-list`) の応答を組み立てる。
 //!
 //! 1 行目 `v1<TAB>種類<TAB>件数<TAB>complete|partial<TAB>入力中の表示行数<TAB>見出し`、
-//! 続いて `ghost<TAB>BUFFER`、`select<TAB>N`、`item<TAB>表示名<TAB>BUFFER` を並べ、最後に `end` を置く。
+//! 続いて `ghost<TAB>BUFFER`、`input<TAB>BUFFER`、`select<TAB>N`、`item<TAB>表示名<TAB>BUFFER` を並べ、
+//! 最後に `end` を置く。
+//! `input` はメニューで打った文字を足す位置までの入力 (`make` なら区切りの空白を補った `make `)。
 //! `select` は ↓ でメニューを開いたときに選ぶ項目の番号 (送った item の 1 始まりの順番)。
 //! zsh 側は表示名を並べ、選ばれた候補の BUFFER へ置き換えるだけにする。
 //! 行の種類は後から足せるよう、zsh 側は知らない種類の行を無視する。
@@ -32,41 +34,52 @@ pub struct Request<'a> {
     pub language: UiLanguage,
     /// ディレクトリごとのタスクの利用記録 (使わないなら None)
     pub task_usage: Option<&'a Path>,
+    /// ↓ で開いたメニューの中で絞り込んでいる。入力済みの名前と完全に一致する項目も一覧に含め、
+    /// それを選ぶ (`fmt` と打って Enter した結果が `fmt-check` にならないように)
+    pub menu: bool,
+    /// メニューで直前に選んでいた項目の BUFFER。一覧に残っていれば選び続ける
+    pub selected: Option<&'a str>,
 }
 
 pub fn response(request: &Request) -> String {
     let mut out = String::new();
     let rows = request.max.min(MAX_PREVIEW_ROWS);
-    let tasks: Vec<_> = if request.buffer.is_empty() || request.max == 0 {
-        Vec::new()
+    let tasks = if request.buffer.is_empty() || request.max == 0 {
+        project_tasks::TaskList::default()
     } else {
-        project_tasks::labeled_candidates(request.buffer, project_tasks::LIST_LIMIT)
-            .into_iter()
-            .filter(|(name, command)| sendable(name) && sendable(command))
-            .collect()
+        project_tasks::task_list(request.buffer, project_tasks::LIST_LIMIT, request.menu)
     };
-    if !tasks.is_empty() {
+    let names: Vec<_> = tasks
+        .items
+        .into_iter()
+        .filter(|(name, command)| sendable(name) && sendable(command))
+        .collect();
+    if !names.is_empty() {
         push_header(
             &mut out,
             "tasks",
-            tasks.len(),
+            names.len(),
             true,
             rows,
             tui::task_list_title(request.language),
         );
-        // よく使うタスクを ↓ の初期選択と ghost にそろえ、Tab と ↓→Enter の結果を一致させる
-        let preferred = suggest::preferred_task(
+        // よく使うタスク (なければ先頭) を ghost と ↓ の初期選択にそろえ、Tab と ↓→Enter の
+        // 結果を一致させる。入力中の一覧でもこの項目に印を付け、窓の外なら見える位置までずらす
+        let ghost = suggest::preferred_task(
             request.buffer,
-            &tasks,
+            &names,
             request.history_file,
             request.task_usage,
-        );
-        push_line(&mut out, "ghost", None, &tasks[preferred.unwrap_or(0)].1);
-        let items: Vec<_> = tasks
+        )
+        .unwrap_or(0);
+        push_line(&mut out, "ghost", None, &names[ghost].1);
+        push_line(&mut out, "input", None, &tasks.input);
+        let items: Vec<_> = names
             .into_iter()
             .map(|(name, command)| (fit_width(&name, request.columns), command))
             .collect();
-        push_items(&mut out, &items, preferred);
+        let selected = selection(request, &items, Some(ghost));
+        push_items(&mut out, &items, selected);
         out.push_str("end\n");
         return out;
     }
@@ -81,7 +94,7 @@ pub fn response(request: &Request) -> String {
         && let Some(help) = completion::top_level(command)
     {
         let items = sendable_items(
-            command_items(&help, &head, word)
+            command_items(&help, &head, word, request.menu)
                 .into_iter()
                 .map(|(label, value)| (fit_width(&label, request.columns), value)),
         );
@@ -92,14 +105,15 @@ pub fn response(request: &Request) -> String {
                 tui::command_list_title(request.language)
             };
             push_header(&mut out, "commands", items.len(), true, rows, title);
-            push_ghost_and_items(&mut out, history.as_deref(), request.buffer, &items);
+            let input = format!("{head}{word}");
+            push_ghost_and_items(&mut out, request, history.as_deref(), &input, &items);
             out.push_str("end\n");
             return out;
         }
     }
 
     let listing = listing_allowed
-        .then(|| path_candidates::list(request.buffer, PATH_LIST_LIMIT))
+        .then(|| path_candidates::list(request.buffer, PATH_LIST_LIMIT, request.menu))
         .flatten()
         .map(|listing| {
             let items = sendable_items(listing.candidates.into_iter().map(|candidate| {
@@ -121,7 +135,14 @@ pub fn response(request: &Request) -> String {
                 rows,
                 tui::file_list_title(request.language),
             );
-            push_ghost_and_items(&mut out, history.as_deref(), request.buffer, &items);
+            // パスは入力の末尾から続けて打つ
+            push_ghost_and_items(
+                &mut out,
+                request,
+                history.as_deref(),
+                request.buffer,
+                &items,
+            );
         }
         None => {
             push_header(&mut out, "none", 0, true, rows, "");
@@ -182,24 +203,53 @@ fn push_items(out: &mut String, items: &[(String, String)], selected: Option<usi
     }
 }
 
-/// 履歴の続き (なければ先頭の項目) を ghost にし、ghost が通る項目を ↓ の初期選択にする
+/// 履歴の続き (なければ先頭の項目) を ghost にし、ghost が通る項目を ↓ の初期選択にする。
+/// `input` はメニューで打った文字を足す位置までの入力
 fn push_ghost_and_items<'a>(
     out: &mut String,
+    request: &Request,
     history: Option<&'a str>,
-    buffer: &str,
+    input: &str,
     items: &'a [(String, String)],
 ) {
     let values = items.iter().map(|(_, value)| value.as_str());
-    let ghost = pick_ghost(history, buffer, values);
+    let ghost = pick_ghost(history, request.buffer, values);
     if let Some(ghost) = ghost {
         push_line(out, "ghost", None, ghost);
     }
-    let selected = ghost.and_then(|ghost| {
+    push_line(out, "input", None, input);
+    let through = ghost.and_then(|ghost| {
         items
             .iter()
             .position(|(_, value)| passes_through(ghost, value))
     });
-    push_items(out, items, selected);
+    push_items(out, items, selection(request, items, through));
+}
+
+/// ↓ で開いたメニューで選ぶ項目。メニューで絞り込み中は、入力済みの名前と完全に一致する項目、
+/// 直前に選んでいた項目の順に優先する。どちらもなければ通常の選び方 (`fallback`) に従う
+fn selection(
+    request: &Request,
+    items: &[(String, String)],
+    fallback: Option<usize>,
+) -> Option<usize> {
+    if !request.menu {
+        return fallback;
+    }
+    // 入れると末尾に空白 (サブコマンド・ファイル) か `/` (ディレクトリ) が付くだけの項目も完全一致
+    let exact = |value: &str| {
+        value
+            .strip_prefix(request.buffer)
+            .is_some_and(|rest| matches!(rest, "" | " " | "/"))
+    };
+    items
+        .iter()
+        .position(|(_, value)| exact(value))
+        .or_else(|| {
+            let selected = request.selected?;
+            items.iter().position(|(_, value)| value == selected)
+        })
+        .or(fallback)
 }
 
 /// ghost が一覧の項目を経由するか。項目の BUFFER で始まり、その直後で語か階層が切れること
@@ -226,7 +276,13 @@ fn pick_ghost<'a>(
 
 /// 入力中の語に前方一致するサブコマンド (`-` 始まりならオプション) を、
 /// (説明付きの表示名, 採用後の BUFFER) の組で名前順に返す。
-fn command_items(help: &completion::TopLevel, head: &str, word: &str) -> Vec<(String, String)> {
+/// `include_exact` なら入力中の語と完全に一致する名前も含める。
+fn command_items(
+    help: &completion::TopLevel,
+    head: &str,
+    word: &str,
+    include_exact: bool,
+) -> Vec<(String, String)> {
     let entries = if word.starts_with('-') {
         &help.options
     } else {
@@ -234,7 +290,7 @@ fn command_items(help: &completion::TopLevel, head: &str, word: &str) -> Vec<(St
     };
     let mut matched: Vec<_> = entries
         .iter()
-        .filter(|(name, _)| name.starts_with(word) && name != word)
+        .filter(|(name, _)| name.starts_with(word) && (include_exact || name != word))
         .collect();
     matched.sort_by(|a, b| a.0.cmp(&b.0));
     matched.dedup_by(|a, b| a.0 == b.0);
@@ -309,6 +365,8 @@ mod tests {
             last_widget: "self-insert",
             language: UiLanguage::En,
             task_usage: None,
+            menu: false,
+            selected: None,
         }
     }
 
@@ -340,12 +398,12 @@ mod tests {
         std::fs::write(&history, format!("{base}alpha.txt | wc\n")).unwrap();
         let history = history.to_str().unwrap();
 
-        // ghost が経由する alpha.txt (2 番目) を ↓ の初期選択にする
+        // ghost が経由する alpha.txt (2 番目) を ↓ の初期選択にする。パスは入力の末尾から続けて打つ
         let out = response(&request(&base, history));
         assert_eq!(
             out,
             format!(
-                "v1\tfiles\t2\tcomplete\t10\tFiles\nghost\t{base}alpha.txt | wc\nselect\t2\nitem\tsub/\t{base}sub/\nitem\talpha.txt\t{base}alpha.txt \nend\n"
+                "v1\tfiles\t2\tcomplete\t10\tFiles\nghost\t{base}alpha.txt | wc\ninput\t{base}\nselect\t2\nitem\tsub/\t{base}sub/\nitem\talpha.txt\t{base}alpha.txt \nend\n"
             )
         );
 
@@ -354,9 +412,58 @@ mod tests {
         std::fs::write(&empty, "").unwrap();
         let out = response(&request(&base, empty.to_str().unwrap()));
         assert!(
-            out.contains(&format!("\nghost\t{base}sub/\nselect\t1\n")),
+            out.contains(&format!("\nghost\t{base}sub/\ninput\t{base}\nselect\t1\n")),
             "{out}"
         );
+
+        // 名前を打ち切ったファイルは、メニューでだけ一覧に含めて選ぶ
+        let typed = format!("{base}alpha.txt");
+        let out = response(&request(&typed, empty.to_str().unwrap()));
+        assert!(out.starts_with("v1\tnone\t"), "{out}");
+        let mut menu = request(&typed, empty.to_str().unwrap());
+        menu.menu = true;
+        let out = response(&menu);
+        assert!(
+            out.contains(&format!(
+                "\nselect\t1\nitem\talpha.txt\t{base}alpha.txt \nend\n"
+            )),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn メニューでは完全一致直前の選択通常の選び方の順に選ぶ() {
+        let items = [
+            ("fmt".to_owned(), "make fmt".to_owned()),
+            ("fmt-check".to_owned(), "make fmt-check".to_owned()),
+            ("run".to_owned(), "uv run ".to_owned()),
+        ];
+        let mut menu = request("make fmt", "");
+        // メニューの外では通常の選び方のまま
+        assert_eq!(selection(&menu, &items, Some(1)), Some(1));
+        menu.menu = true;
+        assert_eq!(selection(&menu, &items, Some(1)), Some(0));
+        // 末尾に空白を付けて入れる項目 (サブコマンド・ファイル) も完全一致とみなす
+        menu.buffer = "uv run";
+        assert_eq!(selection(&menu, &items, None), Some(2));
+        // 完全一致がなければ直前の選択、それも消えていれば通常の選び方
+        menu.buffer = "make f";
+        menu.selected = Some("make fmt-check");
+        assert_eq!(selection(&menu, &items, Some(0)), Some(1));
+        menu.selected = Some("make gone");
+        assert_eq!(selection(&menu, &items, Some(0)), Some(0));
+        assert_eq!(selection(&menu, &items, None), None);
+        // 名前を打ち切ったディレクトリは、直前に選んでいたファイルより優先する
+        let paths = [
+            ("alpha/".to_owned(), "ls alpha/".to_owned()),
+            ("alpha.txt".to_owned(), "ls alpha.txt ".to_owned()),
+        ];
+        menu.buffer = "ls alpha";
+        menu.selected = Some("ls alpha.txt ");
+        assert_eq!(selection(&menu, &paths, None), Some(0));
+        // `alpha.txt` の途中まででは完全一致にしない
+        menu.buffer = "ls alpha.t";
+        assert_eq!(selection(&menu, &paths, None), Some(1));
     }
 
     #[test]
@@ -384,15 +491,20 @@ mod tests {
             .into_iter(),
         );
         let mut out = String::new();
-        push_ghost_and_items(&mut out, Some("cmd c --flag"), "cmd ", &items);
+        let typed = request("cmd ", "");
+        push_ghost_and_items(&mut out, &typed, Some("cmd c --flag"), "cmd ", &items);
         assert_eq!(
             out,
-            "ghost\tcmd c --flag\nselect\t2\nitem\ta\tcmd a \nitem\tc\tcmd c \n"
+            "ghost\tcmd c --flag\ninput\tcmd \nselect\t2\nitem\ta\tcmd a \nitem\tc\tcmd c \n"
         );
         // どの項目も経由しない ghost では select を出さない
         let mut out = String::new();
-        push_ghost_and_items(&mut out, Some("cmdx"), "cmd", &items);
-        assert_eq!(out, "ghost\tcmdx\nitem\ta\tcmd a \nitem\tc\tcmd c \n");
+        let typed = request("cmd", "");
+        push_ghost_and_items(&mut out, &typed, Some("cmdx"), "cmd ", &items);
+        assert_eq!(
+            out,
+            "ghost\tcmdx\ninput\tcmd \nitem\ta\tcmd a \nitem\tc\tcmd c \n"
+        );
     }
 
     #[test]
@@ -458,7 +570,7 @@ mod tests {
         };
         let pair = |label: &str, value: &str| (label.to_owned(), value.to_owned());
         assert_eq!(
-            command_items(&help, "uv ", ""),
+            command_items(&help, "uv ", "", false),
             [
                 pair("run   Run a command", "uv run "),
                 pair("self", "uv self "),
@@ -466,15 +578,20 @@ mod tests {
             ]
         );
         assert_eq!(
-            command_items(&help, "uv ", "s"),
+            command_items(&help, "uv ", "s", false),
             [
                 pair("self", "uv self "),
                 pair("sync  Update the environment", "uv sync ")
             ]
         );
-        assert!(command_items(&help, "uv ", "sync").is_empty());
+        assert!(command_items(&help, "uv ", "sync", false).is_empty());
+        // メニューでは打ち切った名前も含める
         assert_eq!(
-            command_items(&help, "uv ", "--"),
+            command_items(&help, "uv ", "sync", true),
+            [pair("sync  Update the environment", "uv sync ")]
+        );
+        assert_eq!(
+            command_items(&help, "uv ", "--", false),
             [pair("--quiet  Quiet", "uv --quiet ")]
         );
     }

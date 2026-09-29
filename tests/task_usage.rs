@@ -104,8 +104,7 @@ fn よく使うタスクを初期選択とghostにしディレクトリでの利
     assert!(response.contains("ghost\tmake install\n"), "{response}");
     let response = ui_list(root, "make t");
     let (ghost, select, _) = parse(&response);
-    // 候補が 1 つなら選択位置は送らない (先頭のまま)
-    assert_eq!((ghost, select), (Some("make test"), None));
+    assert_eq!((ghost, select), (Some("make test"), Some("1")));
 
     // このディレクトリで test を重ねて使うと上書きする
     for _ in 0..3 {
@@ -176,9 +175,10 @@ fn 入力中の表示行数を超えるタスクもすべて送り選んだ位�
 }
 
 #[test]
-fn 利用の記録も履歴もなければ先頭のタスクをghostにし選択位置を送らない() {
+fn 利用の記録も履歴もなければ先頭のタスクをghostと選択位置にする() {
     let tmp = setup("build:\ninstall:\n", "make busted\n");
     let response = ui_list(tmp.path(), "make");
     let (ghost, select, _) = parse(&response);
-    assert_eq!((ghost, select), (Some("make build"), None));
+    // ghost の項目は入力中の一覧で印を付けるため、先頭でも選択位置として送る
+    assert_eq!((ghost, select), (Some("make build"), Some("1")));
 }

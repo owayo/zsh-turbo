@@ -15,10 +15,30 @@ pub fn candidates(query: &str, max: usize) -> Vec<String> {
 
 /// タスク名と、採用後のコマンド全体の組を返す (一覧表示用)。
 pub fn labeled_candidates(query: &str, max: usize) -> Vec<(String, String)> {
-    let Ok(cwd) = std::env::current_dir() else {
-        return Vec::new();
-    };
-    labeled_in(query, &cwd, max)
+    task_list(query, max, false).items
+}
+
+/// 入力欄の下に出すタスクの一覧
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TaskList {
+    /// メニューで打った文字を足す位置までの入力。`make` なら区切りの空白を補った `make `
+    pub input: String,
+    /// (タスク名, 採用後のコマンド全体) を名前順に
+    pub items: Vec<(String, String)>,
+}
+
+/// カレントディレクトリのタスクの一覧。`include_exact` なら入力済みの名前と
+/// 完全に一致するタスクも含める (メニューで Enter の採用先を示すため)
+pub fn task_list(query: &str, max: usize, include_exact: bool) -> TaskList {
+    match std::env::current_dir() {
+        Ok(cwd) => list_in(query, &cwd, max, include_exact),
+        Err(_) => TaskList::default(),
+    }
+}
+
+#[cfg(test)]
+fn labeled_in(query: &str, cwd: &Path, max: usize) -> Vec<(String, String)> {
+    list_in(query, cwd, max, false).items
 }
 
 #[cfg(test)]
@@ -136,36 +156,40 @@ fn changes_makefile(option: &str) -> bool {
     }
 }
 
-fn labeled_in(query: &str, cwd: &Path, max: usize) -> Vec<(String, String)> {
+fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList {
     if max == 0 || query.chars().any(char::is_control) {
-        return Vec::new();
+        return TaskList::default();
     }
     let (command, rest) = query.split_once(char::is_whitespace).unwrap_or((query, ""));
     let rest = rest.trim_start_matches(char::is_whitespace);
-    if takes_task_directly(command) {
+    let (head, prefix) = if takes_task_directly(command) {
         let head = if query == command {
             format!("{command} ")
         } else {
             query[..query.len() - rest.len()].to_owned()
         };
-        let names = task_names(command, cwd).unwrap_or_default();
-        return matching(&head, rest, names, max);
-    }
-    let Some(prefix) = run_keywords(command)
-        .into_iter()
-        .flatten()
-        .find_map(|keyword| after_keyword(rest, keyword))
-    else {
-        return Vec::new();
+        (head, rest)
+    } else {
+        let Some(prefix) = run_keywords(command)
+            .into_iter()
+            .flatten()
+            .find_map(|keyword| after_keyword(rest, keyword))
+        else {
+            return TaskList::default();
+        };
+        let head = if prefix.is_empty() && !query.ends_with(char::is_whitespace) {
+            // `npm run` のように、サブコマンド直後でも候補を表示する
+            format!("{query} ")
+        } else {
+            query[..query.len() - prefix.len()].to_owned()
+        };
+        (head, prefix)
     };
     let names = task_names(command, cwd).unwrap_or_default();
-    let head = if prefix.is_empty() && !query.ends_with(char::is_whitespace) {
-        // `npm run` のように、サブコマンド直後でも候補を表示する
-        format!("{query} ")
-    } else {
-        query[..query.len() - prefix.len()].to_owned()
-    };
-    matching(&head, prefix, names, max)
+    TaskList {
+        input: format!("{head}{prefix}"),
+        items: matching(&head, prefix, names, max, include_exact),
+    }
 }
 
 /// `uv` や `npm i` のように、`run` 等を要する CLI の名前か 2 語目を入力中なら
@@ -196,13 +220,19 @@ fn after_keyword<'a>(rest: &'a str, keyword: &str) -> Option<&'a str> {
     Some(after.trim_start_matches(char::is_whitespace))
 }
 
-fn matching(head: &str, prefix: &str, names: Vec<String>, max: usize) -> Vec<(String, String)> {
+fn matching(
+    head: &str,
+    prefix: &str,
+    names: Vec<String>,
+    max: usize,
+    include_exact: bool,
+) -> Vec<(String, String)> {
     if prefix.chars().any(char::is_whitespace) || prefix.starts_with('-') {
         return Vec::new();
     }
     names
         .into_iter()
-        .filter(|name| name.starts_with(prefix) && name != prefix)
+        .filter(|name| name.starts_with(prefix) && (include_exact || name != prefix))
         .take(max)
         .map(|name| {
             let command = format!("{head}{name}");
@@ -710,6 +740,49 @@ mod tests {
         ] {
             assert_eq!(invocation(line), None, "{line}");
         }
+    }
+
+    #[test]
+    fn メニューで打った文字を足す位置と打ち切った名前を返す() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Makefile"), "fmt:\nfmt-check:\ntest:\n").unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            r#"{"scripts":{"dev":"vite"}}"#,
+        )
+        .unwrap();
+        let names = |list: TaskList| -> Vec<String> {
+            list.items.into_iter().map(|(name, _)| name).collect()
+        };
+        // コマンド名だけなら区切りの空白を補う。入力済みの空白や名前はそのまま
+        for (query, input) in [
+            ("make", "make "),
+            ("make ", "make "),
+            ("make  f", "make  f"),
+            ("npm run", "npm run "),
+            ("npm run d", "npm run d"),
+        ] {
+            assert_eq!(
+                list_in(query, tmp.path(), 10, false).input,
+                input,
+                "{query}"
+            );
+        }
+        // 打ち切った名前はメニュー用 (include_exact) でだけ含める
+        assert_eq!(
+            names(list_in("make fmt", tmp.path(), 10, false)),
+            ["fmt-check"]
+        );
+        assert_eq!(
+            names(list_in("make fmt", tmp.path(), 10, true)),
+            ["fmt", "fmt-check"]
+        );
+        assert_eq!(names(list_in("npm run dev", tmp.path(), 10, true)), ["dev"]);
+        assert!(
+            list_in("npm run dev", tmp.path(), 10, false)
+                .items
+                .is_empty()
+        );
     }
 
     #[test]

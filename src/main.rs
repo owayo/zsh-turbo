@@ -80,6 +80,12 @@ enum Commands {
             requires = "ui_list"
         )]
         last_widget: String,
+        /// ↓ で開いたメニューの中で絞り込んでいる (打ち切った名前の項目も含めて選ぶ)
+        #[arg(long, hide = true, requires = "ui_list")]
+        menu: bool,
+        /// メニューで直前に選んでいた項目の BUFFER
+        #[arg(long, hide = true, allow_hyphen_values = true, requires = "ui_list")]
+        selected: Option<String>,
     },
     /// 履歴ベースの補完候補を一覧表示する
     Complete {
@@ -208,6 +214,8 @@ fn main() {
             ui_list,
             columns,
             last_widget,
+            menu,
+            selected,
         } => {
             let config = config::load_config();
             let strat = suggest::Strategy::from_str(
@@ -230,6 +238,8 @@ fn main() {
                         last_widget: &last_widget,
                         language: config.ui.language,
                         task_usage: task_usage.as_deref(),
+                        menu,
+                        selected: selected.as_deref(),
                     })
                 );
                 return;
@@ -755,8 +765,12 @@ BUFFER='make'
 CURSOR=4
 tab=$'\t'
 local -a items=("item${{tab}}build${{tab}}make build" "item${{tab}}install${{tab}}make install" "item${{tab}}test${{tab}}make test")
-_zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "ghost${{tab}}make install" "select${{tab}}2" "${{items[@]}}" end
+_zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "ghost${{tab}}make install" "input${{tab}}make " "select${{tab}}2" "${{items[@]}}" end
 (( _ZSH_TURBO_LIST_SELECTED == 2 )) && [[ "$_ZSH_TURBO_SUGGESTION" == 'make install' ]] || exit 1
+# メニューで打った文字を足す位置 (区切りを補った入力) を受け取り、次の応答では消す
+[[ "$_ZSH_TURBO_LIST_INPUT" == 'make ' ]] || exit 4
+_zsh_turbo_apply_response "v1${{tab}}none${{tab}}0${{tab}}complete${{tab}}10${{tab}}" end
+[[ -z "$_ZSH_TURBO_LIST_INPUT" ]] || exit 5
 for bad in 0 4 x '' -1; do
     _zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "select${{tab}}2" "${{items[@]}}" end
     _zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "select${{tab}}$bad" "${{items[@]}}" end
@@ -847,6 +861,71 @@ sleep 0.3
         assert!(script.contains("typeset -g ZSH_TURBO_RECORD_TASK_USAGE='1'"));
         config.suggest.record_task_usage = false;
         assert!(render_init(&config).contains("typeset -g ZSH_TURBO_RECORD_TASK_USAGE='0'"));
+    }
+
+    #[test]
+    fn init_script_入力中の一覧はghostの項目をメニューの選択と同じ色で示し窓の外なら見える位置までずらす()
+     {
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let script = format!(
+            r#"source {}
+function zle() {{ :; }}
+BUFFER='make'
+CURSOR=4
+BUFFERLINES=1
+tab=$'\t'
+local -a lines=("v1${{tab}}tasks${{tab}}14${{tab}}complete${{tab}}10${{tab}}Tasks" "ghost${{tab}}make install" "select${{tab}}8")
+for name in build check ci clean fmt fmt-check help install lint release run setup test uninstall; do lines+=("item${{tab}}$name${{tab}}make $name"); done
+lines+=(end)
+# メニューの選択と同じ色のスパンが当たっている文字列を返す
+function selected_text() {{
+    local entry text="$BUFFER$POSTDISPLAY"
+    local -a span
+    REPLY=""
+    for entry in "${{region_highlight[@]}}"; do
+        span=(${{=entry}})
+        [[ "${{span[3]:-}}" == "$_ZSH_TURBO_LIST_SELECTED_STYLE" ]] && REPLY+="${{text[span[1]+1,span[2]]}}"
+    done
+}}
+# 端末に余裕があれば先頭から表示し、ghost の項目をメニューの選択と同じ色 (シアン太字) で示す
+[[ "$_ZSH_TURBO_LIST_SELECTED_STYLE" == 'fg=cyan,bold' ]] || exit 7
+LINES=30
+_zsh_turbo_apply_response "${{lines[@]}}"
+_zsh_turbo_autosuggest_display
+[[ "$POSTDISPLAY" == $' install\nTasks (14):\n  build\n  check\n  ci\n  clean\n  fmt\n  fmt-check\n  help\n  install\n  lint\n  release\n  …' ]] || {{ print -r -- "$POSTDISPLAY" >&2; exit 1; }}
+selected_text
+[[ "$REPLY" == install ]] || {{ print -r -- "selected=$REPLY" >&2; exit 2; }}
+(( _ZSH_TURBO_LIST_FIRST == 1 )) || exit 2
+# 端末が低くて入らないときは、ghost の項目が最下行に来るまでずらし、上下に … を出す
+LINES=13
+_zsh_turbo_autosuggest_display
+[[ "$POSTDISPLAY" == $' install\nTasks (14):\n  …\n  ci\n  clean\n  fmt\n  fmt-check\n  help\n  install\n  …' ]] || {{ print -r -- "$POSTDISPLAY" >&2; exit 3; }}
+selected_text
+[[ "$REPLY" == install ]] || {{ print -r -- "selected=$REPLY" >&2; exit 4; }}
+(( _ZSH_TURBO_LIST_FIRST == 3 )) || exit 4
+# select が無い応答 (旧版の CLI や ghost が項目を経由しないとき) では強調せず先頭から出す
+_zsh_turbo_apply_response "${{(@)lines:#select*}}"
+_zsh_turbo_autosuggest_display
+[[ "$POSTDISPLAY" == $' install\nTasks (14):\n  build\n  check\n  ci\n  clean\n  fmt\n  fmt-check\n  help\n  …' ]] || {{ print -r -- "$POSTDISPLAY" >&2; exit 5; }}
+selected_text
+[[ -z "$REPLY" ]] || exit 6
+"#,
+            shell_single_quote(&init_path.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .env("HISTFILE", tmp.path().join("history"))
+            .output()
+            .expect("zsh を実行できるべき");
+        assert!(
+            output.status.success(),
+            "入力中の一覧の窓が ghost の項目を含まない: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -1072,6 +1151,26 @@ _zsh_turbo_line_pre_redraw
         match cli.command {
             Commands::Suggest { history_file, .. } => {
                 assert_eq!(history_file.as_deref(), Some("-x"))
+            }
+            _ => panic!("Suggest サブコマンドのはず"),
+        }
+
+        // メニューで選んでいた項目の BUFFER も `-` 始まりが有りうる
+        let cli = Cli::try_parse_from([
+            "zsh-turbo",
+            "suggest",
+            "--ui-list",
+            "--menu",
+            "--selected",
+            "-x build",
+            "--",
+            "-x",
+        ])
+        .expect("suggest が `-` 始まりの --selected を受け付けるべき");
+        match cli.command {
+            Commands::Suggest { menu, selected, .. } => {
+                assert!(menu);
+                assert_eq!(selected.as_deref(), Some("-x build"));
             }
             _ => panic!("Suggest サブコマンドのはず"),
         }

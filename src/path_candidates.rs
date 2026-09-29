@@ -37,8 +37,8 @@ pub struct PathListing {
 }
 
 /// BUFFER 末尾の語がパスなら、その親ディレクトリの候補を最大 `limit` 件返す。
-/// 対象外の入力なら None。
-pub fn list(buffer: &str, limit: usize) -> Option<PathListing> {
+/// `include_exact` なら入力済みの名前と完全に一致するファイルも含める。対象外の入力なら None。
+pub fn list(buffer: &str, limit: usize, include_exact: bool) -> Option<PathListing> {
     let cwd = std::env::current_dir().unwrap_or_default();
     let home = dirs::home_dir();
     let var = |name: &str| std::env::var_os(name);
@@ -47,7 +47,8 @@ pub fn list(buffer: &str, limit: usize) -> Option<PathListing> {
         home: home.as_deref(),
         var: &var,
     };
-    let request = prepare(buffer, limit, &env)?;
+    let mut request = prepare(buffer, limit, &env)?;
+    request.include_exact = include_exact;
     // NFS 等で read_dir が戻らなくても ZLE を待たせないよう別スレッドで走査する
     let (sender, receiver) = mpsc::channel();
     std::thread::Builder::new()
@@ -78,6 +79,8 @@ struct Request {
     quote: Quote,
     /// 実行可能ファイルとディレクトリだけを候補にする
     executables: bool,
+    /// 入力済みの名前と完全に一致するファイルも出す (メニューで Enter の採用先を示すため)
+    include_exact: bool,
     limit: usize,
 }
 
@@ -136,6 +139,7 @@ fn prepare(buffer: &str, limit: usize, env: &Env) -> Option<Request> {
         raw_base: buffer[*end..].to_owned(),
         quote: *quote,
         executables: command && start == 0,
+        include_exact: false,
         limit,
     })
 }
@@ -190,7 +194,7 @@ impl Request {
             // 挿入しても末尾に空白を足すだけの完全一致は出さない。開いたクォートを閉じる、
             // ディスク上の表記 (NFD など) へ直す候補は残す
             if !directory
-                && (self.adds_only_space(&name)
+                && ((!self.include_exact && self.adds_only_space(&name))
                     || (self.executables && !is_executable(&entry.path())))
             {
                 continue;
@@ -1407,10 +1411,10 @@ mod tests {
 
     #[test]
     fn 実環境版は対象外の入力でnoneを返す() {
-        assert_eq!(list("ls", 256), None);
-        assert_eq!(list("ls /", 0), None);
-        assert_eq!(list("ls $(pwd", 256), None);
-        assert_eq!(list("ls /zsh-turbo-nonexistent-dir/", 256), None);
+        assert_eq!(list("ls", 256, false), None);
+        assert_eq!(list("ls /", 0, false), None);
+        assert_eq!(list("ls $(pwd", 256, false), None);
+        assert_eq!(list("ls /zsh-turbo-nonexistent-dir/", 256, false), None);
     }
 
     #[test]
@@ -1424,8 +1428,15 @@ mod tests {
         push_escaped(&mut buffer, dir, Quote::None);
         buffer.push('/');
         assert_eq!(
-            list(&buffer, 256).unwrap().candidates,
+            list(&buffer, 256, false).unwrap().candidates,
             [candidate("entry.txt", &format!("{buffer}entry.txt "))]
+        );
+        // 名前を打ち切ったファイルは、メニュー用 (include_exact) でだけ含める
+        let typed = format!("{buffer}entry.txt");
+        assert!(list(&typed, 256, false).unwrap().candidates.is_empty());
+        assert_eq!(
+            list(&typed, 256, true).unwrap().candidates,
+            [candidate("entry.txt", &format!("{typed} "))]
         );
     }
 }

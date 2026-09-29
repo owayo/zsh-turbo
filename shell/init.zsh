@@ -185,6 +185,14 @@ typeset -gi _ZSH_TURBO_LIST_PARTIAL=0
 typeset -gi _ZSH_TURBO_LIST_ROWS=10
 # ↓ でメニューを開いたときに選ぶ項目 (1 始まり)。Rust が ghost と同じ項目を指す
 typeset -gi _ZSH_TURBO_LIST_SELECTED=1
+# Rust が select で項目を指したか。入力中の一覧でその項目を選択の色で示し、見える位置まで窓をずらす
+typeset -gi _ZSH_TURBO_LIST_MARKED=0
+# 一覧で選んでいる項目の色。↓ のメニューの選択と、入力中の一覧の ghost の項目で同じものを使う
+typeset -g _ZSH_TURBO_LIST_SELECTED_STYLE='fg=cyan,bold'
+# 入力中の一覧で先頭に表示した項目の番号。↓ で開くメニューも同じ位置から表示する
+typeset -gi _ZSH_TURBO_LIST_FIRST=1
+# メニューで打った文字を足す位置までの入力 (`make` なら区切りの空白を補った `make `)。Rust が決める
+typeset -g _ZSH_TURBO_LIST_INPUT=""
 typeset -gA _ZSH_TURBO_DOWN_FALLBACK
 typeset -gi _ZSH_TURBO_LIST_KEYS_ACTIVE=${_ZSH_TURBO_LIST_KEYS_ACTIVE:-0}
 # ↓ が一覧を開かず履歴検索へ回したときの widget 名 (開いたときは空)
@@ -244,6 +252,9 @@ function _zsh_turbo_reset_list() {
     _ZSH_TURBO_LIST_TOTAL=0
     _ZSH_TURBO_LIST_PARTIAL=0
     _ZSH_TURBO_LIST_SELECTED=1
+    _ZSH_TURBO_LIST_MARKED=0
+    _ZSH_TURBO_LIST_FIRST=1
+    _ZSH_TURBO_LIST_INPUT=""
 }
 
 function _zsh_turbo_close_async_fd() {
@@ -292,14 +303,25 @@ function _zsh_turbo_autosuggest_fetch() {
     local last_widget="${LASTWIDGET:-}"
     [[ "$last_widget" == _zsh_turbo_list_menu_or_history ]] && last_widget="$_ZSH_TURBO_DOWN_WIDGET"
 
-    # 非同期取得を開始。
-    # - `--` 区切り: BUFFER が `-h` 等の登録済みフラグと一致したときに clap の
-    #   help が stdout へ漏れ、候補として表示されるのを防ぐ。
-    # - `--history-file "$HISTFILE"`: HISTFILE はシェル変数で export されないため、
-    #   明示的に渡さないと子プロセスはカスタム履歴パスを解決できない。
-    exec {_ZSH_TURBO_ASYNC_FD}< <("$ZSH_TURBO_CMD" suggest --ui-list --columns "${COLUMNS:-0}" --last-widget "$last_widget" --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" -- "$prefix" 2>/dev/null)
+    local REPLY
+    _zsh_turbo_list_request "$last_widget"
+    _ZSH_TURBO_ASYNC_FD=$REPLY
     zle -F "$_ZSH_TURBO_ASYNC_FD" _zsh_turbo_async_dispatch
     _zsh_turbo_list_down_bindings on
+}
+
+# 現在の BUFFER の一覧を取る `suggest --ui-list` を起動し、応答を読む fd を REPLY に返す。
+# $1 は直前の widget 名、残りは追加の引数。
+# - `--` 区切り: BUFFER が `-h` 等の登録済みフラグと一致したときに clap の
+#   help が stdout へ漏れ、候補として表示されるのを防ぐ。
+# - `--history-file "$HISTFILE"`: HISTFILE はシェル変数で export されないため、
+#   明示的に渡さないと子プロセスはカスタム履歴パスを解決できない。
+function _zsh_turbo_list_request() {
+    emulate -L zsh
+    local last_widget="$1" fd
+    shift
+    exec {fd}< <("$ZSH_TURBO_CMD" suggest --ui-list --columns "${COLUMNS:-0}" --last-widget "$last_widget" --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" "$@" -- "$BUFFER" 2>/dev/null)
+    REPLY=$fd
 }
 
 # 応答を終端行 `end` か EOF まで読み、1 行ずつ reply に入れる。
@@ -324,11 +346,12 @@ function _zsh_turbo_read_response() {
 
 # `suggest --ui-list` の応答を候補の状態へ反映する。
 # 1 行目: v1<TAB>種類<TAB>件数<TAB>complete|partial<TAB>入力中の表示行数<TAB>見出し
-# 続く行: ghost<TAB>BUFFER / select<TAB>N / item<TAB>表示名<TAB>BUFFER / end
-# select は ↓ で開いたときに選ぶ項目の番号 (item の 1 始まりの順番)。知らない行は無視する
+# 続く行: ghost<TAB>BUFFER / input<TAB>BUFFER / select<TAB>N / item<TAB>表示名<TAB>BUFFER / end
+# input はメニューで打った文字を足す位置までの入力、select は ↓ で開いたときに選ぶ項目の番号
+# (item の 1 始まりの順番)。知らない行は無視する
 function _zsh_turbo_apply_response() {
     emulate -L zsh
-    local line rest ghost="" selected=""
+    local line rest ghost="" selected="" input=""
     local -a fields labels values
     fields=("${(@ps:\t:)${1:-}}")
     _zsh_turbo_reset_list
@@ -339,6 +362,7 @@ function _zsh_turbo_apply_response() {
         case "$line" in
             end) break ;;
             ghost$'\t'*) ghost="${line#ghost$'\t'}" ;;
+            input$'\t'*) input="${line#input$'\t'}" ;;
             select$'\t'*) selected="${line#select$'\t'}" ;;
             item$'\t'*$'\t'*)
                 rest="${line#item$'\t'}"
@@ -359,8 +383,10 @@ function _zsh_turbo_apply_response() {
     _ZSH_TURBO_LIST_TITLE="${fields[6]:-}"
     _ZSH_TURBO_LIST_LABELS=("${labels[@]}")
     _ZSH_TURBO_LIST_VALUES=("${values[@]}")
+    _ZSH_TURBO_LIST_INPUT="$input"
     if [[ "$selected" == <-> ]] && (( selected >= 1 && selected <= ${#values} )); then
         _ZSH_TURBO_LIST_SELECTED=$selected
+        _ZSH_TURBO_LIST_MARKED=1
     fi
     if [[ "${fields[3]:-}" == <-> ]]; then
         _ZSH_TURBO_LIST_TOTAL=${fields[3]}
@@ -453,28 +479,56 @@ function _zsh_turbo_autosuggest_display() {
 
     if (( ${#_ZSH_TURBO_LIST_VALUES} )); then
         _zsh_turbo_edit_lines
-        local -i avail=$(( LINES - REPLY - 4 )) count=${#_ZSH_TURBO_LIST_LABELS}
-        local -i rows=$count more=0 i
+        local -i avail=$(( LINES - REPLY - 4 )) i
         if (( avail <= 0 )); then
             _zsh_turbo_list_down_bindings off
             return 0
         fi
         _zsh_turbo_list_down_bindings on
-        # 入力中は既定の行数 (候補の最大数) まで出し、残りは ↓ のメニューで選ぶ
-        (( _ZSH_TURBO_LIST_ROWS > 0 && rows > _ZSH_TURBO_LIST_ROWS )) && rows=$_ZSH_TURBO_LIST_ROWS
-        (( rows < count || _ZSH_TURBO_LIST_TOTAL > count || _ZSH_TURBO_LIST_PARTIAL )) && more=1
-        if (( rows + more > avail )); then
-            rows=$(( avail - 1 ))
-            more=1
-        fi
+        local -a reply
+        _zsh_turbo_list_window "$avail"
+        local -i first=${reply[1]} rows=${reply[2]} above=${reply[3]} below=${reply[4]}
+        # ↓ で開くメニューも同じ位置から表示し、窓が跳ねないようにする
+        _ZSH_TURBO_LIST_FIRST=$first
+        local -i label_start
         _zsh_turbo_list_header "$_ZSH_TURBO_LIST_TITLE" "$_ZSH_TURBO_LIST_TOTAL" "$_ZSH_TURBO_LIST_PARTIAL"
         POSTDISPLAY+=$'\n'"$REPLY"
-        for (( i = 1; i <= rows; i++ )); do
+        (( above )) && POSTDISPLAY+=$'\n'"  …"
+        for (( i = first; i < first + rows; i++ )); do
             POSTDISPLAY+=$'\n'"  ${_ZSH_TURBO_LIST_LABELS[i]}"
+            # ghost の項目 (Tab で入る項目、↓ で最初に選ぶ項目) は、↓ のメニューで選んだ項目と
+            # 同じ色で示す。メニューに入ると行頭に `> ` が付く
+            if (( _ZSH_TURBO_LIST_MARKED && i == _ZSH_TURBO_LIST_SELECTED )); then
+                label_start=$(( ${#BUFFER} + ${#POSTDISPLAY} - ${#_ZSH_TURBO_LIST_LABELS[i]} ))
+                region_highlight+=("$label_start $(( label_start + ${#_ZSH_TURBO_LIST_LABELS[i]} )) $_ZSH_TURBO_LIST_SELECTED_STYLE")
+            fi
         done
-        (( more )) && POSTDISPLAY+=$'\n'"  …"
+        (( below )) && POSTDISPLAY+=$'\n'"  …"
     fi
     return 0
+}
+
+# 入力中の一覧の窓を決め、reply に (先頭の番号 行数 上の… 下の…) を返す。行数は候補の最大数
+# ($_ZSH_TURBO_LIST_ROWS) と、… の行を含めて端末の空き ($1) に収める。ghost の項目が
+# 窓の外に出るときは、メニューと同じくその項目が最下行に来るまでずらす
+function _zsh_turbo_list_window() {
+    emulate -L zsh
+    local -i avail=$1 count=${#_ZSH_TURBO_LIST_LABELS} rows first above below target=1
+    (( _ZSH_TURBO_LIST_MARKED )) && target=$_ZSH_TURBO_LIST_SELECTED
+    rows=$count
+    (( _ZSH_TURBO_LIST_ROWS > 0 && rows > _ZSH_TURBO_LIST_ROWS )) && rows=$_ZSH_TURBO_LIST_ROWS
+    while true; do
+        first=1
+        (( target > rows )) && first=$(( target - rows + 1 ))
+        above=$(( first > 1 ))
+        below=$(( first + rows - 1 < count || _ZSH_TURBO_LIST_TOTAL > count || _ZSH_TURBO_LIST_PARTIAL ))
+        (( rows + above + below <= avail || rows <= 1 )) && break
+        (( rows-- ))
+    done
+    # 端末がごく低いときは … を諦めて項目を優先する
+    (( rows + above + below > avail )) && above=0
+    (( rows + above + below > avail )) && below=0
+    reply=($first $rows $above $below)
 }
 
 # 次の空白またはパス区切りまでを返す。パス区切りは今回の補完に含める。
@@ -700,6 +754,9 @@ function _zsh_turbo_list_menu_show() {
     local -i count=${#menu_values} page=$menu_page
     (( page > 0 )) || page=1
     (( page > count )) && page=$count
+    # 窓の下に空きを残さない (絞り込みで項目が減ったときも上へ詰める)
+    (( menu_first > count - page + 1 )) && menu_first=$(( count - page + 1 ))
+    (( menu_first < 1 )) && menu_first=1
     # 選択行が窓の外へ出たときだけ窓を動かす
     (( menu_index < menu_first )) && menu_first=$menu_index
     (( menu_index > menu_first + page - 1 )) && menu_first=$(( menu_index - page + 1 ))
@@ -718,7 +775,7 @@ function _zsh_turbo_list_menu_show() {
         row_start=$(( ${#BUFFER} + ${#POSTDISPLAY} + 1 ))
         POSTDISPLAY+=$'\n'"$row"
         if (( i == menu_index )); then
-            region_highlight+=("$row_start $(( row_start + ${#row} )) fg=cyan,bold")
+            region_highlight+=("$row_start $(( row_start + ${#row} )) $_ZSH_TURBO_LIST_SELECTED_STYLE")
         fi
     done
     zle -R
@@ -727,10 +784,15 @@ function _zsh_turbo_list_menu_show() {
 function _zsh_turbo_list_menu() {
     emulate -L zsh
     local -a menu_labels=("${_ZSH_TURBO_LIST_LABELS[@]}") menu_values=("${_ZSH_TURBO_LIST_VALUES[@]}")
-    local menu_title="$_ZSH_TURBO_LIST_TITLE"
+    local menu_title="$_ZSH_TURBO_LIST_TITLE" menu_input="$_ZSH_TURBO_LIST_INPUT"
     local -i menu_total=$_ZSH_TURBO_LIST_TOTAL menu_partial=$_ZSH_TURBO_LIST_PARTIAL
     local original_buffer="$BUFFER" original_keymap="$KEYMAP"
-    local -i original_cursor=$CURSOR menu_index=$_ZSH_TURBO_LIST_SELECTED menu_first=1 _ZSH_TURBO_MENU_ACTIVE=1 menu_cancelled=0
+    # 入力中の一覧と同じ位置から表示する (選択行が見えなければ _zsh_turbo_list_menu_show がずらす)
+    local -i menu_index=$_ZSH_TURBO_LIST_SELECTED menu_first=$_ZSH_TURBO_LIST_FIRST _ZSH_TURBO_MENU_ACTIVE=1 menu_cancelled=0
+    # 一覧の取り直し: 応答を読む fd と期限、一覧が編集後の BUFFER に追いついていないか、
+    # 要求の後に ↑↓ で選び直したか、メニューを閉じるか
+    local -i menu_fetch_fd=0 menu_stale=0 menu_moved=0 menu_done=0
+    local -F menu_deadline=0
     (( menu_index >= 1 && menu_index <= ${#menu_values} )) || menu_index=1
     local menu_cancel_key=$'\e'
     # 表示行数は開いた時点で決めて固定する。描くたびに測り直すと、BUFFERLINES が
@@ -744,12 +806,18 @@ function _zsh_turbo_list_menu() {
     _ZSH_TURBO_ASYNC_FD=0
     _ZSH_TURBO_HIGHLIGHT_FD=0
     _zsh_turbo_clear_suggestion
+    # 自分で開いた一覧なので、以前 Ctrl+C で閉じた記録は解く
+    _ZSH_TURBO_LIST_DISMISSED=""
     local -a menu_syntax_hl=("${region_highlight[@]}")
     {
         zle -K zsh-turbo-list
         local REPLY
-        while true; do
+        # 打ち切った名前の項目も含むメニュー用の一覧に取り直す。届くまでは入力中の一覧を出す
+        _zsh_turbo_list_menu_request
+        while (( ! menu_done )); do
             _zsh_turbo_list_menu_show
+            # 取り直し中は応答かキー入力を待つ。応答が先なら描き直す
+            _zsh_turbo_list_menu_wait && continue
             if ! zle .read-command; then
                 REPLY=send-break
             fi
@@ -757,27 +825,41 @@ function _zsh_turbo_list_menu() {
             (( menu_cancelled )) && REPLY=_zsh_turbo_list_cancel
             case "$REPLY" in
                 accept-line)
-                    BUFFER="${menu_values[$menu_index]}"
+                    # 取り直し中は古い一覧から選ばず、届くのを待ってから採用する。打った文字に
+                    # 追いついていない一覧 (stale) からは選ばない。開いた直後の取り直しが間に合わ
+                    # なかったときは、同じ入力に対する入力中の一覧 (表示中の選択) を採用する
+                    _zsh_turbo_list_menu_settle
+                    if (( menu_cancelled )); then
+                        # 待っている間の Ctrl+C (SIGINT) は取り消し。trap が積んだ Esc は読み捨てる
+                        (( KEYS_QUEUED_COUNT )) && zle .read-command
+                        _ZSH_TURBO_LIST_DISMISSED="$BUFFER"
+                    elif (( ! menu_done && ! menu_stale )); then
+                        BUFFER="${menu_values[$menu_index]}"
+                    fi
                     CURSOR=${#BUFFER}
                     break ;;
                 send-break)
-                    BUFFER="$original_buffer"
-                    CURSOR=$original_cursor
+                    # 選択だけ取り消し、打った文字は残す
+                    CURSOR=${#BUFFER}
                     break ;;
                 _zsh_turbo_list_cancel)
-                    # Ctrl+C は元の入力に戻し、入力を変えるまで一覧も閉じる
-                    BUFFER="$original_buffer"
-                    CURSOR=$original_cursor
-                    _ZSH_TURBO_LIST_DISMISSED="$original_buffer"
+                    # Ctrl+C は打った文字を残し、入力を変えるまで一覧も閉じる
+                    CURSOR=${#BUFFER}
+                    _ZSH_TURBO_LIST_DISMISSED="$BUFFER"
                     break ;;
                 down-line-or-history)
-                    (( menu_index = menu_index % ${#menu_values} + 1 )) ;;
+                    (( menu_index = menu_index % ${#menu_values} + 1 ))
+                    menu_moved=1 ;;
                 up-line-or-history)
-                    (( menu_index = (menu_index + ${#menu_values} - 2) % ${#menu_values} + 1 )) ;;
+                    (( menu_index = (menu_index + ${#menu_values} - 2) % ${#menu_values} + 1 ))
+                    menu_moved=1 ;;
+                self-insert|bracketed-paste|backward-delete-char)
+                    _zsh_turbo_list_menu_edit "$REPLY" ;;
                 *) zle beep ;;
             esac
         done
     } always {
+        _zsh_turbo_close_async_fd "$menu_fetch_fd"
         zle -K "$original_keymap"
         POSTDISPLAY=""
         if [[ "$BUFFER" == "$original_buffer" ]]; then
@@ -788,6 +870,132 @@ function _zsh_turbo_list_menu() {
         zle -R -c
         _ZSH_TURBO_LAST_BUFFER=""
     }
+}
+
+# メニューの一覧を現在の BUFFER で取り直す。応答は _zsh_turbo_list_menu_wait がキー入力の合間に受け取る
+function _zsh_turbo_list_menu_request() {
+    emulate -L zsh
+    _zsh_turbo_close_async_fd "$menu_fetch_fd"
+    menu_fetch_fd=0
+    menu_moved=0
+    if [[ -z "$BUFFER" ]]; then
+        menu_done=1
+        return 0
+    fi
+    local REPLY
+    # メニューの中で打っているので、履歴移動の直後としては扱わない
+    _zsh_turbo_list_request "" --menu --selected "${menu_values[$menu_index]:-}"
+    menu_fetch_fd=$REPLY
+    (( menu_deadline = EPOCHREALTIME + 1 ))
+}
+
+# 取り直した一覧の応答を受け取り、メニューの項目と選択を差し替える
+function _zsh_turbo_list_menu_receive() {
+    emulate -L zsh
+    local previous="${menu_values[$menu_index]:-}"
+    local -a reply
+    _zsh_turbo_read_response "$menu_fetch_fd"
+    _zsh_turbo_close_async_fd "$menu_fetch_fd"
+    menu_fetch_fd=0
+    _zsh_turbo_apply_response "${reply[@]}"
+    if (( ! ${#_ZSH_TURBO_LIST_VALUES} )); then
+        # 打った文字で候補が無くなったら閉じる。開いた直後の取り直しが空なら
+        # (--menu を知らない旧版の CLI など)、入力中の一覧をそのまま使う
+        (( menu_stale )) && menu_done=1
+        return 0
+    fi
+    menu_labels=("${_ZSH_TURBO_LIST_LABELS[@]}")
+    menu_values=("${_ZSH_TURBO_LIST_VALUES[@]}")
+    menu_title="$_ZSH_TURBO_LIST_TITLE"
+    menu_total=$_ZSH_TURBO_LIST_TOTAL
+    menu_partial=$_ZSH_TURBO_LIST_PARTIAL
+    menu_input="$_ZSH_TURBO_LIST_INPUT"
+    menu_stale=0
+    # 窓の位置は保つ (項目が減ったときは _zsh_turbo_list_menu_show が詰める)
+    # 要求の後に ↑↓ で選び直していれば、その項目を選び続ける。ほかは Rust が決めた項目
+    local -i kept=0
+    (( menu_moved )) && kept=${menu_values[(Ie)$previous]}
+    if (( kept )); then
+        menu_index=$kept
+    else
+        menu_index=$_ZSH_TURBO_LIST_SELECTED
+    fi
+    menu_moved=0
+}
+
+# 取り直し中なら、応答かキー入力のどちらかが来るまで待つ。応答を受け取った (または取り直しを
+# 打ち切った) ら 0、キー入力が先に来た・取り直していないなら 1 を返す。
+# read-command の最中は zle -F の処理が呼ばれないため、ここで応答を見張る
+function _zsh_turbo_list_menu_wait() {
+    emulate -L zsh
+    if (( ! ${+builtins[zselect]} )); then
+        (( menu_fetch_fd )) || return 1
+        _zsh_turbo_list_menu_receive
+        return 0
+    fi
+    while (( menu_fetch_fd )); do
+        (( PENDING + KEYS_QUEUED_COUNT )) && return 1
+        if (( EPOCHREALTIME > menu_deadline )); then
+            _zsh_turbo_close_async_fd "$menu_fetch_fd"
+            menu_fetch_fd=0
+            # 打った文字に一覧が追いつかないまま、古い項目を選ばせないよう閉じる
+            (( menu_stale )) && menu_done=1
+            return 0
+        fi
+        zselect -t 2 -r "$menu_fetch_fd" 2>/dev/null
+        case $? in
+            0) _zsh_turbo_list_menu_receive; return 0 ;;
+            1) ;;
+            *) menu_deadline=0 ;;
+        esac
+    done
+    return 1
+}
+
+# Enter の後は古い一覧から選ばないよう、取り直し中の応答を期限まで待って受け取る
+function _zsh_turbo_list_menu_settle() {
+    emulate -L zsh
+    (( menu_fetch_fd )) || return 0
+    if (( ! ${+builtins[zselect]} )); then
+        _zsh_turbo_list_menu_receive
+        return 0
+    fi
+    local -i centis=0
+    (( centis = (menu_deadline - EPOCHREALTIME) * 100 ))
+    if (( centis > 0 )) && zselect -t "$centis" -r "$menu_fetch_fd" 2>/dev/null; then
+        _zsh_turbo_list_menu_receive
+        return 0
+    fi
+    _zsh_turbo_close_async_fd "$menu_fetch_fd"
+    menu_fetch_fd=0
+}
+
+# メニューで打った文字・貼り付け・Backspace で入力欄を編集し、一覧を取り直す
+function _zsh_turbo_list_menu_edit() {
+    emulate -L zsh
+    local widget="$1" before="$BUFFER" pasted=""
+    CURSOR=${#BUFFER}
+    case "$widget" in
+        backward-delete-char)
+            zle .backward-delete-char ;;
+        bracketed-paste)
+            zle .bracketed-paste pasted
+            # 空白始まりでなければ、区切りを補った位置 (`make` なら `make `) に続ける
+            [[ -n "$menu_input" && "$pasted" != [[:space:]]* ]] && BUFFER="$menu_input"
+            BUFFER+="$pasted" ;;
+        *)
+            [[ -n "$menu_input" && "$KEYS" != [[:space:]]* ]] && BUFFER="$menu_input"
+            CURSOR=${#BUFFER}
+            # 多バイト文字の残りのバイトも ZLE に読ませる
+            zle .self-insert ;;
+    esac
+    CURSOR=${#BUFFER}
+    [[ "$BUFFER" == "$before" ]] && return 0
+    # 区切りの補い方は次の応答で決め直す。編集した行の構文色は古いので外す
+    menu_input=""
+    menu_stale=1
+    menu_syntax_hl=()
+    _zsh_turbo_list_menu_request
 }
 
 # 一覧が出ていれば ↓ でメニューへ入り、なければ元の ↓ (履歴検索) を実行する。
@@ -834,6 +1042,12 @@ bindkey -M zsh-turbo-history '^J' accept-line
 bindkey -M zsh-turbo-history '^[' send-break
 bindkey -M zsh-turbo-history '^C' send-break
 bindkey -N zsh-turbo-list
+# 打った文字・貼り付け・Backspace は入力欄を編集して一覧を絞り込む
+bindkey -M zsh-turbo-list -R ' '-'~' self-insert
+bindkey -M zsh-turbo-list -R '\M-^@'-'\M-^?' self-insert
+bindkey -M zsh-turbo-list '^?' backward-delete-char
+bindkey -M zsh-turbo-list '^H' backward-delete-char
+bindkey -M zsh-turbo-list '^[[200~' bracketed-paste
 bindkey -M zsh-turbo-list '^I' down-line-or-history
 bindkey -M zsh-turbo-list '^[[B' down-line-or-history
 bindkey -M zsh-turbo-list '^[OB' down-line-or-history
