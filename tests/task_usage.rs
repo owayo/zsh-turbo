@@ -100,9 +100,12 @@ fn よく使うタスクを初期選択とghostにしディレクトリでの利
     );
     assert_eq!(suggest(root, "make"), "make install");
     // 絞り込み中も同じ規則で選ぶ
+    let response = ui_list(root, "make ");
+    assert!(response.contains("ghost\tmake install\n"), "{response}");
     let response = ui_list(root, "make t");
     let (ghost, select, _) = parse(&response);
-    assert_eq!((ghost, select), (Some("make test"), Some("1")));
+    // 候補が 1 つなら選択位置は送らない (先頭のまま)
+    assert_eq!((ghost, select), (Some("make test"), None));
 
     // このディレクトリで test を重ねて使うと上書きする
     for _ in 0..3 {
@@ -143,6 +146,15 @@ fn 記録を無効にすると記録せずここでの利用も使わない() {
     assert_eq!(store(root), before);
     // 履歴全体の傾向だけで選ぶ
     assert_eq!(parse(&ui_list(root, "make")).0, Some("make install"));
+
+    // 設定が読めないときも既定 (有効) に戻さず記録しない
+    std::fs::write(
+        root.join("config/zsh-turbo/config.toml"),
+        "[suggest]\nrecord_task_usage = false\n[prompt\n",
+    )
+    .unwrap();
+    record(root, "make build");
+    assert_eq!(store(root), before);
 }
 
 #[test]

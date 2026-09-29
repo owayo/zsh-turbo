@@ -263,8 +263,9 @@ fn main() {
         }
         Commands::Record => {
             use std::io::Read as _;
-            // 設定で無効にした後も、再起動前のシェルから呼ばれ得るためここでも確かめる
-            if !config::load_config().suggest.record_task_usage {
+            // 設定で無効にした後も、再起動前のシェルから呼ばれ得るためここでも確かめる。
+            // 設定が読めないときは既定 (有効) に戻さず、記録しない
+            if !config::load_config_strict().is_ok_and(|config| config.suggest.record_task_usage) {
                 return;
             }
             let mut line = String::new();

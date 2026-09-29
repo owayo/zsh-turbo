@@ -103,15 +103,24 @@ pub fn invocation(line: &str) -> Option<(&str, &str)> {
             }
         }
         target?
-    } else if takes_task_directly(command) {
-        // just・task はオプションを前に置く形を記録しない (定義ファイルや作業ディレクトリを変え得る)
-        words.next().filter(|word| !word.starts_with('-'))?
     } else {
-        let keyword = words.next()?;
-        if !run_keywords(command)?.contains(&keyword) {
+        if !takes_task_directly(command) {
+            let keyword = words.next()?;
+            if !run_keywords(command)?.contains(&keyword) {
+                return None;
+            }
+        }
+        // make 以外はオプションの位置を問わず実行先や定義ファイルを変え得るため
+        // (`npm run build --prefix ../other`・`task build -d ../other` など)、
+        // `--` より前にオプションがある行は記録しない。`--` の後ろはタスクへ渡る引数
+        let name = words.next().filter(|word| !word.starts_with('-'))?;
+        if words
+            .take_while(|word| *word != "--")
+            .any(|word| word.starts_with('-'))
+        {
             return None;
         }
-        words.next().filter(|word| !word.starts_with('-'))?
+        name
     };
     safe_name(name).then_some((command, name))
 }
@@ -654,6 +663,8 @@ mod tests {
             ("just build release", ("just", "build")),
             ("task build -- -v", ("task", "build")),
             ("npm run build -- --watch", ("npm", "build")),
+            // `--` の後ろはスクリプトへ渡る引数なので実行先は変わらない
+            ("npm run build -- --prefix ../other", ("npm", "build")),
             ("npm run-script build", ("npm", "build")),
             ("pnpm run dev", ("pnpm", "dev")),
             ("bun run dev", ("bun", "dev")),
@@ -686,7 +697,15 @@ mod tests {
             "npm install",
             "npm run",
             "npm run -s build",
+            "npm run build --prefix ../other",
             "pnpm -C sub run dev",
+            "pnpm run dev --filter web",
+            "yarn run dev --cwd ../other",
+            "uv run hello --directory ../other",
+            "deno task check --config other.json",
+            "task build -d ../other",
+            "just build --justfile other",
+            "mise run test --cd ../other",
             "mise tasks",
         ] {
             assert_eq!(invocation(line), None, "{line}");

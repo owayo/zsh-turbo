@@ -143,7 +143,9 @@ pub fn record(line: &str, cwd: &Path, now: u64, path: &Path) -> io::Result<bool>
         Err(error) => return Err(error),
     };
     add(&mut store.entries, dir, command, task, now);
-    prune(&mut store.entries, now);
+    prune(&mut store.entries, now, |entry| {
+        entry.dir == dir && entry.command == command && entry.task == task
+    });
     let json = serde_json::to_vec(&store).map_err(io::Error::other)?;
     write_atomic(path, &json)?;
     Ok(true)
@@ -171,12 +173,18 @@ fn add(entries: &mut Vec<Entry>, dir: &str, command: &str, task: &str, at: u64) 
     }
 }
 
-/// 重みが小さくなった組を捨て、上限を超えたら重みの小さいものから捨てる
-fn prune(entries: &mut Vec<Entry>, now: u64) {
+/// 重みが小さくなった組を捨て、上限を超えたら重みの小さいものから捨てる。
+/// 今回加えた組 (`current`) は残す。捨てると、上限まで埋まった後は新しいタスクを
+/// 何度使っても 1 回目として捨てられ続け、学習できなくなる
+fn prune(entries: &mut Vec<Entry>, now: u64, current: impl Fn(&Entry) -> bool) {
     let weight = |entry: &Entry| decayed(entry.score, entry.used, now);
-    entries.retain(|entry| weight(entry) >= MIN_SCORE);
+    entries.retain(|entry| current(entry) || weight(entry) >= MIN_SCORE);
     if entries.len() > MAX_ENTRIES {
-        entries.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
+        entries.sort_by(|a, b| {
+            current(b)
+                .cmp(&current(a))
+                .then_with(|| weight(b).total_cmp(&weight(a)))
+        });
         entries.truncate(MAX_ENTRIES);
     }
 }
@@ -356,7 +364,7 @@ mod tests {
                 NOW - (index as u64) * 60,
             );
         }
-        prune(&mut entries, NOW);
+        prune(&mut entries, NOW, |_| false);
         assert_eq!(entries.len(), MAX_ENTRIES);
         assert!(entries.iter().all(|entry| entry.dir != "/old"));
         // 新しいものを残す
@@ -366,6 +374,33 @@ mod tests {
                 .iter()
                 .any(|entry| entry.dir == format!("/p{}", MAX_ENTRIES + 4))
         );
+    }
+
+    #[test]
+    fn 上限まで埋まっていても今回使ったタスクは残り回数を重ねられる() {
+        let project = make_project();
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("task-usage.json");
+        // 上限まで、新しいタスクの 1 回より重い組で埋める
+        let entries = (0..MAX_ENTRIES)
+            .map(|index| Entry {
+                dir: format!("/p{index}"),
+                command: "make".into(),
+                task: "build".into(),
+                score: 2.0,
+                used: NOW,
+            })
+            .collect();
+        let store = Store {
+            version: VERSION,
+            entries,
+        };
+        fs::write(&path, serde_json::to_vec(&store).unwrap()).unwrap();
+        for _ in 0..3 {
+            assert!(record("make test", project.path(), NOW, &path).unwrap());
+        }
+        assert_eq!(usage(&path, project.path(), "make", NOW)["test"].score, 3.0);
+        assert_eq!(load(&path).unwrap().entries.len(), MAX_ENTRIES);
     }
 
     #[test]

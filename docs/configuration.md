@@ -13,7 +13,7 @@ Run `zsh-turbo configure` to edit every setting below, or edit the config file d
 | Prompt | Style, font level, transient prompt, home symbol, truncation length and symbol, IP interface (empty for automatic), command input position |
 | Segments | Left/right placement and ordering of built-in and custom segments |
 | Git | Status, ahead/behind, and stash visibility |
-| Suggest | Search strategy, highlight color, completion limit, key actions |
+| Suggest | Search strategy, highlight color, completion limit, key actions, task usage records |
 | Style | Primary, success, error, and muted colors; Rainbow palette |
 | Custom | Add/delete segments; edit name, command, icon, foreground, background, and condition |
 | Shell | Completion directories, terminal integration, interface language (`auto`, `en`, `ja`), and font setup |
@@ -42,7 +42,7 @@ In Custom, press `n` to add a definition, Left/Right to select one, and Backspac
 
 Styles and segments take effect on the next prompt render after saving. Open a new zsh session to apply transient prompt, suggestion, and Shell settings. Configuration variables named `ZSH_TURBO_*` that are set before initialization take precedence over TOML; `ZSH_TURBO_IP_INTERFACE` also overrides `prompt.ip_interface`.
 
-`suggest.max_suggestions` limits the Ctrl+R history menu, `zsh-turbo complete`, the project task list, and the rows of the file list shown while typing (default 10; 0 disables candidates; CLI `--max` overrides it for `complete`). Inline suggestions display the best prefix extension in a dim color. The history menu searches the full input, ranking prefix, substring, then fuzzy matches; equally strong matches use frequency, then recency. Up/Down or Tab selects a candidate, Enter inserts it, and a second Enter executes it. Esc / Ctrl+C restores the original input. Standard Tab completion remains available. `suggest` uses the configured strategy; `complete` defaults to prefix matching. Both accept `--strategy prefix|substring|fuzzy`. History entries containing control characters are excluded. Run `exec zsh` after upgrading to load the new shell integration.
+`suggest.max_suggestions` limits the Ctrl+R history menu, `zsh-turbo complete`, and the rows of the task, subcommand, and file lists shown while typing (default 10; 0 disables candidates; CLI `--max` overrides it for `complete`). Inline suggestions display the best prefix extension in a dim color. The history menu searches the full input, ranking prefix, substring, then fuzzy matches; equally strong matches use frequency, then recency. Up/Down or Tab selects a candidate, Enter inserts it, and a second Enter executes it. Esc / Ctrl+C restores the original input. Standard Tab completion remains available. `suggest` uses the configured strategy; `complete` defaults to prefix matching. Both accept `--strategy prefix|substring|fuzzy`. History entries containing control characters are excluded. Run `exec zsh` after upgrading to load the new shell integration.
 
 ```toml
 [prompt]
@@ -68,6 +68,7 @@ show_status = true
 strategy = "prefix"      # prefix, substring, fuzzy
 highlight_color = "fg=8" # zsh region_highlight style
 max_suggestions = 10
+record_task_usage = true # false: do not record task usage
 # Note: ghost text is shown only when the candidate extends the current input.
 # With substring/fuzzy, mid-string matches are used by `zsh-turbo suggest` /
 # `complete` but are not displayed as inline ghost text.
@@ -165,7 +166,28 @@ Task names are read from files in the current directory:
 | `just <recipe>` | `justfile`, `Justfile`, or `.justfile` recipes (private recipes excluded) |
 | `task <name>` (Go Task) | `Taskfile.yml`/`.yaml`, including `.dist` variants (internal tasks excluded) |
 
-`make`, `just`, and `task` show their targets below the input as soon as the command name is typed. The other commands show scripts and tasks after the subcommand that runs them (`npm run`, `pnpm run`, `bun run`, `yarn run`, `uv run`, `deno task`, `mise run` or `mise r`). Typing only their command name, or a partial second word, lists the subcommands from `<command> --help` with descriptions instead; a word starting with `-` lists options. Choosing a subcommand inserts it with a trailing space, so `run` continues to the script list. The help output is parsed once and cached in `zsh-turbo/subcommands` under `$XDG_CACHE_HOME` (default `~/.cache`); it is read again when the executable changes, after 24 hours, or 5 minutes after a failure. Lines recalled with Up/Down or Ctrl+R do not show the subcommand list. Further input filters names by prefix; moving the cursor away from the end hides the list. **Suggest → Max Suggestions** limits its size. Malformed or oversized files are ignored, and task managers are not executed while finding candidates. The first task also appears as ghost text and can be accepted with Tab. **Suggest → Tab: Default** uses normal zsh completion: scripts are completed after `run` (or `task`), and other words fall back to the existing completion definitions. `zsh-turbo complete --project-only -- "make"` lists matching project tasks without history.
+`make`, `just`, and `task` show their targets below the input as soon as the command name is typed. The other commands show scripts and tasks after the subcommand that runs them (`npm run`, `pnpm run`, `bun run`, `yarn run`, `uv run`, `deno task`, `mise run` or `mise r`). Typing only their command name, or a partial second word, lists the subcommands from `<command> --help` with descriptions instead; a word starting with `-` lists options. Choosing a subcommand inserts it with a trailing space, so `run` continues to the script list. The help output is parsed once and cached in `zsh-turbo/subcommands` under `$XDG_CACHE_HOME` (default `~/.cache`); it is read again when the executable changes, after 24 hours, or 5 minutes after a failure. Lines recalled with Up/Down or Ctrl+R do not show the subcommand list. Further input filters names by prefix; moving the cursor away from the end hides the list. While you type, up to **Suggest → Max Suggestions** rows are shown and `…` marks more; the list holds up to 256 entries, all selectable from the Down menu. Malformed or oversized files are ignored, and task managers are not executed while finding candidates. `zsh-turbo complete --project-only -- "make"` lists matching project tasks without history.
+
+In the task list, the task you use most often appears as ghost text, and Down opens the menu with that task selected ([how it is chosen](#task-usage-records)). The list stays in name order. The ghost suggestion is only the task, such as `make install`, without arguments you added before (such as `PREFIX=...`). In the subcommand list, the ghost text is the continuation from history, or the first entry when history has none, and Down selects the entry matching it (`run` when the ghost is `uv run pytest -x` from history). Tab accepts the ghost suggestion, and Enter before entering the list runs the line as typed, such as `make`. **Suggest → Tab: Default** uses normal zsh completion: scripts are completed after `run` (or `task`), and other words fall back to the existing completion definitions.
+
+### Task usage records
+
+The task you use most often is chosen from its use count in the current directory and its share of calls across your shell history. The use count loses half its weight every 30 days, the history share is added to it with the weight of three uses, and the task with the highest total is chosen. zsh history does not record directories, so the history-wide trend wins until you have used a task a few times in that directory. With neither, the first task is chosen.
+
+Records are saved in `${XDG_STATE_HOME:-~/.local/state}/zsh-turbo/task-usage.json` (`~/.local/state` when `XDG_STATE_HOME` is unset, empty, or a relative path). The file can be read and written only by you (0600), and its directory is created with 0700. Each record holds only the directory, the command name (such as `make` or `npm`), the task name, the decayed use count, and the last use time. The full command line and its arguments are never saved.
+
+A task is recorded when you run a line that starts with a task command, and only if the task is defined in the current directory's task files. Failed runs count too, since the record counts attempts to run a task. These forms are recorded:
+
+- `make <target>` with a single target. `VAR=value` and options such as `-j8` are allowed, but lines that read another Makefile with `-C`, `-f`, `--directory`, `--file`, or `--makefile` are skipped.
+- `just <recipe>` and `task <name>`
+- `npm run <script>`, `npm run-script <script>`, `pnpm run <script>`, `bun run <script>`, `yarn run <script>`, and `uv run <script>`
+- `deno task <name>`, `mise run <task>`, and `mise r <task>`
+
+Commands other than `make` may also take arguments after the task name. However, a line with an option (a word starting with `-`) before `--` is not recorded, wherever the option appears: options such as `npm run build --prefix ../other`, `task build -d ../other`, and `pnpm run dev --filter web` can change where the task runs or which task file is read. Arguments after `--` are passed to the task, so `npm run build -- --watch` is recorded as `build`.
+
+Lines containing `;`, `&`, `|`, `<`, `>`, parentheses, quotes, or backslashes, lines with more than one target, and lines starting with a space (the usual way to keep a command out of history) are not recorded. At most 1000 directory and task pairs are kept, and pairs whose weight falls below 0.01 (about 200 days after a single use) are dropped.
+
+To stop recording, turn off **Suggest → Record Task Usage** in `zsh-turbo configure`, or set `record_task_usage = false` under `[suggest]` in `config.toml` (on by default). When it is off, nothing is recorded and existing records are ignored, so only your shell history decides. Nothing is recorded either while the config file cannot be read (for example, because of a TOML syntax error). Restart the shell after changing the setting. To delete the records, turn recording off, wait for any recording in progress to finish, and delete `task-usage.json` and `task-usage.lock`. While recording is on, the file is created again.
 
 ## File list
 
@@ -173,7 +195,7 @@ Typing a word that contains `/` lists the entries of that directory below the in
 
 The list also follows `--opt=./path`, `VAR=./path`, and redirection targets such as `>./out`. At the start of a command, only executables and directories are listed. `~` and exported variables such as `$HOME` or `${XDG_CONFIG_HOME}` are expanded for the lookup and kept as typed in the input. Words with globs, command substitution, `$'...'`, `~user`, or unexported variables are left to standard completion.
 
-While you type, up to **Suggest → Max Suggestions** rows are shown and `…` marks more; 0 turns the list off. Down selects the first entry, Up/Down (or Tab/Shift+Tab) move, and the menu scrolls through up to 256 matches. Enter replaces the partial name with the selected one, escaping special characters or continuing the quote you opened. A directory keeps the quote open and switches the list to its contents; a file closes the quote and is followed by a space. Esc restores the original input; Ctrl+C also closes the list until you edit the input. When history offers no continuation, the first entry also appears as ghost text for Tab. Lines recalled with Up/Down or Ctrl+R do not show the list, so Down keeps moving through history. Long names are shortened with `…` to fit the terminal width. A directory read stops after 50,000 entries or 150 ms, and the count is then shown as `N+`.
+While you type, up to **Suggest → Max Suggestions** rows are shown and `…` marks more; 0 turns the list off. Down selects the entry matching the ghost suggestion (or the first entry), Up/Down (or Tab/Shift+Tab) move, and the menu scrolls through up to 256 matches. Enter replaces the partial name with the selected one, escaping special characters or continuing the quote you opened. A directory keeps the quote open and switches the list to its contents; a file closes the quote and is followed by a space. Esc restores the original input; Ctrl+C also closes the list until you edit the input. When history offers no continuation, the first entry also appears as ghost text for Tab. Lines recalled with Up/Down or Ctrl+R do not show the list, so Down keeps moving through history. Long names are shortened with `…` to fit the terminal width. A directory read stops after 50,000 entries or 150 ms, and the count is then shown as `N+`.
 
 ## CLI completion registration
 

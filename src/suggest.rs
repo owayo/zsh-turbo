@@ -168,6 +168,10 @@ pub fn preferred_task(
     history_file: Option<&str>,
     task_usage: Option<&Path>,
 ) -> Option<usize> {
+    // 候補が 1 つなら選ぶまでもないので、記録と履歴を読まずに済ませる
+    if tasks.len() < 2 {
+        return None;
+    }
     let command = project_tasks::command_of(query);
     let local = match (task_usage, std::env::current_dir()) {
         (Some(path), Ok(cwd)) => task_usage::usage(path, &cwd, command, task_usage::now()),
