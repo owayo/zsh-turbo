@@ -45,6 +45,7 @@ fn registered_completions_refresh_after_binary_replacement_in_a_running_shell() 
         .env("ZDOTDIR", root)
         .env("XDG_CONFIG_HOME", root)
         .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_STATE_HOME", root.join("state"))
         .env("ZSH_TURBO_TERM_SHELL_INTEGRATION", "0")
         .env("TERM", "xterm-256color")
         .env(

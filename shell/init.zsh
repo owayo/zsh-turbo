@@ -14,6 +14,7 @@ typeset -g ZSH_TURBO_KEY_ALT_F="${ZSH_TURBO_KEY_ALT_F:-word}"
 typeset -g ZSH_TURBO_KEY_CTRL_RIGHT="${ZSH_TURBO_KEY_CTRL_RIGHT:-word}"
 typeset -g ZSH_TURBO_COMPLETION_DIRS="${ZSH_TURBO_COMPLETION_DIRS:-}"
 typeset -g ZSH_TURBO_TERM_SHELL_INTEGRATION="${ZSH_TURBO_TERM_SHELL_INTEGRATION:-auto}"
+typeset -g ZSH_TURBO_RECORD_TASK_USAGE="${ZSH_TURBO_RECORD_TASK_USAGE:-1}"
 
 # コマンド実行時間を測定するタイマー
 
@@ -57,6 +58,21 @@ function _zsh_turbo_apply_semantic_prompt_markers() {
 function _zsh_turbo_preexec() {
     emulate -L zsh  # ユーザのシェルオプション(SH_GLOB/KSH_ARRAYS 等)から隔離する
     typeset -g _ZSH_TURBO_START_TIME="${EPOCHREALTIME}"
+    _zsh_turbo_record_task_usage "$1"
+}
+
+# 実行する行を Rust に渡し、ディレクトリごとのタスクの利用として記録させる。
+# 呼び出しの判定と保存は Rust が行う。ここではプロセスの起動を減らすため、
+# タスクを実行するコマンド (init で Rust が渡す一覧) で始まる行だけを渡す。
+function _zsh_turbo_record_task_usage() {
+    emulate -L zsh
+    local line="$1"
+    [[ "$ZSH_TURBO_RECORD_TASK_USAGE" == 1 && -n "$line" ]] || return 0
+    # 先頭が空白の行は、履歴に残さない慣習に合わせて記録しない
+    [[ "$line" == [[:space:]]* ]] && return 0
+    (( ${_ZSH_TURBO_TASK_COMMANDS[(Ie)${line%%[[:space:]]*}]} )) || return 0
+    # 実行行はプロセス一覧に出さないよう標準入力で渡す。記録の成否は実行に影響させない
+    print -rn -- "$line" 2>/dev/null | "$ZSH_TURBO_CMD" record >/dev/null 2>&1 &!
 }
 
 # キャッシュ済みのプロンプト素材からプロンプトを再生成する。
@@ -167,6 +183,8 @@ typeset -ga _ZSH_TURBO_LIST_VALUES=()
 typeset -gi _ZSH_TURBO_LIST_TOTAL=0
 typeset -gi _ZSH_TURBO_LIST_PARTIAL=0
 typeset -gi _ZSH_TURBO_LIST_ROWS=10
+# ↓ でメニューを開いたときに選ぶ項目 (1 始まり)。Rust が ghost と同じ項目を指す
+typeset -gi _ZSH_TURBO_LIST_SELECTED=1
 typeset -gA _ZSH_TURBO_DOWN_FALLBACK
 typeset -gi _ZSH_TURBO_LIST_KEYS_ACTIVE=${_ZSH_TURBO_LIST_KEYS_ACTIVE:-0}
 # ↓ が一覧を開かず履歴検索へ回したときの widget 名 (開いたときは空)
@@ -225,6 +243,7 @@ function _zsh_turbo_reset_list() {
     _ZSH_TURBO_LIST_VALUES=()
     _ZSH_TURBO_LIST_TOTAL=0
     _ZSH_TURBO_LIST_PARTIAL=0
+    _ZSH_TURBO_LIST_SELECTED=1
 }
 
 function _zsh_turbo_close_async_fd() {
@@ -305,10 +324,11 @@ function _zsh_turbo_read_response() {
 
 # `suggest --ui-list` の応答を候補の状態へ反映する。
 # 1 行目: v1<TAB>種類<TAB>件数<TAB>complete|partial<TAB>入力中の表示行数<TAB>見出し
-# 続く行: ghost<TAB>BUFFER / item<TAB>表示名<TAB>BUFFER / end
+# 続く行: ghost<TAB>BUFFER / select<TAB>N / item<TAB>表示名<TAB>BUFFER / end
+# select は ↓ で開いたときに選ぶ項目の番号 (item の 1 始まりの順番)。知らない行は無視する
 function _zsh_turbo_apply_response() {
     emulate -L zsh
-    local line rest ghost=""
+    local line rest ghost="" selected=""
     local -a fields labels values
     fields=("${(@ps:\t:)${1:-}}")
     _zsh_turbo_reset_list
@@ -319,6 +339,7 @@ function _zsh_turbo_apply_response() {
         case "$line" in
             end) break ;;
             ghost$'\t'*) ghost="${line#ghost$'\t'}" ;;
+            select$'\t'*) selected="${line#select$'\t'}" ;;
             item$'\t'*$'\t'*)
                 rest="${line#item$'\t'}"
                 labels+=("${rest%%$'\t'*}")
@@ -338,6 +359,9 @@ function _zsh_turbo_apply_response() {
     _ZSH_TURBO_LIST_TITLE="${fields[6]:-}"
     _ZSH_TURBO_LIST_LABELS=("${labels[@]}")
     _ZSH_TURBO_LIST_VALUES=("${values[@]}")
+    if [[ "$selected" == <-> ]] && (( selected >= 1 && selected <= ${#values} )); then
+        _ZSH_TURBO_LIST_SELECTED=$selected
+    fi
     if [[ "${fields[3]:-}" == <-> ]]; then
         _ZSH_TURBO_LIST_TOTAL=${fields[3]}
     else
@@ -706,7 +730,8 @@ function _zsh_turbo_list_menu() {
     local menu_title="$_ZSH_TURBO_LIST_TITLE"
     local -i menu_total=$_ZSH_TURBO_LIST_TOTAL menu_partial=$_ZSH_TURBO_LIST_PARTIAL
     local original_buffer="$BUFFER" original_keymap="$KEYMAP"
-    local -i original_cursor=$CURSOR menu_index=1 menu_first=1 _ZSH_TURBO_MENU_ACTIVE=1 menu_cancelled=0
+    local -i original_cursor=$CURSOR menu_index=$_ZSH_TURBO_LIST_SELECTED menu_first=1 _ZSH_TURBO_MENU_ACTIVE=1 menu_cancelled=0
+    (( menu_index >= 1 && menu_index <= ${#menu_values} )) || menu_index=1
     local menu_cancel_key=$'\e'
     # 表示行数は開いた時点で決めて固定する。描くたびに測り直すと、BUFFERLINES が
     # 直前のメニューの行を含むため行数が交互に増減する

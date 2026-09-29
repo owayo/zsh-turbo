@@ -3,6 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 const MAX_PROJECT_FILE_BYTES: u64 = 1024 * 1024;
+/// 入力欄の下の一覧に送るタスクの上限。入力中は候補の最大数の行まで表示し、残りは ↓ のメニューで選ぶ
+pub const LIST_LIMIT: usize = 256;
 
 pub fn candidates(query: &str, max: usize) -> Vec<String> {
     labeled_candidates(query, max)
@@ -27,6 +29,16 @@ fn candidates_in(query: &str, cwd: &Path, max: usize) -> Vec<String> {
         .collect()
 }
 
+/// タスクを実行するコマンド。zsh 側は利用記録の前にこの名前で始まる行だけを選ぶ
+pub const COMMANDS: &[&str] = &[
+    "make", "just", "task", "npm", "pnpm", "bun", "yarn", "uv", "deno", "mise",
+];
+
+/// make・just・task はターゲットやレシピを直接引数に取る
+fn takes_task_directly(command: &str) -> bool {
+    matches!(command, "make" | "just" | "task")
+}
+
 /// スクリプト・タスクの前に `run` などのサブコマンドが要る CLI と、そのサブコマンド。
 /// 名前だけを入力した段階では、CLI 自身のサブコマンドを一覧にする (`subcommand_query`)。
 fn run_keywords(command: &str) -> Option<&'static [&'static str]> {
@@ -39,25 +51,95 @@ fn run_keywords(command: &str) -> Option<&'static [&'static str]> {
     })
 }
 
+/// `command` がカレントディレクトリの定義ファイルから読むタスク名 (名前順)
+fn task_names(command: &str, cwd: &Path) -> Option<Vec<String>> {
+    Some(match command {
+        "make" => make_targets(cwd),
+        "just" => just_recipes(cwd),
+        "task" => taskfile_tasks(cwd),
+        "npm" | "bun" | "yarn" => package_scripts(cwd, false),
+        "pnpm" => package_scripts(cwd, true),
+        "uv" => uv_scripts(cwd),
+        "deno" => deno_tasks(cwd),
+        "mise" => mise_tasks(cwd),
+        _ => return None,
+    })
+}
+
+/// カレントディレクトリに `command` のタスク `name` が定義されているか
+pub fn defines(command: &str, name: &str, cwd: &Path) -> bool {
+    task_names(command, cwd).is_some_and(|names| names.iter().any(|n| n == name))
+}
+
+/// 入力中の行のコマンド名 (最初の語)
+pub fn command_of(query: &str) -> &str {
+    query
+        .split_once(char::is_whitespace)
+        .map_or(query, |(command, _)| command)
+}
+
+/// 実行した行が単純なタスクの呼び出しなら (コマンド名, タスク名) を返す。
+/// 利用記録と履歴の集計で同じ規則を使う。タスク名は定義ファイルに書ける名前だけで、
+/// ほかの語 (`VAR=$HOME` など) は照合に使わないため展開を含んでもよい。
+/// 語の区切りが変わるクォート・エスケープ、別のコマンドをつなぐ演算子、
+/// ディレクトリや定義ファイルを変えるオプション、複数の対象を含む行は、
+/// どのタスクか確定できないため対象外にする。
+pub fn invocation(line: &str) -> Option<(&str, &str)> {
+    const SYNTAX: &[char] = &[';', '&', '|', '<', '>', '(', ')', '`', '\'', '"', '\\'];
+    if line.contains(SYNTAX) || line.chars().any(char::is_control) {
+        return None;
+    }
+    let mut words = line.split(' ').filter(|word| !word.is_empty());
+    let command = words.next()?;
+    let name = if command == "make" {
+        let mut target = None;
+        for word in words {
+            if word.starts_with('-') {
+                if changes_makefile(word) {
+                    return None;
+                }
+            } else if !word.contains('=') && target.replace(word).is_some() {
+                return None;
+            }
+        }
+        target?
+    } else if takes_task_directly(command) {
+        // just・task はオプションを前に置く形を記録しない (定義ファイルや作業ディレクトリを変え得る)
+        words.next().filter(|word| !word.starts_with('-'))?
+    } else {
+        let keyword = words.next()?;
+        if !run_keywords(command)?.contains(&keyword) {
+            return None;
+        }
+        words.next().filter(|word| !word.starts_with('-'))?
+    };
+    safe_name(name).then_some((command, name))
+}
+
+/// make の `-C dir`・`-f file` など、読む Makefile を変えるオプション
+fn changes_makefile(option: &str) -> bool {
+    match option.strip_prefix("--") {
+        Some(long) => matches!(
+            long.split('=').next(),
+            Some("directory" | "file" | "makefile")
+        ),
+        None => option[1..].contains(['C', 'f']),
+    }
+}
+
 fn labeled_in(query: &str, cwd: &Path, max: usize) -> Vec<(String, String)> {
     if max == 0 || query.chars().any(char::is_control) {
         return Vec::new();
     }
     let (command, rest) = query.split_once(char::is_whitespace).unwrap_or((query, ""));
     let rest = rest.trim_start_matches(char::is_whitespace);
-    // make・just・task はターゲットやレシピを直接引数に取る
-    let direct = match command {
-        "make" => Some(make_targets(cwd)),
-        "just" => Some(just_recipes(cwd)),
-        "task" => Some(taskfile_tasks(cwd)),
-        _ => None,
-    };
-    if let Some(names) = direct {
+    if takes_task_directly(command) {
         let head = if query == command {
             format!("{command} ")
         } else {
             query[..query.len() - rest.len()].to_owned()
         };
+        let names = task_names(command, cwd).unwrap_or_default();
         return matching(&head, rest, names, max);
     }
     let Some(prefix) = run_keywords(command)
@@ -67,13 +149,7 @@ fn labeled_in(query: &str, cwd: &Path, max: usize) -> Vec<(String, String)> {
     else {
         return Vec::new();
     };
-    let names = match command {
-        "npm" | "bun" | "yarn" => package_scripts(cwd, false),
-        "pnpm" => package_scripts(cwd, true),
-        "uv" => uv_scripts(cwd),
-        "deno" => deno_tasks(cwd),
-        _ => mise_tasks(cwd),
-    };
+    let names = task_names(command, cwd).unwrap_or_default();
     let head = if prefix.is_empty() && !query.ends_with(char::is_whitespace) {
         // `npm run` のように、サブコマンド直後でも候補を表示する
         format!("{query} ")
@@ -564,5 +640,71 @@ mod tests {
         ] {
             assert!(candidates_in(query, tmp.path(), 10).is_empty());
         }
+    }
+
+    #[test]
+    fn 単純なタスクの呼び出しだけをコマンド名とタスク名に分ける() {
+        for (line, expected) in [
+            ("make install", ("make", "install")),
+            ("make install PREFIX=~/.local", ("make", "install")),
+            ("make CC=$HOME/bin/cc install", ("make", "install")),
+            ("make -j8 install", ("make", "install")),
+            ("make  install", ("make", "install")),
+            (" make install", ("make", "install")),
+            ("just build release", ("just", "build")),
+            ("task build -- -v", ("task", "build")),
+            ("npm run build -- --watch", ("npm", "build")),
+            ("npm run-script build", ("npm", "build")),
+            ("pnpm run dev", ("pnpm", "dev")),
+            ("bun run dev", ("bun", "dev")),
+            ("yarn run dev", ("yarn", "dev")),
+            ("uv run hello", ("uv", "hello")),
+            ("deno task check", ("deno", "check")),
+            ("mise run test:unit", ("mise", "test:unit")),
+            ("mise r test", ("mise", "test")),
+        ] {
+            assert_eq!(invocation(line), Some(expected), "{line}");
+        }
+        for line in [
+            "make",
+            "make install test",
+            "make -C sub install",
+            "make -sC sub install",
+            "make --directory=sub install",
+            "make -f other.mk install",
+            "make --makefile other.mk install",
+            "make $TARGET",
+            "make 'install'",
+            "make install && make test",
+            "make install > log",
+            "make install\nmake test",
+            "make\tinstall",
+            "cd sub && make install",
+            "makefoo install",
+            "just --justfile other build",
+            "just",
+            "npm install",
+            "npm run",
+            "npm run -s build",
+            "pnpm -C sub run dev",
+            "mise tasks",
+        ] {
+            assert_eq!(invocation(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn 記録対象のコマンドはすべてタスク定義を読める() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Makefile"), "build:\n").unwrap();
+        for command in COMMANDS {
+            assert!(task_names(command, tmp.path()).is_some(), "{command}");
+        }
+        assert!(task_names("cargo", tmp.path()).is_none());
+        assert!(defines("make", "build", tmp.path()));
+        assert!(!defines("make", "missing", tmp.path()));
+        assert!(!defines("just", "build", tmp.path()));
+        assert_eq!(command_of("make"), "make");
+        assert_eq!(command_of("npm run de"), "npm");
     }
 }

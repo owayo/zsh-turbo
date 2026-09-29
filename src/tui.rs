@@ -339,7 +339,7 @@ impl App {
         match self.tab {
             0 => 8,
             2 => 2,
-            3 => 6,
+            3 => 7,
             4 => {
                 if self.rainbow_selected().is_some() {
                     8
@@ -1615,6 +1615,12 @@ fn render_suggest_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect)
             false,
         ));
     }
+    items.push(field_item(
+        app.lang.text("Record Task Usage", "タスクの利用を記録"),
+        bool_str(app.config.suggest.record_task_usage, app.lang),
+        app.suggest_focus == 7,
+        false,
+    ));
 
     render_fields(
         frame,
@@ -2159,8 +2165,11 @@ fn handle_left(app: &mut App) {
             } else if app.suggest_focus == 2 && app.config.suggest.max_suggestions > 0 {
                 app.config.suggest.max_suggestions -= 1;
                 app.dirty = true;
-            } else if app.suggest_focus >= 3 {
+            } else if (3..=6).contains(&app.suggest_focus) {
                 cycle_suggest_key(app, false);
+            } else if app.suggest_focus == 7 {
+                app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
+                app.dirty = true;
             }
         }
         4 if app.style_focus == 4 => {
@@ -2231,8 +2240,11 @@ fn handle_right(app: &mut App) {
                 app.config.suggest.max_suggestions =
                     app.config.suggest.max_suggestions.saturating_add(1);
                 app.dirty = true;
-            } else if app.suggest_focus >= 3 {
+            } else if (3..=6).contains(&app.suggest_focus) {
                 cycle_suggest_key(app, true);
+            } else if app.suggest_focus == 7 {
+                app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
+                app.dirty = true;
             }
         }
         4 if app.style_focus == 4 => {
@@ -2313,6 +2325,10 @@ fn handle_activate(app: &mut App) {
             1 => app.activate_edit(EditTarget::HighlightColor),
             2 => app.start_edit(EditTarget::MaxSuggestions),
             3..=6 => cycle_suggest_key(app, true),
+            7 => {
+                app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
+                app.dirty = true;
+            }
             _ => {}
         },
         4 if app.style_focus == 4 => handle_right(app),

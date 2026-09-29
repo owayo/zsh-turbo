@@ -1,7 +1,7 @@
-use crate::project_tasks;
+use crate::{project_tasks, task_usage};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// サジェストの検索戦略
 pub enum Strategy {
@@ -138,22 +138,72 @@ fn history_candidates_rev(text: &str) -> impl Iterator<Item = &str> {
 }
 
 /// 指定された戦略でサジェストを 1 件取得する。
-/// prefix → substring → fuzzy の順でフォールバックする。
+/// カレントディレクトリのタスクがあれば、一覧で最初に選ぶタスクを返す。
+/// なければ履歴から prefix → substring → fuzzy の順でフォールバックする。
 /// 同程度の一致では使用頻度と新しさを優先する。
 pub fn get_suggestion(
     query: &str,
     history_file: Option<&str>,
     strategy: &Strategy,
+    task_usage: Option<&Path>,
 ) -> Option<String> {
     if query.is_empty() {
         return None;
     }
 
-    if let Some(candidate) = project_tasks::candidates(query, 1).into_iter().next() {
-        return Some(candidate);
+    let tasks = project_tasks::labeled_candidates(query, project_tasks::LIST_LIMIT);
+    if !tasks.is_empty() {
+        let index = preferred_task(query, &tasks, history_file, task_usage).unwrap_or(0);
+        return tasks.into_iter().nth(index).map(|(_, command)| command);
     }
 
     get_history_suggestion(query, history_file, strategy)
+}
+
+/// タスク一覧 (`project_tasks::labeled_candidates` の結果) で最初に選ぶ位置。
+/// このディレクトリでの利用記録と、履歴全体での呼び出しから決める (`task_usage::preferred`)
+pub fn preferred_task(
+    query: &str,
+    tasks: &[(String, String)],
+    history_file: Option<&str>,
+    task_usage: Option<&Path>,
+) -> Option<usize> {
+    let command = project_tasks::command_of(query);
+    let local = match (task_usage, std::env::current_dir()) {
+        (Some(path), Ok(cwd)) => task_usage::usage(path, &cwd, command, task_usage::now()),
+        _ => HashMap::new(),
+    };
+    let history = resolve_history_path(history_file)
+        .and_then(|path| read_ranked_history(&path))
+        .map(|text| task_calls(command, &text))
+        .unwrap_or_default();
+    task_usage::preferred(
+        tasks.iter().map(|(name, _)| name.as_str()),
+        &local,
+        &history,
+    )
+}
+
+/// 履歴全体から `command` のタスクの呼び出しをタスク名ごとに数える。
+/// 呼び出しの判定は利用記録と同じ規則 (`project_tasks::invocation`) を使う。
+fn task_calls(command: &str, text: &str) -> HashMap<String, task_usage::HistoryUse> {
+    let mut calls = HashMap::<String, task_usage::HistoryUse>::new();
+    for (newest, line) in history_candidates_rev(text).enumerate() {
+        if !line.starts_with(command) {
+            continue;
+        }
+        let Some((called, name)) = project_tasks::invocation(line) else {
+            continue;
+        };
+        if called != command {
+            continue;
+        }
+        calls
+            .entry(name.to_owned())
+            .and_modify(|call| call.count += 1)
+            .or_insert(task_usage::HistoryUse { count: 1, newest });
+    }
+    calls
 }
 
 pub fn get_history_suggestion(
@@ -626,7 +676,7 @@ mod tests {
 
     #[test]
     fn get_suggestion_空クエリはnone() {
-        assert!(get_suggestion("", None, &Strategy::Prefix).is_none());
+        assert!(get_suggestion("", None, &Strategy::Prefix, None).is_none());
     }
 
     #[test]
@@ -634,7 +684,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
         std::fs::write(&path, "git status\ngit push\nls -la\n").unwrap();
-        let result = get_suggestion("git", Some(path.to_str().unwrap()), &Strategy::Prefix);
+        let result = get_suggestion("git", Some(path.to_str().unwrap()), &Strategy::Prefix, None);
         assert!(result.is_some());
         assert!(result.unwrap().starts_with("git"));
     }
@@ -742,7 +792,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
         std::fs::write(&path, "git push\n").unwrap();
-        let result = get_suggestion("git", Some(path.to_str().unwrap()), &Strategy::Substring);
+        let result = get_suggestion(
+            "git",
+            Some(path.to_str().unwrap()),
+            &Strategy::Substring,
+            None,
+        );
         // prefix マッチが先に試されるため "git push" が返る
         assert_eq!(result, Some("git push".to_string()));
     }
@@ -752,7 +807,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
         std::fs::write(&path, "docker run nginx\n").unwrap();
-        let result = get_suggestion("nginx", Some(path.to_str().unwrap()), &Strategy::Fuzzy);
+        let result = get_suggestion(
+            "nginx",
+            Some(path.to_str().unwrap()),
+            &Strategy::Fuzzy,
+            None,
+        );
         // substring マッチにより "docker run nginx" が返る
         assert_eq!(result, Some("docker run nginx".to_string()));
     }
@@ -763,6 +823,7 @@ mod tests {
             "git",
             Some("/tmp/nonexistent_history_xyz_999"),
             &Strategy::Prefix,
+            None,
         );
         assert!(result.is_none());
     }
@@ -909,7 +970,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
         std::fs::write(&path, metafy(": 1700000000:0;echo 日本語テスト\n")).unwrap();
-        let result = get_suggestion("echo 日", Some(path.to_str().unwrap()), &Strategy::Prefix);
+        let result = get_suggestion(
+            "echo 日",
+            Some(path.to_str().unwrap()),
+            &Strategy::Prefix,
+            None,
+        );
         assert_eq!(result, Some("echo 日本語テスト".to_string()));
     }
 
@@ -979,9 +1045,19 @@ mod tests {
         let path = dir.path().join("hist");
         // 最終行が改行なし = zsh が追記中
         std::fs::write(&path, "git status\ngit push --forc").unwrap();
-        let result = get_suggestion("git pu", Some(path.to_str().unwrap()), &Strategy::Prefix);
+        let result = get_suggestion(
+            "git pu",
+            Some(path.to_str().unwrap()),
+            &Strategy::Prefix,
+            None,
+        );
         assert_eq!(result, None);
-        let result = get_suggestion("git s", Some(path.to_str().unwrap()), &Strategy::Prefix);
+        let result = get_suggestion(
+            "git s",
+            Some(path.to_str().unwrap()),
+            &Strategy::Prefix,
+            None,
+        );
         assert_eq!(result, Some("git status".to_string()));
     }
 
@@ -1011,7 +1087,12 @@ mod tests {
             content.push_str("ls -la\n");
         }
         std::fs::write(&path, &content).unwrap();
-        let result = get_suggestion("git uni", Some(path.to_str().unwrap()), &Strategy::Prefix);
+        let result = get_suggestion(
+            "git uni",
+            Some(path.to_str().unwrap()),
+            &Strategy::Prefix,
+            None,
+        );
         assert_eq!(result, Some("git unique-head-cmd".to_string()));
     }
 
@@ -1025,7 +1106,12 @@ mod tests {
         );
         std::fs::write(&path, content).unwrap();
 
-        let result = get_suggestion("git", Some(path.to_str().unwrap()), &Strategy::Substring);
+        let result = get_suggestion(
+            "git",
+            Some(path.to_str().unwrap()),
+            &Strategy::Substring,
+            None,
+        );
         assert_eq!(result, Some("git target".to_string()));
     }
 
@@ -1036,7 +1122,7 @@ mod tests {
         let content = format!("{}\\\ngit fake\n", "x".repeat(CHUNK_SIZE as usize));
         std::fs::write(&path, content).unwrap();
 
-        let result = get_suggestion("git", Some(path.to_str().unwrap()), &Strategy::Prefix);
+        let result = get_suggestion("git", Some(path.to_str().unwrap()), &Strategy::Prefix, None);
         assert_eq!(result, None);
         let completions = get_completions("git", Some(path.to_str().unwrap()), 10);
         assert!(completions.is_empty());
@@ -1116,5 +1202,28 @@ mod ranking_tests {
             ranked_candidates("ealp", history, &Strategy::Fuzzy, 10),
             ["echo alpha"]
         );
+    }
+
+    #[test]
+    fn 履歴からタスクの呼び出しを数え最後に使った位置を覚える() {
+        let history = ": 1700000000:0;make install\nmake test\nmake install PREFIX=/x\nmake -C sub build\nmake install && make test\nnpm run build\nmakefoo x\nmake test\\\nmake build\n";
+        let calls = task_calls("make", history);
+        assert_eq!(
+            calls["install"],
+            task_usage::HistoryUse {
+                count: 2,
+                newest: 4
+            }
+        );
+        assert_eq!(
+            calls["test"],
+            task_usage::HistoryUse {
+                count: 1,
+                newest: 5
+            }
+        );
+        // ディレクトリを変える呼び出し・複数行の断片・別のコマンドは数えない
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(task_calls("npm", history).len(), 1);
     }
 }

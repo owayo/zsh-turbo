@@ -79,6 +79,8 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
         .env("ZDOTDIR", root)
         .env("XDG_CONFIG_HOME", root)
         .env("XDG_CACHE_HOME", root.join("cache"))
+        // 実行したタスクの利用記録を実環境の ~/.local/state へ書かない
+        .env("XDG_STATE_HOME", root.join("state"))
         .env("ZSH_TURBO_TERM_SHELL_INTEGRATION", "0")
         .env("ZSH_TURBO_TRANSIENT", "0")
         .env("ZSH_TURBO_SUGGEST_STRATEGY", "prefix")

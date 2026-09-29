@@ -1,12 +1,15 @@
 //! ZLE の候補一覧 (`suggest --ui-list`) の応答を組み立てる。
 //!
 //! 1 行目 `v1<TAB>種類<TAB>件数<TAB>complete|partial<TAB>入力中の表示行数<TAB>見出し`、
-//! 続いて `ghost<TAB>BUFFER`、`item<TAB>表示名<TAB>BUFFER` を並べ、最後に `end` を置く。
+//! 続いて `ghost<TAB>BUFFER`、`select<TAB>N`、`item<TAB>表示名<TAB>BUFFER` を並べ、最後に `end` を置く。
+//! `select` は ↓ でメニューを開いたときに選ぶ項目の番号 (送った item の 1 始まりの順番)。
 //! zsh 側は表示名を並べ、選ばれた候補の BUFFER へ置き換えるだけにする。
+//! 行の種類は後から足せるよう、zsh 側は知らない種類の行を無視する。
 
 use crate::config::UiLanguage;
 use crate::{completion, path_candidates, project_tasks, suggest, tui};
 use std::fmt::Write as _;
+use std::path::Path;
 use unicode_width::UnicodeWidthChar;
 
 /// パス候補の取得上限。入力中は `max_suggestions` 行まで表示し、残りは ↓ のメニューで選ぶ。
@@ -20,24 +23,29 @@ pub struct Request<'a> {
     pub buffer: &'a str,
     pub history_file: Option<&'a str>,
     pub strategy: &'a suggest::Strategy,
-    /// `suggest.max_suggestions`。タスク件数と入力中の表示行数の上限、0 で一覧なし
+    /// `suggest.max_suggestions`。入力中の表示行数の上限、0 で一覧なし
     pub max: usize,
     /// 端末の桁数 (0 は切り詰めない)
     pub columns: usize,
     /// 直前に実行された ZLE widget 名
     pub last_widget: &'a str,
     pub language: UiLanguage,
+    /// ディレクトリごとのタスクの利用記録 (使わないなら None)
+    pub task_usage: Option<&'a Path>,
 }
 
 pub fn response(request: &Request) -> String {
     let mut out = String::new();
     let rows = request.max.min(MAX_PREVIEW_ROWS);
-    let tasks = if request.buffer.is_empty() {
+    let tasks: Vec<_> = if request.buffer.is_empty() || request.max == 0 {
         Vec::new()
     } else {
-        project_tasks::labeled_candidates(request.buffer, request.max)
+        project_tasks::labeled_candidates(request.buffer, project_tasks::LIST_LIMIT)
+            .into_iter()
+            .filter(|(name, command)| sendable(name) && sendable(command))
+            .collect()
     };
-    if let Some((_, first)) = tasks.first() {
+    if !tasks.is_empty() {
         push_header(
             &mut out,
             "tasks",
@@ -46,15 +54,19 @@ pub fn response(request: &Request) -> String {
             rows,
             tui::task_list_title(request.language),
         );
-        push_line(&mut out, "ghost", None, first);
-        for (name, command) in &tasks {
-            push_line(
-                &mut out,
-                "item",
-                Some(&fit_width(name, request.columns)),
-                command,
-            );
-        }
+        // よく使うタスクを ↓ の初期選択と ghost にそろえ、Tab と ↓→Enter の結果を一致させる
+        let preferred = suggest::preferred_task(
+            request.buffer,
+            &tasks,
+            request.history_file,
+            request.task_usage,
+        );
+        push_line(&mut out, "ghost", None, &tasks[preferred.unwrap_or(0)].1);
+        let items: Vec<_> = tasks
+            .into_iter()
+            .map(|(name, command)| (fit_width(&name, request.columns), command))
+            .collect();
+        push_items(&mut out, &items, preferred);
         out.push_str("end\n");
         return out;
     }
@@ -68,7 +80,11 @@ pub fn response(request: &Request) -> String {
         && let Some((command, head, word)) = project_tasks::subcommand_query(request.buffer)
         && let Some(help) = completion::top_level(command)
     {
-        let items = command_items(&help, &head, word);
+        let items = sendable_items(
+            command_items(&help, &head, word)
+                .into_iter()
+                .map(|(label, value)| (fit_width(&label, request.columns), value)),
+        );
         if !items.is_empty() {
             let title = if word.starts_with('-') {
                 tui::option_list_title(request.language)
@@ -76,18 +92,7 @@ pub fn response(request: &Request) -> String {
                 tui::command_list_title(request.language)
             };
             push_header(&mut out, "commands", items.len(), true, rows, title);
-            let values = items.iter().map(|(_, value)| value.as_str());
-            if let Some(ghost) = pick_ghost(history.as_deref(), request.buffer, values) {
-                push_line(&mut out, "ghost", None, ghost);
-            }
-            for (label, value) in &items {
-                push_line(
-                    &mut out,
-                    "item",
-                    Some(&fit_width(label, request.columns)),
-                    value,
-                );
-            }
+            push_ghost_and_items(&mut out, history.as_deref(), request.buffer, &items);
             out.push_str("end\n");
             return out;
         }
@@ -96,32 +101,27 @@ pub fn response(request: &Request) -> String {
     let listing = listing_allowed
         .then(|| path_candidates::list(request.buffer, PATH_LIST_LIMIT))
         .flatten()
-        .filter(|listing| !listing.candidates.is_empty());
+        .map(|listing| {
+            let items = sendable_items(listing.candidates.into_iter().map(|candidate| {
+                (
+                    fit_width(&candidate.label, request.columns),
+                    candidate.buffer,
+                )
+            }));
+            (items, listing.total, listing.complete)
+        })
+        .filter(|(items, ..)| !items.is_empty());
     match listing {
-        Some(listing) => {
+        Some((items, total, complete)) => {
             push_header(
                 &mut out,
                 "files",
-                listing.total,
-                listing.complete,
+                total,
+                complete,
                 rows,
                 tui::file_list_title(request.language),
             );
-            let values = listing
-                .candidates
-                .iter()
-                .map(|candidate| candidate.buffer.as_str());
-            if let Some(ghost) = pick_ghost(history.as_deref(), request.buffer, values) {
-                push_line(&mut out, "ghost", None, ghost);
-            }
-            for candidate in &listing.candidates {
-                push_line(
-                    &mut out,
-                    "item",
-                    Some(&fit_width(&candidate.label, request.columns)),
-                    &candidate.buffer,
-                );
-            }
+            push_ghost_and_items(&mut out, history.as_deref(), request.buffer, &items);
         }
         None => {
             push_header(&mut out, "none", 0, true, rows, "");
@@ -146,10 +146,20 @@ fn push_header(
     let _ = writeln!(out, "v1\t{kind}\t{total}\t{state}\t{rows}\t{title}");
 }
 
-/// TAB・改行は行プロトコルを壊すため、制御文字を含む値は送らない。
+/// TAB・改行は行プロトコルを壊すため、制御文字を含む値と空の値は送らない。
+fn sendable(text: &str) -> bool {
+    !text.is_empty() && !text.chars().any(char::is_control)
+}
+
+/// 送れる (表示名, BUFFER) だけを残す。`select` の番号は送った項目で数えるため、先にふるう
+fn sendable_items(items: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
+    items
+        .filter(|(label, value)| sendable(label) && sendable(value))
+        .collect()
+}
+
 fn push_line(out: &mut String, tag: &str, label: Option<&str>, value: &str) {
-    let unsafe_text = |text: &str| text.is_empty() || text.chars().any(char::is_control);
-    if unsafe_text(value) || label.is_some_and(unsafe_text) {
+    if !sendable(value) || label.is_some_and(|label| !sendable(label)) {
         return;
     }
     out.push_str(tag);
@@ -160,6 +170,45 @@ fn push_line(out: &mut String, tag: &str, label: Option<&str>, value: &str) {
     out.push('\t');
     out.push_str(value);
     out.push('\n');
+}
+
+/// `select` と `item` の行を出す。`selected` は `items` の添字
+fn push_items(out: &mut String, items: &[(String, String)], selected: Option<usize>) {
+    if let Some(index) = selected {
+        let _ = writeln!(out, "select\t{}", index + 1);
+    }
+    for (label, value) in items {
+        push_line(out, "item", Some(label), value);
+    }
+}
+
+/// 履歴の続き (なければ先頭の項目) を ghost にし、ghost が通る項目を ↓ の初期選択にする
+fn push_ghost_and_items<'a>(
+    out: &mut String,
+    history: Option<&'a str>,
+    buffer: &str,
+    items: &'a [(String, String)],
+) {
+    let values = items.iter().map(|(_, value)| value.as_str());
+    let ghost = pick_ghost(history, buffer, values);
+    if let Some(ghost) = ghost {
+        push_line(out, "ghost", None, ghost);
+    }
+    let selected = ghost.and_then(|ghost| {
+        items
+            .iter()
+            .position(|(_, value)| passes_through(ghost, value))
+    });
+    push_items(out, items, selected);
+}
+
+/// ghost が一覧の項目を経由するか。項目の BUFFER で始まり、その直後で語か階層が切れること
+/// (`make install` は `make installer` を経由しない。`ls dir/` は `ls dir/a` を経由する)
+fn passes_through(ghost: &str, value: &str) -> bool {
+    let stem = value.trim_end_matches([' ', '\t']);
+    ghost
+        .strip_prefix(stem)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t']) || stem.ends_with('/'))
 }
 
 /// 履歴の続きを優先し、なければ BUFFER を延長する先頭の候補を薄く出す。
@@ -259,6 +308,7 @@ mod tests {
             columns: 0,
             last_widget: "self-insert",
             language: UiLanguage::En,
+            task_usage: None,
         }
     }
 
@@ -290,11 +340,12 @@ mod tests {
         std::fs::write(&history, format!("{base}alpha.txt | wc\n")).unwrap();
         let history = history.to_str().unwrap();
 
+        // ghost が経由する alpha.txt (2 番目) を ↓ の初期選択にする
         let out = response(&request(&base, history));
         assert_eq!(
             out,
             format!(
-                "v1\tfiles\t2\tcomplete\t10\tFiles\nghost\t{base}alpha.txt | wc\nitem\tsub/\t{base}sub/\nitem\talpha.txt\t{base}alpha.txt \nend\n"
+                "v1\tfiles\t2\tcomplete\t10\tFiles\nghost\t{base}alpha.txt | wc\nselect\t2\nitem\tsub/\t{base}sub/\nitem\talpha.txt\t{base}alpha.txt \nend\n"
             )
         );
 
@@ -302,7 +353,46 @@ mod tests {
         let empty = dir.path().join("empty-history");
         std::fs::write(&empty, "").unwrap();
         let out = response(&request(&base, empty.to_str().unwrap()));
-        assert!(out.contains(&format!("\nghost\t{base}sub/\n")), "{out}");
+        assert!(
+            out.contains(&format!("\nghost\t{base}sub/\nselect\t1\n")),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn ghostが項目の語や階層の区切りまで一致するときだけ経由とみなす() {
+        assert!(passes_through("make install", "make install"));
+        assert!(passes_through("make install PREFIX=/x", "make install"));
+        assert!(!passes_through("make installer", "make install"));
+        assert!(passes_through("uv run pytest -x", "uv run "));
+        assert!(passes_through("uv run", "uv run "));
+        assert!(!passes_through("uv runner", "uv run "));
+        assert!(passes_through("ls dir/sub/a.txt", "ls dir/sub/"));
+        assert!(passes_through("ls dir/a.txt | wc", "ls dir/a.txt "));
+        assert!(!passes_through("ls dir/a.txtx", "ls dir/a.txt "));
+        assert!(!passes_through("ls other", "ls dir/"));
+    }
+
+    #[test]
+    fn 送れない項目を除いてからselectの番号を数える() {
+        let items = sendable_items(
+            [
+                ("a".to_owned(), "cmd a ".to_owned()),
+                ("b\tx".to_owned(), "cmd b ".to_owned()),
+                ("c".to_owned(), "cmd c ".to_owned()),
+            ]
+            .into_iter(),
+        );
+        let mut out = String::new();
+        push_ghost_and_items(&mut out, Some("cmd c --flag"), "cmd ", &items);
+        assert_eq!(
+            out,
+            "ghost\tcmd c --flag\nselect\t2\nitem\ta\tcmd a \nitem\tc\tcmd c \n"
+        );
+        // どの項目も経由しない ghost では select を出さない
+        let mut out = String::new();
+        push_ghost_and_items(&mut out, Some("cmdx"), "cmd", &items);
+        assert_eq!(out, "ghost\tcmdx\nitem\ta\tcmd a \nitem\tc\tcmd c \n");
     }
 
     #[test]

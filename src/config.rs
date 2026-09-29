@@ -155,6 +155,9 @@ pub struct SuggestConfig {
     pub highlight_color: String,
     #[serde(default = "default_max_suggestions")]
     pub max_suggestions: usize,
+    /// ディレクトリごとのタスクの利用を記録し、一覧の初期選択に使う
+    #[serde(default = "default_true")]
+    pub record_task_usage: bool,
     #[serde(default)]
     pub keys: SuggestKeys,
 }
@@ -326,6 +329,7 @@ impl Default for SuggestConfig {
             strategy: default_strategy(),
             highlight_color: default_highlight_color(),
             max_suggestions: default_max_suggestions(),
+            record_task_usage: true,
             keys: SuggestKeys::default(),
         }
     }
@@ -669,6 +673,7 @@ mod tests {
         assert_eq!(s.strategy, "prefix");
         assert_eq!(s.highlight_color, "fg=8");
         assert_eq!(s.max_suggestions, 10);
+        assert!(s.record_task_usage);
         assert_eq!(s.keys.tab, SuggestKeyAction::Full);
         assert_eq!(s.keys.right, SuggestKeyAction::Step);
         assert_eq!(s.keys.alt_f, SuggestKeyAction::Word);
@@ -680,6 +685,7 @@ mod tests {
         let config: Config = toml::from_str("[suggest]\nstrategy = 'fuzzy'\n").unwrap();
         assert_eq!(config.suggest.keys.tab, SuggestKeyAction::Full);
         assert_eq!(config.suggest.keys.right, SuggestKeyAction::Step);
+        assert!(config.suggest.record_task_usage);
     }
 
     #[test]

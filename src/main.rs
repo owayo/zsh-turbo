@@ -12,6 +12,7 @@ mod project_tasks;
 mod prompt;
 mod style;
 mod suggest;
+mod task_usage;
 mod tui;
 mod ui_list;
 
@@ -98,6 +99,9 @@ enum Commands {
         #[arg(long)]
         project_only: bool,
     },
+    /// 実行した行を標準入力から受け取り、ディレクトリごとのタスクの利用を記録する (シェル連携用)
+    #[command(hide = true)]
+    Record,
     /// 対話型設定ウィザードを起動する
     Configure,
     /// 端末のフォントとリガチャ設定を対話形式で選ぶ
@@ -205,29 +209,33 @@ fn main() {
             columns,
             last_widget,
         } => {
+            let config = config::load_config();
+            let strat = suggest::Strategy::from_str(
+                strategy.as_deref().unwrap_or(&config.suggest.strategy),
+            );
+            let task_usage = config
+                .suggest
+                .record_task_usage
+                .then(task_usage::store_path)
+                .flatten();
             if ui_list {
-                let config = config::load_config();
-                let strategy = suggest::Strategy::from_str(
-                    strategy.as_deref().unwrap_or(&config.suggest.strategy),
-                );
                 print!(
                     "{}",
                     ui_list::response(&ui_list::Request {
                         buffer: &prefix,
                         history_file: history_file.as_deref(),
-                        strategy: &strategy,
+                        strategy: &strat,
                         max: config.suggest.max_suggestions,
                         columns,
                         last_widget: &last_widget,
                         language: config.ui.language,
+                        task_usage: task_usage.as_deref(),
                     })
                 );
                 return;
             }
-            let strategy = strategy.unwrap_or_else(|| config::load_config().suggest.strategy);
-            let strat = suggest::Strategy::from_str(&strategy);
             if project_list {
-                let max = config::load_config().suggest.max_suggestions;
+                let max = config.suggest.max_suggestions;
                 let project = project_tasks::candidates(&prefix, max);
                 if !project.is_empty() {
                     println!("project");
@@ -244,10 +252,33 @@ fn main() {
                 }
                 return;
             }
-            if let Some(suggestion) =
-                suggest::get_suggestion(&prefix, history_file.as_deref(), &strat)
-            {
+            if let Some(suggestion) = suggest::get_suggestion(
+                &prefix,
+                history_file.as_deref(),
+                &strat,
+                task_usage.as_deref(),
+            ) {
                 print!("{suggestion}");
+            }
+        }
+        Commands::Record => {
+            use std::io::Read as _;
+            // 設定で無効にした後も、再起動前のシェルから呼ばれ得るためここでも確かめる
+            if !config::load_config().suggest.record_task_usage {
+                return;
+            }
+            let mut line = String::new();
+            let limit = task_usage::MAX_LINE_BYTES;
+            if std::io::stdin()
+                .take(limit + 1)
+                .read_to_string(&mut line)
+                .is_err()
+                || line.len() as u64 > limit
+            {
+                return;
+            }
+            if let (Ok(cwd), Some(path)) = (std::env::current_dir(), task_usage::store_path()) {
+                let _ = task_usage::record(&line, &cwd, task_usage::now(), &path);
             }
         }
         Commands::Complete {
@@ -356,12 +387,28 @@ fn render_init(cfg: &config::Config) -> String {
             "ZSH_TURBO_TERM_SHELL_INTEGRATION",
             cfg.shell.term_shell_integration.as_str(),
         ),
+        (
+            "ZSH_TURBO_RECORD_TASK_USAGE",
+            if cfg.suggest.record_task_usage {
+                "1"
+            } else {
+                "0"
+            },
+        ),
     ] {
         script.push_str(&format!(
             "if [[ -z ${{{name}+x}} ]]; then\n  typeset -g {name}={}\nfi\n",
             shell_single_quote(value)
         ));
     }
+    let commands: Vec<String> = project_tasks::COMMANDS
+        .iter()
+        .map(|command| shell_single_quote(command))
+        .collect();
+    script.push_str(&format!(
+        "typeset -ga _ZSH_TURBO_TASK_COMMANDS=({})\n",
+        commands.join(" ")
+    ));
     script.push_str(include_str!("../shell/init.zsh"));
     let mut completion = Vec::new();
     clap_complete::generate(
@@ -694,6 +741,111 @@ _zsh_turbo_apply_response "v1${{tab}}none${{tab}}0${{tab}}complete${{tab}}10${{t
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn init_script_選択位置を反映し無効な値や次の応答では先頭に戻す() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let script = format!(
+            r#"source {}
+function zle() {{ :; }}
+BUFFER='make'
+CURSOR=4
+tab=$'\t'
+local -a items=("item${{tab}}build${{tab}}make build" "item${{tab}}install${{tab}}make install" "item${{tab}}test${{tab}}make test")
+_zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "ghost${{tab}}make install" "select${{tab}}2" "${{items[@]}}" end
+(( _ZSH_TURBO_LIST_SELECTED == 2 )) && [[ "$_ZSH_TURBO_SUGGESTION" == 'make install' ]] || exit 1
+for bad in 0 4 x '' -1; do
+    _zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "select${{tab}}2" "${{items[@]}}" end
+    _zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "select${{tab}}$bad" "${{items[@]}}" end
+    (( _ZSH_TURBO_LIST_SELECTED == 1 )) || {{ print -u2 -- "bad=$bad"; exit 2; }}
+done
+# select の無い応答 (旧バイナリ) では先頭に戻す
+_zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "select${{tab}}3" "${{items[@]}}" end
+_zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{tab}}Tasks" "${{items[@]}}" end
+(( _ZSH_TURBO_LIST_SELECTED == 1 )) || exit 3
+"#,
+            shell_single_quote(&init_path.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .env("HISTFILE", tmp.path().join("history"))
+            .output()
+            .expect("zsh を実行できるべき");
+        assert!(
+            output.status.success(),
+            "選択位置の解釈に失敗: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_script_タスクを実行する行だけを標準入力で記録に渡す() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let log = tmp.path().join("log");
+        let stub = tmp.path().join("stub");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\n[ \"$1\" = record ] || exit 1\n{{ cat; echo; }} >> {}\n",
+                shell_single_quote(&log.display().to_string())
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = format!(
+            r#"source {}
+ZSH_TURBO_CMD={}
+log={}
+_ZSH_TURBO_TASK_COMMANDS=(make npm)
+_zsh_turbo_record_task_usage ' make build'
+_zsh_turbo_record_task_usage 'echo make build'
+_zsh_turbo_record_task_usage 'makefoo build'
+_zsh_turbo_record_task_usage ''
+ZSH_TURBO_RECORD_TASK_USAGE=0
+_zsh_turbo_record_task_usage 'make check'
+ZSH_TURBO_RECORD_TASK_USAGE=1
+_zsh_turbo_record_task_usage 'make install PREFIX=~/x'
+repeat 200; do [[ -s "$log" ]] && break; sleep 0.05; done
+sleep 0.3
+[[ "$(<$log)" == 'make install PREFIX=~/x' ]] || {{ cat "$log" >&2; exit 1; }}
+"#,
+            shell_single_quote(&init_path.display().to_string()),
+            shell_single_quote(&stub.display().to_string()),
+            shell_single_quote(&log.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .env("HISTFILE", tmp.path().join("history"))
+            .output()
+            .expect("zsh を実行できるべき");
+        assert!(
+            output.status.success(),
+            "記録に渡す行の選別に失敗: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn init_script_はタスクを実行するコマンドの一覧と記録の設定を渡す() {
+        let mut config = config::Config::default();
+        let script = render_init(&config);
+        assert!(script.contains(
+            "typeset -ga _ZSH_TURBO_TASK_COMMANDS=('make' 'just' 'task' 'npm' 'pnpm' 'bun' 'yarn' 'uv' 'deno' 'mise')"
+        ));
+        assert!(script.contains("typeset -g ZSH_TURBO_RECORD_TASK_USAGE='1'"));
+        config.suggest.record_task_usage = false;
+        assert!(render_init(&config).contains("typeset -g ZSH_TURBO_RECORD_TASK_USAGE='0'"));
     }
 
     #[test]

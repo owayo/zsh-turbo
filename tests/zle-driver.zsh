@@ -375,6 +375,33 @@ zpty -b fixture zsh -di || exit 1
     await_fixture project '' || exit 104
     zpty -w -n fixture ' s'
     await_fixture project $'uv self \nuv sync ' || exit 105
+    # 実行したタスクをディレクトリごとに記録し、よく使うタスクを ghost と ↓ の初期選択にする
+    for boot in 8 9; do
+        zpty -w -n fixture $'\x15make deploy\r'
+        repeat $fixture_wait; do
+            drain_fixture
+            [[ "$(<"$TEST_ROOT/boot")" == $boot ]] && break
+            zselect -t 5
+        done
+        [[ "$(<"$TEST_ROOT/boot")" == $boot ]] || exit 106
+    done
+    # 記録はバックグラウンドで書かれる
+    usage_file="$TEST_ROOT/state/zsh-turbo/task-usage.json"
+    repeat $fixture_wait; do
+        [[ -s "$usage_file" && "$(<"$usage_file")" == *'"task":"deploy"'* ]] && break
+        zselect -t 5
+    done
+    [[ -s "$usage_file" && "$(<"$usage_file")" == *'"task":"deploy"'* ]] || exit 107
+    zpty -w -n fixture 'make'
+    await_fixture ghost ' deploy' || exit 108
+    await_fixture display $' deploy\nTasks (4):\n  build\n  check\n  clean\n  deploy' || exit 108
+    : > "$TEST_ROOT/terminal"
+    zpty -w -n fixture $'\e[B'
+    await_terminal '> deploy' || exit 109
+    zpty -w -n fixture $'\e[A'
+    await_terminal '> clean' || exit 109
+    zpty -w -n fixture $'\r'
+    await_fixture buffer 'make clean' || exit 110
     zpty -w -n fixture $'\x15exit\r'
     print 'ZLE OK'
 } always {

@@ -82,6 +82,7 @@ fn 全設定をキー操作で変更してtomlへ保存できる() {
         (3, 4),
         (3, 5),
         (3, 6),
+        (3, 7),
         (6, 1),
         (6, 2),
     ] {
@@ -699,4 +700,30 @@ fn 補完キャッシュの通常再生成と強制再生成を選択できる()
             .unwrap()
             .contains("example: updated")
     );
+}
+
+#[test]
+fn タスクの利用記録を左右キーとenterで切り替えて表示する() {
+    let mut app = App::new(Config::default(), Lang::En);
+    let keys = serde_json::to_value(&app.config.suggest.keys).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    focus(&mut app, 3, 6);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.suggest_focus, 7);
+    terminal.draw(|frame| ui(frame, &mut app)).unwrap();
+    assert!(format!("{:?}", terminal.backend().buffer()).contains("Record Task Usage: ON"));
+    for key in [KeyCode::Enter, KeyCode::Left, KeyCode::Right] {
+        let old = app.config.suggest.record_task_usage;
+        app.dirty = false;
+        press(&mut app, key);
+        assert_ne!(app.config.suggest.record_task_usage, old);
+        assert!(app.dirty);
+    }
+    // キー操作の設定へ流れていないこと
+    assert_eq!(
+        serde_json::to_value(&app.config.suggest.keys).unwrap(),
+        keys
+    );
+    terminal.draw(|frame| ui(frame, &mut app)).unwrap();
+    assert!(format!("{:?}", terminal.backend().buffer()).contains("Record Task Usage: OFF"));
 }
