@@ -11,7 +11,7 @@ Identical license documents are reproduced once, with references from each packa
 OR (and the legacy / notation) denotes alternative licenses; AND denotes combined terms.
 Reproducing alternative license texts does not turn OR into AND.
 
-Cargo.lock SHA-256: `0ddb1c755503e1900867735535dc6e8f84f09a6e0912cfa3b4bce0414222da95`
+Cargo.lock SHA-256: `52ef3117f35bca1f5bcb168ce87d97781373203dfd1e778fb39fc1889e41ce61`
 
 ## MPL source availability
 
