@@ -15,6 +15,7 @@ typeset -g ZSH_TURBO_KEY_CTRL_RIGHT="${ZSH_TURBO_KEY_CTRL_RIGHT:-word}"
 typeset -g ZSH_TURBO_COMPLETION_DIRS="${ZSH_TURBO_COMPLETION_DIRS:-}"
 typeset -g ZSH_TURBO_TERM_SHELL_INTEGRATION="${ZSH_TURBO_TERM_SHELL_INTEGRATION:-auto}"
 typeset -g ZSH_TURBO_RECORD_TASK_USAGE="${ZSH_TURBO_RECORD_TASK_USAGE:-1}"
+typeset -g ZSH_TURBO_RECORD_DIRECTORY_HISTORY="${ZSH_TURBO_RECORD_DIRECTORY_HISTORY:-1}"
 
 # コマンド実行時間を測定するタイマー
 
@@ -61,16 +62,17 @@ function _zsh_turbo_preexec() {
     _zsh_turbo_record_task_usage "$1"
 }
 
-# 実行する行を Rust に渡し、ディレクトリごとのタスクの利用として記録させる。
-# 呼び出しの判定と保存は Rust が行う。ここではプロセスの起動を減らすため、
-# タスクを実行するコマンド (init で Rust が渡す一覧) で始まる行だけを渡す。
+# 実行行を Rust に渡し、履歴とタスクの利用をディレクトリごとに記録する。
 function _zsh_turbo_record_task_usage() {
     emulate -L zsh
     local line="$1"
-    [[ "$ZSH_TURBO_RECORD_TASK_USAGE" == 1 && -n "$line" ]] || return 0
+    [[ -n "$line" ]] || return 0
     # 先頭が空白の行は、履歴に残さない慣習に合わせて記録しない
     [[ "$line" == [[:space:]]* ]] && return 0
-    (( ${_ZSH_TURBO_TASK_COMMANDS[(Ie)${line%%[[:space:]]*}]} )) || return 0
+    if [[ "$ZSH_TURBO_RECORD_DIRECTORY_HISTORY" != 1 ]]; then
+        [[ "$ZSH_TURBO_RECORD_TASK_USAGE" == 1 ]] || return 0
+        (( ${_ZSH_TURBO_TASK_COMMANDS[(Ie)${line%%[[:space:]]*}]} )) || return 0
+    fi
     # 実行行はプロセス一覧に出さないよう標準入力で渡す。記録の成否は実行に影響させない
     print -rn -- "$line" 2>/dev/null | "$ZSH_TURBO_CMD" record >/dev/null 2>&1 &!
 }
@@ -320,7 +322,7 @@ function _zsh_turbo_list_request() {
     emulate -L zsh
     local last_widget="$1" fd
     shift
-    exec {fd}< <("$ZSH_TURBO_CMD" suggest --ui-list --columns "${COLUMNS:-0}" --last-widget "$last_widget" --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" "$@" -- "$BUFFER" 2>/dev/null)
+    exec {fd}< <("$ZSH_TURBO_CMD" suggest --directory-history --ui-list --columns "${COLUMNS:-0}" --last-widget "$last_widget" --strategy "$ZSH_TURBO_SUGGEST_STRATEGY" --history-file "$HISTFILE" "$@" -- "$BUFFER" 2>/dev/null)
     REPLY=$fd
 }
 
@@ -705,7 +707,7 @@ function _zsh_turbo_history_menu_show() {
 function _zsh_turbo_history_menu() {
     emulate -L zsh
     local result
-    result="$("$ZSH_TURBO_CMD" complete --strategy fuzzy --history-file "$HISTFILE" -- "$BUFFER" 2>/dev/null)"
+    result="$("$ZSH_TURBO_CMD" complete --directory-history --strategy fuzzy --history-file "$HISTFILE" -- "$BUFFER" 2>/dev/null)"
     [[ -n "$result" ]] || { zle -M "${ZSH_TURBO_HISTORY_MENU_EMPTY:-No matching history}"; return; }
     local -a menu_candidates=("${(@f)result}")
     local original_buffer="$BUFFER" original_keymap="$KEYMAP"

@@ -69,6 +69,7 @@ strategy = "prefix"      # prefix, substring, fuzzy
 highlight_color = "fg=8" # zsh region_highlight style
 max_suggestions = 10
 record_task_usage = true # false: do not record task usage
+record_directory_history = true # false: stop adding directory history
 # Note: ghost text is shown only when the candidate extends the current input.
 # With substring/fuzzy, mid-string matches are used by `zsh-turbo suggest` /
 # `complete` but are not displayed as inline ghost text.
@@ -176,7 +177,7 @@ Without an exact match, the menu keeps the entry you had selected as long as it 
 
 ### Task usage records
 
-The task you use most often is chosen from its use count in the current directory and its share of calls across your shell history. The use count loses half its weight every 30 days, the history share is added to it with the weight of three uses, and the task with the highest total is chosen. zsh history does not record directories, so the history-wide trend wins until you have used a task a few times in that directory. With neither, the first task is chosen.
+The preferred task combines its decaying use count in the current directory with its share of calls in that directory’s history. Counts halve every 30 days; the history share adds a weight of three uses. If neither source has a record, the first task is selected.
 
 Records are saved in `${XDG_STATE_HOME:-~/.local/state}/zsh-turbo/task-usage.json` (`~/.local/state` when `XDG_STATE_HOME` is unset, empty, or a relative path). The file can be read and written only by you (0600), and its directory is created with 0700. Each record holds only the directory, the command name (such as `make` or `npm`), the task name, the decayed use count, and the last use time. The full command line and its arguments are never saved.
 
@@ -191,7 +192,17 @@ Commands other than `make` may also take arguments after the task name. However,
 
 Lines containing `;`, `&`, `|`, `<`, `>`, parentheses, quotes, or backslashes, lines with more than one target, and lines starting with a space (the usual way to keep a command out of history) are not recorded. At most 1000 directory and task pairs are kept, and pairs whose weight falls below 0.01 (about 200 days after a single use) are dropped.
 
-To stop recording, turn off **Suggest → Record Task Usage** in `zsh-turbo configure`, or set `record_task_usage = false` under `[suggest]` in `config.toml` (on by default). When it is off, nothing is recorded and existing records are ignored, so only your shell history decides. Nothing is recorded either while the config file cannot be read (for example, because of a TOML syntax error). Restart the shell after changing the setting. To delete the records, turn recording off, wait for any recording in progress to finish, and delete `task-usage.json` and `task-usage.lock`. While recording is on, the file is created again.
+To stop recording, turn off **Suggest → Record Task Usage** in `zsh-turbo configure`, or set `record_task_usage = false` under `[suggest]` in `config.toml` (on by default). When it is off, nothing is recorded and existing records are ignored, so only that directory’s history decides. Nothing is recorded either while the config file cannot be read (for example, because of a TOML syntax error). Restart the shell after changing the setting. To delete the records, turn recording off, wait for any recording in progress to finish, and delete `task-usage.json` and `task-usage.lock`. While recording is on, the file is created again.
+
+### Directory history
+
+Ghost suggestions and Ctrl+R use commands run in the current directory. Parent and child directories are separate; symlinks to the same directory share history. Older shared history cannot be migrated because it has no directory metadata. Regular Up/Down navigation continues to use shared shell history.
+
+Records are stored in `${XDG_STATE_HOME:-~/.local/state}/zsh-turbo/directory-history/` (empty or relative XDG_STATE_HOME values are ignored). Filenames hash the directory path. Full command lines, including arguments, are saved with owner-only permissions (0600). Each directory keeps the latest 1000 executions, up to 1 MiB. Lines starting with whitespace, containing control characters or newlines, or exceeding 4096 bytes are skipped. Unreadable configuration also stops recording.
+
+Turn off **Suggest → Record Directory History**, or set `record_directory_history = false` under `[suggest]` to stop new records. Existing history remains searchable. This setting is independent of task usage recording. Restart the shell after changing it. To remove records, disable recording, wait for recording processes to finish, and delete the `directory-history` directory.
+
+The public `suggest` / `complete` commands use this history by default. An explicit `--history-file <path>` searches that file instead; shell integration always uses directory history.
 
 ## File list
 

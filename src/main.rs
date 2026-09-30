@@ -2,6 +2,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueHint};
 
 mod completion;
 mod config;
+mod directory_history;
 mod doctor;
 mod font_install;
 mod font_wizard;
@@ -10,6 +11,7 @@ mod icons;
 mod path_candidates;
 mod project_tasks;
 mod prompt;
+mod state;
 mod style;
 mod suggest;
 mod task_usage;
@@ -59,6 +61,9 @@ enum Commands {
         /// zsh 履歴ファイルのパス
         #[arg(long, allow_hyphen_values = true, value_hint = ValueHint::FilePath)]
         history_file: Option<String>,
+        /// ディレクトリごとの履歴を使う (シェル連携用)
+        #[arg(long, hide = true)]
+        directory_history: bool,
         /// 検索戦略（prefix, substring, fuzzy）
         #[arg(long, allow_hyphen_values = true)]
         strategy: Option<String>,
@@ -95,6 +100,9 @@ enum Commands {
         /// zsh 履歴ファイルのパス
         #[arg(long, allow_hyphen_values = true, value_hint = ValueHint::FilePath)]
         history_file: Option<String>,
+        /// ディレクトリごとの履歴を使う (シェル連携用)
+        #[arg(long, hide = true)]
+        directory_history: bool,
         /// 検索戦略（prefix, substring, fuzzy）
         #[arg(long, allow_hyphen_values = true)]
         strategy: Option<String>,
@@ -105,7 +113,7 @@ enum Commands {
         #[arg(long)]
         project_only: bool,
     },
-    /// 実行した行を標準入力から受け取り、ディレクトリごとのタスクの利用を記録する (シェル連携用)
+    /// 実行した行を標準入力から受け取り、ディレクトリごとの履歴とタスクの利用を記録する
     #[command(hide = true)]
     Record,
     /// 対話型設定ウィザードを起動する
@@ -209,6 +217,7 @@ fn main() {
         Commands::Suggest {
             prefix,
             history_file,
+            directory_history,
             strategy,
             project_list,
             ui_list,
@@ -218,6 +227,18 @@ fn main() {
             selected,
         } => {
             let config = config::load_config();
+            let history_file =
+                if directory_history || history_file.as_deref().is_none_or(str::is_empty) {
+                    let Some(path) = directory_history::path() else {
+                        if ui_list {
+                            print!("v1\tnone\t0\tcomplete\t0\t\nend\n");
+                        }
+                        return;
+                    };
+                    Some(path.to_string_lossy().into_owned())
+                } else {
+                    history_file
+                };
             let strat = suggest::Strategy::from_str(
                 strategy.as_deref().unwrap_or(&config.suggest.strategy),
             );
@@ -275,9 +296,9 @@ fn main() {
             use std::io::Read as _;
             // 設定で無効にした後も、再起動前のシェルから呼ばれ得るためここでも確かめる。
             // 設定が読めないときは既定 (有効) に戻さず、記録しない
-            if !config::load_config_strict().is_ok_and(|config| config.suggest.record_task_usage) {
+            let Ok(config) = config::load_config_strict() else {
                 return;
-            }
+            };
             let mut line = String::new();
             let limit = task_usage::MAX_LINE_BYTES;
             if std::io::stdin()
@@ -289,16 +310,31 @@ fn main() {
                 return;
             }
             if let (Ok(cwd), Some(path)) = (std::env::current_dir(), task_usage::store_path()) {
-                let _ = task_usage::record(&line, &cwd, task_usage::now(), &path);
+                if config.suggest.record_directory_history {
+                    let _ = directory_history::record(&line, &cwd, &path);
+                }
+                if config.suggest.record_task_usage {
+                    let _ = task_usage::record(&line, &cwd, task_usage::now(), &path);
+                }
             }
         }
         Commands::Complete {
             prefix,
             history_file,
+            directory_history,
             strategy,
             max,
             project_only,
         } => {
+            let history_file =
+                if directory_history || history_file.as_deref().is_none_or(str::is_empty) {
+                    let Some(path) = directory_history::path() else {
+                        return;
+                    };
+                    Some(path.to_string_lossy().into_owned())
+                } else {
+                    history_file
+                };
             let max = max.unwrap_or_else(|| config::load_config().suggest.max_suggestions);
             let completions = if project_only {
                 project_tasks::candidates(&prefix, max)
@@ -401,6 +437,14 @@ fn render_init(cfg: &config::Config) -> String {
         (
             "ZSH_TURBO_RECORD_TASK_USAGE",
             if cfg.suggest.record_task_usage {
+                "1"
+            } else {
+                "0"
+            },
+        ),
+        (
+            "ZSH_TURBO_RECORD_DIRECTORY_HISTORY",
+            if cfg.suggest.record_directory_history {
                 "1"
             } else {
                 "0"
@@ -820,6 +864,7 @@ _zsh_turbo_apply_response "v1${{tab}}tasks${{tab}}3${{tab}}complete${{tab}}10${{
 ZSH_TURBO_CMD={}
 log={}
 _ZSH_TURBO_TASK_COMMANDS=(make npm)
+ZSH_TURBO_RECORD_DIRECTORY_HISTORY=0
 _zsh_turbo_record_task_usage ' make build'
 _zsh_turbo_record_task_usage 'echo make build'
 _zsh_turbo_record_task_usage 'makefoo build'
@@ -859,8 +904,11 @@ sleep 0.3
             "typeset -ga _ZSH_TURBO_TASK_COMMANDS=('make' 'just' 'task' 'npm' 'pnpm' 'bun' 'yarn' 'uv' 'deno' 'mise')"
         ));
         assert!(script.contains("typeset -g ZSH_TURBO_RECORD_TASK_USAGE='1'"));
+        assert!(script.contains("typeset -g ZSH_TURBO_RECORD_DIRECTORY_HISTORY='1'"));
         config.suggest.record_task_usage = false;
         assert!(render_init(&config).contains("typeset -g ZSH_TURBO_RECORD_TASK_USAGE='0'"));
+        config.suggest.record_directory_history = false;
+        assert!(render_init(&config).contains("typeset -g ZSH_TURBO_RECORD_DIRECTORY_HISTORY='0'"));
     }
 
     #[test]

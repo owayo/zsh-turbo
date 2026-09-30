@@ -158,6 +158,9 @@ pub struct SuggestConfig {
     /// ディレクトリごとのタスクの利用を記録し、一覧の初期選択に使う
     #[serde(default = "default_true")]
     pub record_task_usage: bool,
+    /// 実行した行をディレクトリごとの履歴に記録する
+    #[serde(default = "default_true")]
+    pub record_directory_history: bool,
     #[serde(default)]
     pub keys: SuggestKeys,
 }
@@ -330,6 +333,7 @@ impl Default for SuggestConfig {
             highlight_color: default_highlight_color(),
             max_suggestions: default_max_suggestions(),
             record_task_usage: true,
+            record_directory_history: true,
             keys: SuggestKeys::default(),
         }
     }

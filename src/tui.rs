@@ -339,7 +339,7 @@ impl App {
         match self.tab {
             0 => 8,
             2 => 2,
-            3 => 7,
+            3 => 8,
             4 => {
                 if self.rainbow_selected().is_some() {
                     8
@@ -1621,6 +1621,13 @@ fn render_suggest_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect)
         app.suggest_focus == 7,
         false,
     ));
+    items.push(field_item(
+        app.lang
+            .text("Record Directory History", "ディレクトリ別の履歴を記録"),
+        bool_str(app.config.suggest.record_directory_history, app.lang),
+        app.suggest_focus == 8,
+        false,
+    ));
 
     render_fields(
         frame,
@@ -2170,6 +2177,10 @@ fn handle_left(app: &mut App) {
             } else if app.suggest_focus == 7 {
                 app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
                 app.dirty = true;
+            } else if app.suggest_focus == 8 {
+                app.config.suggest.record_directory_history =
+                    !app.config.suggest.record_directory_history;
+                app.dirty = true;
             }
         }
         4 if app.style_focus == 4 => {
@@ -2244,6 +2255,10 @@ fn handle_right(app: &mut App) {
                 cycle_suggest_key(app, true);
             } else if app.suggest_focus == 7 {
                 app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
+                app.dirty = true;
+            } else if app.suggest_focus == 8 {
+                app.config.suggest.record_directory_history =
+                    !app.config.suggest.record_directory_history;
                 app.dirty = true;
             }
         }
@@ -2327,6 +2342,11 @@ fn handle_activate(app: &mut App) {
             3..=6 => cycle_suggest_key(app, true),
             7 => {
                 app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
+                app.dirty = true;
+            }
+            8 => {
+                app.config.suggest.record_directory_history =
+                    !app.config.suggest.record_directory_history;
                 app.dirty = true;
             }
             _ => {}

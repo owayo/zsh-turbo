@@ -45,7 +45,8 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
     .unwrap();
     std::fs::write(root.join("zsh-turbo/config.toml"), "[prompt]\nleft_segments=[]\nright_segments=[]\nnewline=false\n[suggest]\nmax_suggestions=10\n").unwrap();
     let mut history = Vec::new();
-    for byte in "echo sample-alpha\necho sample-alpha\necho sample-beta\necho 日本語\nls -l /path/to/hoge/fuga\nmake busted\npnpm deploy\n".bytes() {
+    let commands = "echo sample-alpha\necho sample-alpha\necho sample-beta\necho 日本語\nls -l /path/to/hoge/fuga\nmake busted\npnpm deploy\n";
+    for byte in commands.bytes() {
         if byte >= 0x80 {
             history.extend([0x83, byte ^ 0x20]);
         } else {
@@ -70,6 +71,25 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
     let harness = root.join("test.zsh");
     std::fs::write(&harness, include_str!("zle-driver.zsh")).unwrap();
     let binary = env!("CARGO_BIN_EXE_zsh-turbo");
+    // 候補用の履歴にも実行ディレクトリを記録し、共通履歴からの混入に依存しない。
+    for line in commands.lines() {
+        use std::io::Write;
+        let mut child = std::process::Command::new(binary)
+            .arg("record")
+            .current_dir(root)
+            .env("XDG_CONFIG_HOME", root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(line.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
     let bin_dir = std::path::Path::new(binary).parent().unwrap();
     let output = std::process::Command::new("zsh")
         .args(["-df", harness.to_str().unwrap()])

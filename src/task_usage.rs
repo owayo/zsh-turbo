@@ -2,12 +2,15 @@
 //! `make install` のようにタスクを実行した度合いを (ディレクトリ, コマンド, タスク名) ごとに
 //! 減衰付きの回数で持ち、一覧で最初に選ぶ項目を決めるのに使う。実行行の全文や引数は保存しない。
 
-use crate::project_tasks;
+use crate::{
+    project_tasks,
+    state::{create_private_dir, private_options, write_atomic},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -226,41 +229,6 @@ pub fn preferred<'a>(
                 .then(b.0.cmp(&a.0))
         })
         .map(|(index, ..)| index)
-}
-
-fn private_options() -> OpenOptions {
-    let mut options = OpenOptions::new();
-    options.write(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options
-}
-
-fn create_private_dir(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder.create(dir)
-}
-
-/// 同じディレクトリの一意な一時ファイルへ書いてから置き換える
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    let tmp = path.with_extension(format!("tmp-{}-{nanos}", std::process::id()));
-    let result = (|| {
-        let mut file = private_options().create_new(true).open(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(&tmp, path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
 }
 
 #[cfg(test)]
