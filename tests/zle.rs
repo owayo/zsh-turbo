@@ -54,7 +54,7 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
         }
     }
     std::fs::write(root.join("history"), history).unwrap();
-    // サブコマンド一覧の確認用に、実物の uv の代わりに決まった --help を返す偽物を置く
+    // サブコマンド一覧の確認用に、決まった --help を返す偽物を置く
     let fake_bin = root.join("fakebin");
     std::fs::create_dir(&fake_bin).unwrap();
     let fake_uv = fake_bin.join("uv");
@@ -66,6 +66,7 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::copy(&fake_uv, fake_bin.join("pnpm")).unwrap();
     }
     std::fs::write(root.join(".zshrc"), include_str!("zle-init.zsh")).unwrap();
     let harness = root.join("test.zsh");

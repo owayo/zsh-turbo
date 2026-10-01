@@ -254,6 +254,18 @@ zpty -b fixture zsh -di || exit 1
     zpty -w -n fixture $'\e[B\e[B\r'
     await_fixture buffer 'pnpm run test' || exit 64
     await_fixture project '' || exit 65
+    # pnpm のサブコマンドを選んで Tab で確定しても、次候補へ移動せず実行もしない
+    zpty -w -n fixture $'\x15pnpm'
+    await_fixture project $'pnpm run \npnpm self \npnpm sync ' || exit 64
+    : > "$TEST_ROOT/menu"
+    zpty -w -n fixture $'\e[B'
+    await_selected 'run' || exit 64
+    zpty -w -n fixture $'\e[B'
+    await_selected 'self' || exit 64
+    zpty -w -n fixture $'\t'
+    await_menu closed || exit 64
+    await_fixture buffer 'pnpm self ' || exit 64
+    [[ "$(<"$TEST_ROOT/boot")" == 3 ]] || exit 64
     zpty -w -n fixture $'\x15echo sam'
     await_fixture project '' || exit 55
     await_fixture display 'ple-alpha' || exit 55
@@ -343,7 +355,8 @@ zpty -b fixture zsh -di || exit 1
     : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
     await_selected 'sub/' || exit 87
-    zpty -w -n fixture $'\e[B\r'
+    zpty -w -n fixture $'\e[B\t'
+    await_menu closed || exit 88
     await_fixture buffer 'ls -l books/Alpha\ Beta.txt ' || exit 88
     await_fixture fds '0 0' || exit 88
     await_fixture project '' || exit 88
@@ -462,11 +475,12 @@ zpty -b fixture zsh -di || exit 1
     await_menu $'make \n\nTasks (3/4):\n  build\n  check\n> clean\n  deploy' || exit 116
     zpty -w -n fixture $'\e'
     await_fixture buffer 'make ' || exit 116
-    # 応答を待たずに続けて打っても文字を失わず、Enter は新しい一覧が届いてから選ぶ
+    # 応答を待たずに続けて打っても文字を失わず、Tab は新しい一覧が届いてから選ぶ
     : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\x15make\e[B'
     await_menu "$menu_deploy" || exit 117
-    zpty -w -n fixture $'cl\r'
+    zpty -w -n fixture $'cl\t'
+    await_menu closed || exit 117
     await_fixture buffer 'make clean' || exit 117
     # 貼り付けも同じく絞り込む
     : > "$TEST_ROOT/menu"

@@ -1050,7 +1050,7 @@ bindkey -M zsh-turbo-list -R '\M-^@'-'\M-^?' self-insert
 bindkey -M zsh-turbo-list '^?' backward-delete-char
 bindkey -M zsh-turbo-list '^H' backward-delete-char
 bindkey -M zsh-turbo-list '^[[200~' bracketed-paste
-bindkey -M zsh-turbo-list '^I' down-line-or-history
+bindkey -M zsh-turbo-list '^I' accept-line
 bindkey -M zsh-turbo-list '^[[B' down-line-or-history
 bindkey -M zsh-turbo-list '^[OB' down-line-or-history
 bindkey -M zsh-turbo-list '^N' down-line-or-history
