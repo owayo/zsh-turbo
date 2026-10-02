@@ -88,9 +88,9 @@ pub fn response(request: &Request) -> String {
         suggest::get_history_suggestion(request.buffer, request.history_file, request.strategy);
     let listing_allowed = request.max > 0 && !is_history_motion(request.last_widget);
 
-    // `uv` や `npm i` のように `run` 等を要する CLI の名前・2 語目を入力中なら、そのサブコマンド
+    // CLI の名前・2 語目を入力中なら、ヘルプから読んだサブコマンドを出す
     if listing_allowed
-        && let Some((command, head, word)) = project_tasks::subcommand_query(request.buffer)
+        && let Some((command, head, word)) = completion::subcommand_query(request.buffer)
         && let Some(help) = completion::top_level(command)
     {
         let items = sendable_items(

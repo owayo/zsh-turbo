@@ -425,6 +425,15 @@ zpty -b fixture zsh -di || exit 1
     await_fixture project '' || exit 104
     zpty -w -n fixture ' s'
     await_fixture project $'uv self \nuv sync ' || exit 105
+    # タスク実行系以外の CLI でも、使用例から候補を出して絞り込み・選択できる
+    zpty -w -n fixture $'\x15brew'
+    await_fixture project $'brew help \nbrew install \nbrew uninstall \nbrew update ' || exit 140
+    zpty -w -n fixture $'\x15brew '
+    await_fixture project $'brew help \nbrew install \nbrew uninstall \nbrew update ' || exit 140
+    zpty -w -n fixture $'\x15brew i'
+    await_fixture project 'brew install ' || exit 141
+    zpty -w -n fixture $'\e[B\r'
+    await_fixture buffer 'brew install ' || exit 142
     # 実行したタスクをディレクトリごとに記録し、よく使うタスクを ghost と ↓ の初期選択にする
     for boot in 8 9; do
         zpty -w -n fixture $'\x15make deploy\r'

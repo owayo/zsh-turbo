@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 /// mise のシムのようにバイナリが同じでも中身が更新されることがあるため、一定時間で取り直す
 const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// 失敗・タイムアウトは長く覚えず、少し待って取り直す
@@ -28,6 +28,27 @@ struct Record {
     updated: u64,
     failed: bool,
     help: TopLevel,
+}
+
+/// CLI 名だけ、または 2 語目の入力中なら (CLI 名, 残す部分, 入力中の語) を返す。
+pub fn subcommand_query(query: &str) -> Option<(&str, String, &str)> {
+    if query.chars().any(char::is_control) {
+        return None;
+    }
+    let (command, rest) = query.split_once(' ').unwrap_or((query, ""));
+    if !super::valid_command(command) {
+        return None;
+    }
+    let word = rest.trim_start_matches(' ');
+    if word.contains(' ') {
+        return None;
+    }
+    let head = if query == command {
+        format!("{command} ")
+    } else {
+        query[..query.len() - word.len()].to_owned()
+    };
+    Some((command, head, word))
 }
 
 /// PATH 上の `command` のサブコマンドとオプションを返す。見つからなければ None。
@@ -98,7 +119,7 @@ fn load(
         return Some(help);
     }
     let help = run_help(binary)
-        .map(|text| help::parse(&text).into_top_level())
+        .map(|text| help::parse_top_level(command, &text))
         .unwrap_or_default();
     // エラー文だけが返った場合 (mise の未信頼の設定など) も、短い期限で取り直す
     let failed = help.commands.is_empty() && help.options.is_empty();

@@ -81,6 +81,32 @@ enum Wrapped {
     Option,
 }
 
+/// 通常の一覧がないヘルプでは、字下げした `CLI サブコマンド ...` の使用例を読む。
+pub(super) fn parse_top_level(command: &str, text: &str) -> super::TopLevel {
+    let mut result = parse(text).into_top_level();
+    if !result.commands.is_empty() {
+        return result;
+    }
+    for raw in clean(text).lines() {
+        if !raw.starts_with([' ', '\t']) {
+            continue;
+        }
+        let mut words = raw.split_whitespace();
+        if words.next() != Some(command) {
+            continue;
+        }
+        let Some(name) = words.next() else {
+            continue;
+        };
+        if (is_command_name(name) || name == "help")
+            && !result.commands.iter().any(|(existing, _)| existing == name)
+        {
+            result.commands.push((name.to_owned(), String::new()));
+        }
+    }
+    result
+}
+
 pub(super) fn parse(text: &str) -> Help {
     let mut result = Help::default();
     let mut commands_section = false;

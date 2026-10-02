@@ -68,6 +68,16 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
         std::fs::set_permissions(&fake_uv, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::copy(&fake_uv, fake_bin.join("pnpm")).unwrap();
     }
+    let fake_brew = fake_bin.join("brew");
+    std::fs::write(
+        &fake_brew,
+        "#!/bin/sh\n[ \"$1\" = --help ] || exit 1\ncat <<'EOF'\nExample usage:\n  brew install FORMULA|CASK...\n  brew update\n  brew uninstall FORMULA|CASK...\n  brew install --verbose --debug FORMULA|CASK\n\nFurther help:\n  brew help [COMMAND]\n  man brew\nEOF\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_brew, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     std::fs::write(root.join(".zshrc"), include_str!("zle-init.zsh")).unwrap();
     let harness = root.join("test.zsh");
     std::fs::write(&harness, include_str!("zle-driver.zsh")).unwrap();
