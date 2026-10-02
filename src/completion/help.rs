@@ -98,7 +98,15 @@ pub(super) fn parse_top_level(command: &str, text: &str) -> super::TopLevel {
         let Some(name) = words.next() else {
             continue;
         };
-        if (is_command_name(name) || name == "help")
+        // 大文字だけのプレースホルダや、具体的な引数・説明文の行は候補にしない
+        let syntax = words.next().is_none_or(|next| {
+            next.starts_with(['-', '[', '<', '{'])
+                || next.starts_with("...")
+                || !next.bytes().any(|c| c.is_ascii_lowercase())
+        });
+        if syntax
+            && (is_command_name(name) || name == "help")
+            && name.bytes().any(|c| c.is_ascii_lowercase())
             && !result.commands.iter().any(|(existing, _)| existing == name)
         {
             result.commands.push((name.to_owned(), String::new()));
@@ -411,6 +419,28 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn 使用例からcli自身のサブコマンドだけを重複なく読む() {
+        let help = parse_top_level(
+            "brew",
+            "Example usage:\n  brew search TEXT|/REGEX/\n  brew install FORMULA|CASK...\n  brew update\n\nTroubleshooting:\n  brew config\n  brew install --verbose --debug FORMULA|CASK\n\nFurther help:\n  brew help [COMMAND]\n  man brew\n  https://docs.brew.sh\n  brew --version\n  brew <COMMAND>\n  brew $(echo injected)\n  brew install;echo\n  brewery remove\n  brew FORMULA\n  brew is a package manager\n  brew remove example-package\n",
+        );
+        assert_eq!(
+            help.commands,
+            ["search", "install", "update", "config", "help"]
+                .map(|name| (name.to_owned(), String::new()))
+        );
+        assert!(help.options.is_empty());
+        let described = parse_top_level(
+            "demo",
+            "Commands:\n  sync  Update the environment\nExamples:\n  demo sync\n  demo other\n",
+        );
+        assert_eq!(
+            described.commands,
+            [("sync".to_owned(), "Update the environment".to_owned())]
+        );
+    }
+
     #[test]
     fn parses_nested_commands_and_option_values() {
         let help = parse(

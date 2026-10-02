@@ -252,6 +252,7 @@ fn main() {
                     "{}",
                     ui_list::response(&ui_list::Request {
                         buffer: &prefix,
+                        completions: &config.completions,
                         history_file: history_file.as_deref(),
                         strategy: &strat,
                         max: config.suggest.max_suggestions,

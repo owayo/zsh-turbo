@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 /// mise のシムのようにバイナリが同じでも中身が更新されることがあるため、一定時間で取り直す
 const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// 失敗・タイムアウトは長く覚えず、少し待って取り直す
@@ -52,8 +52,8 @@ pub fn subcommand_query(query: &str) -> Option<(&str, String, &str)> {
 }
 
 /// PATH 上の `command` のサブコマンドとオプションを返す。見つからなければ None。
-pub fn top_level(command: &str) -> Option<TopLevel> {
-    if !super::valid_command(command) {
+pub fn top_level(command: &str, registrations: &[super::Registration]) -> Option<TopLevel> {
+    if !super::valid_command(command) || !help_allowed(command, registrations) {
         return None;
     }
     let binary = cache::resolve(command).ok()?;
@@ -73,6 +73,16 @@ pub fn top_level(command: &str) -> Option<TopLevel> {
                 .filter(|text| !text.is_empty())
         },
     )
+}
+
+fn help_allowed(command: &str, registrations: &[super::Registration]) -> bool {
+    registrations
+        .iter()
+        .find(|entry| entry.command == command)
+        .map_or_else(
+            || crate::project_tasks::runs_tasks_via_subcommand(command),
+            |entry| entry.enabled,
+        )
 }
 
 fn cache_root() -> PathBuf {
@@ -142,6 +152,67 @@ mod tests {
     use std::cell::Cell;
 
     const HELP: &str = "Usage: demo <COMMAND>\n\nCommands:\n  sync  Update the environment\n  run   Run a command\n\nOptions:\n  -q, --quiet  Use quiet output\n";
+
+    #[test]
+    fn cliの名前と2語目はサブコマンドの入力として返す() {
+        for command in ["uv", "npm", "brew", "git", "example-cli"] {
+            assert_eq!(
+                subcommand_query(command),
+                Some((command, format!("{command} "), ""))
+            );
+            assert_eq!(
+                subcommand_query(&format!("{command} ")),
+                Some((command, format!("{command} "), ""))
+            );
+        }
+        assert_eq!(
+            subcommand_query("brew  i"),
+            Some(("brew", "brew  ".to_owned(), "i"))
+        );
+        assert_eq!(
+            subcommand_query("mise --"),
+            Some(("mise", "mise ".to_owned(), "--"))
+        );
+        for query in [
+            "",
+            " brew",
+            "brew install ",
+            "./brew",
+            "brew;echo",
+            "brew\ti",
+            "brew\ni",
+        ] {
+            assert_eq!(subcommand_query(query), None, "{query:?}");
+        }
+    }
+
+    #[test]
+    fn 古い解析版のキャッシュは期限内でも取り直す() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = tmp.path().join("demo");
+        fs::write(&binary, "v1").unwrap();
+        let root = tmp.path().join("cache");
+        fs::create_dir(&root).unwrap();
+        let now = SystemTime::now();
+        let record = Record {
+            version: VERSION - 1,
+            stamp: cache::stamp(&binary).unwrap(),
+            updated: seconds(now),
+            failed: true,
+            help: TopLevel::default(),
+        };
+        fs::write(root.join("demo.json"), serde_json::to_vec(&record).unwrap()).unwrap();
+        let runs = Cell::new(0);
+        let run = |_: &Path| {
+            runs.set(runs.get() + 1);
+            Some("Example usage:\n  demo sync\n".to_owned())
+        };
+        assert_eq!(
+            load("demo", &binary, &root, now, &run).unwrap().commands,
+            [("sync".to_owned(), String::new())]
+        );
+        assert_eq!(runs.get(), 1);
+    }
 
     #[test]
     fn helpを解析してキャッシュし期限切れとバイナリの変更で取り直す() {
@@ -253,7 +324,23 @@ mod tests {
 
     #[test]
     fn 実行ファイルが無いコマンドは対象外() {
-        assert_eq!(top_level("zsh-turbo-no-such-command-xyz"), None);
-        assert_eq!(top_level("bad name"), None);
+        assert_eq!(top_level("zsh-turbo-no-such-command-xyz", &[]), None);
+        assert_eq!(top_level("bad name", &[]), None);
+    }
+
+    #[test]
+    fn ヘルプ取得は登録済みcliと従来のタスク実行系だけに限る() {
+        let mut entries = [super::super::Registration {
+            command: "brew".to_owned(),
+            ..Default::default()
+        }];
+        assert!(help_allowed("brew", &entries));
+        assert!(!help_allowed("brew", &[]));
+        assert!(!help_allowed("example-deploy", &entries));
+        assert!(help_allowed("uv", &[]));
+        entries[0].enabled = false;
+        assert!(!help_allowed("brew", &entries));
+        entries[0].command = "uv".to_owned();
+        assert!(!help_allowed("uv", &entries));
     }
 }

@@ -43,7 +43,7 @@ fn 実zleで薄い候補と履歴選択と通常補完が動作する() {
         "version: '3'\ntasks:\n  build:\n    cmds: ['echo build']\n",
     )
     .unwrap();
-    std::fs::write(root.join("zsh-turbo/config.toml"), "[prompt]\nleft_segments=[]\nright_segments=[]\nnewline=false\n[suggest]\nmax_suggestions=10\n").unwrap();
+    std::fs::write(root.join("zsh-turbo/config.toml"), "[[completions]]\ncommand='brew'\n[prompt]\nleft_segments=[]\nright_segments=[]\nnewline=false\n[suggest]\nmax_suggestions=10\n").unwrap();
     let mut history = Vec::new();
     let commands = "echo sample-alpha\necho sample-alpha\necho sample-beta\necho 日本語\nls -l /path/to/hoge/fuga\nmake busted\npnpm deploy\n";
     for byte in commands.bytes() {

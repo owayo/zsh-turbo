@@ -23,6 +23,7 @@ const MIN_FIT_COLUMNS: usize = 8;
 
 pub struct Request<'a> {
     pub buffer: &'a str,
+    pub completions: &'a [completion::Registration],
     pub history_file: Option<&'a str>,
     pub strategy: &'a suggest::Strategy,
     /// `suggest.max_suggestions`。入力中の表示行数の上限、0 で一覧なし
@@ -91,7 +92,7 @@ pub fn response(request: &Request) -> String {
     // CLI の名前・2 語目を入力中なら、ヘルプから読んだサブコマンドを出す
     if listing_allowed
         && let Some((command, head, word)) = completion::subcommand_query(request.buffer)
-        && let Some(help) = completion::top_level(command)
+        && let Some(help) = completion::top_level(command, request.completions)
     {
         let items = sendable_items(
             command_items(&help, &head, word, request.menu)
@@ -358,6 +359,7 @@ mod tests {
     fn request<'a>(buffer: &'a str, history_file: &'a str) -> Request<'a> {
         Request {
             buffer,
+            completions: &[],
             history_file: Some(history_file),
             strategy: &suggest::Strategy::Prefix,
             max: 10,

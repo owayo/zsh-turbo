@@ -60,7 +60,7 @@ fn takes_task_directly(command: &str) -> bool {
 }
 
 /// スクリプト・タスクの前に `run` などのサブコマンドが要る CLI と、そのサブコマンド。
-/// 名前だけを入力した段階では、CLI 自身のサブコマンドを一覧にする (`subcommand_query`)。
+/// 名前だけを入力した段階では、CLI 自身のサブコマンドを一覧にする。
 fn run_keywords(command: &str) -> Option<&'static [&'static str]> {
     Some(match command {
         "npm" => &["run", "run-script"],
@@ -69,6 +69,11 @@ fn run_keywords(command: &str) -> Option<&'static [&'static str]> {
         "mise" => &["run", "r"],
         _ => return None,
     })
+}
+
+/// スクリプト・タスクの前にサブコマンドを取る CLI かどうか。
+pub fn runs_tasks_via_subcommand(command: &str) -> bool {
+    run_keywords(command).is_some()
 }
 
 /// `command` がカレントディレクトリの定義ファイルから読むタスク名 (名前順)
@@ -190,26 +195,6 @@ fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList
         input: format!("{head}{prefix}"),
         items: matching(&head, prefix, names, max, include_exact),
     }
-}
-
-/// `uv` や `npm i` のように、`run` 等を要する CLI の名前か 2 語目を入力中なら
-/// (CLI 名, 候補の前に残す部分, 入力中の語) を返す。一覧には CLI のサブコマンドを出す。
-pub fn subcommand_query(query: &str) -> Option<(&str, String, &str)> {
-    if query.chars().any(char::is_control) {
-        return None;
-    }
-    let (command, rest) = query.split_once(char::is_whitespace).unwrap_or((query, ""));
-    run_keywords(command)?;
-    let word = rest.trim_start_matches(char::is_whitespace);
-    if word.chars().any(char::is_whitespace) {
-        return None;
-    }
-    let head = if query == command {
-        format!("{command} ")
-    } else {
-        query[..query.len() - word.len()].to_owned()
-    };
-    Some((command, head, word))
 }
 
 fn after_keyword<'a>(rest: &'a str, keyword: &str) -> Option<&'a str> {
@@ -642,24 +627,6 @@ mod tests {
             labeled_in("mise r te", tmp.path(), 10),
             [("test".to_owned(), "mise r test".to_owned())]
         );
-    }
-
-    #[test]
-    fn run等を要するcliの名前と2語目はサブコマンドの入力として返す() {
-        assert_eq!(subcommand_query("uv"), Some(("uv", "uv ".to_owned(), "")));
-        assert_eq!(subcommand_query("uv "), Some(("uv", "uv ".to_owned(), "")));
-        assert_eq!(
-            subcommand_query("npm  i"),
-            Some(("npm", "npm  ".to_owned(), "i"))
-        );
-        assert_eq!(
-            subcommand_query("mise --"),
-            Some(("mise", "mise ".to_owned(), "--"))
-        );
-        assert_eq!(subcommand_query("uv sync "), None);
-        assert_eq!(subcommand_query("make"), None);
-        assert_eq!(subcommand_query("uvx"), None);
-        assert_eq!(subcommand_query("uv\ta"), None);
     }
 
     #[test]
