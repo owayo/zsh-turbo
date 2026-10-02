@@ -146,6 +146,12 @@ eval "$(zsh-turbo init)"
 
 Terminal shell integration is enabled automatically for iTerm2 3.7+ and Warp. It wraps prompts with OSC 133 markers so terminal features that inspect command ranges can exclude left prompt, right prompt, and secondary prompt cells. Set `ZSH_TURBO_TERM_SHELL_INTEGRATION=0` before initialization to disable it, or `1` to force it.
 
+## CLI Help
+
+The main command list in `zsh-turbo --help` shows setup and diagnostics: `init`, `configure`, `font`, `install-font`, and `doctor`. The longer help separately introduces shell integration and maintenance commands; `-h` shows only the short list.
+
+The shell calls `prompt`, `suggest`, `complete`, `highlight`, and `record` automatically. These commands and the maintenance command `completion-refresh` are omitted from the main command list. Use `zsh-turbo <command> --help`, such as `zsh-turbo prompt --help` or `zsh-turbo completion-refresh --help`, for their individual help.
+
 ## Prompt Styles
 
 | Style   | Description                                        |

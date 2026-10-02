@@ -22,7 +22,8 @@ mod ui_list;
 #[command(
     name = "zsh-turbo",
     version,
-    about = "High-performance zsh enhancement tool"
+    about = "High-performance zsh enhancement tool",
+    after_long_help = "シェル連携用（自動呼び出し）:\n  prompt, suggest, complete, highlight, record\n\n保守用:\n  completion-refresh  登録した CLI の補完キャッシュを更新する\n\n詳細: zsh-turbo <コマンド> --help"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -33,12 +34,14 @@ struct Cli {
 enum Commands {
     /// zsh 初期化スクリプトを出力する
     Init,
-    /// 登録した CLI の補完キャッシュを更新する
+    /// 保守用: 登録した CLI の補完キャッシュを更新する
+    #[command(hide = true)]
     CompletionRefresh {
         #[arg(long)]
         force: bool,
     },
-    /// プロンプト文字列を描画する
+    /// シェル連携用: プロンプト文字列を描画する
+    #[command(hide = true)]
     Prompt {
         /// 直前コマンドの終了ステータス
         #[arg(long, default_value = "0")]
@@ -53,7 +56,8 @@ enum Commands {
         #[arg(long, default_value = "0")]
         jobs: usize,
     },
-    /// 現在の入力に対する自動候補を取得する
+    /// シェル連携用: 現在の入力に対する自動候補を取得する
+    #[command(hide = true)]
     Suggest {
         /// 現在の入力プレフィックス（zsh から渡る `$BUFFER` は `-` 始まりも許容する）
         #[arg(allow_hyphen_values = true)]
@@ -92,7 +96,8 @@ enum Commands {
         #[arg(long, hide = true, allow_hyphen_values = true, requires = "ui_list")]
         selected: Option<String>,
     },
-    /// 履歴ベースの補完候補を一覧表示する
+    /// シェル連携用: 履歴ベースの補完候補を一覧表示する
+    #[command(hide = true)]
     Complete {
         /// 現在の入力プレフィックス（zsh から渡る `$BUFFER` は `-` 始まりも許容する）
         #[arg(allow_hyphen_values = true)]
@@ -116,7 +121,7 @@ enum Commands {
     /// 実行した行を標準入力から受け取り、ディレクトリごとの履歴とタスクの利用を記録する
     #[command(hide = true)]
     Record,
-    /// 対話型設定ウィザードを起動する
+    /// 対話型設定画面を開く
     Configure,
     /// 端末のフォントとリガチャ設定を対話形式で選ぶ
     Font,
@@ -128,7 +133,8 @@ enum Commands {
     },
     /// 端末・フォント・ツール・設定を診断する
     Doctor,
-    /// コマンド入力をシンタックスハイライトする（"start end style" 行を返す）
+    /// シェル連携用: コマンド入力をシンタックスハイライトする（"start end style" 行を返す）
+    #[command(hide = true)]
     Highlight {
         /// ハイライト対象のコマンド入力（zsh の `$BUFFER` は `-` 始まりも許容する）
         #[arg(allow_hyphen_values = true)]

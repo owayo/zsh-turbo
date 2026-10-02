@@ -146,6 +146,12 @@ eval "$(zsh-turbo init)"
 
 端末の shell integration は iTerm2 3.7 以上と Warp で自動的に有効になります。OSC 133 marker でプロンプト範囲を囲むため、端末側のコマンド範囲抽出で左プロンプト、右プロンプト、継続プロンプトを除外できます。無効化する場合は初期化前に `ZSH_TURBO_TERM_SHELL_INTEGRATION=0`、強制有効化する場合は `1` を設定してください。
 
+## CLI のヘルプ
+
+`zsh-turbo --help` の主な一覧には、設定・初期化・診断に使う `init`・`configure`・`font`・`install-font`・`doctor` を表示します。末尾にはシェル連携用・保守用を別枠で案内します。短い `-h` では主な一覧だけを表示します。
+
+`prompt`・`suggest`・`complete`・`highlight`・`record` はシェルが自動的に呼び出します。これらと保守用の `completion-refresh` は主な一覧から省略しています。詳細は `zsh-turbo prompt --help` や `zsh-turbo completion-refresh --help` のように、`zsh-turbo <コマンド> --help` で確認できます。
+
 ## プロンプトスタイル
 
 | スタイル | 説明                                                   |
