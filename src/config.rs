@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const MAX_PROMPT_BLANK_LINES: usize = 10;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub ui: UiConfig,
@@ -20,8 +20,21 @@ pub struct Config {
     pub style: StyleConfig,
     #[serde(default)]
     pub shell: ShellConfig,
-    #[serde(default)]
+    #[serde(default = "crate::completion::defaults")]
     pub completions: Vec<crate::completion::Registration>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            ui: UiConfig::default(),
+            prompt: PromptConfig::default(),
+            suggest: SuggestConfig::default(),
+            style: StyleConfig::default(),
+            shell: ShellConfig::default(),
+            completions: crate::completion::defaults(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

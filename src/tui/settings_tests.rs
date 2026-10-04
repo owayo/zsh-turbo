@@ -64,7 +64,13 @@ fn assert_all_fields_changed(before: &Value, after: &Value, path: &str) {
 
 #[test]
 fn 全設定をキー操作で変更してtomlへ保存できる() {
-    let mut app = App::new(Config::default(), Lang::En);
+    let mut app = App::new(
+        Config {
+            completions: vec![],
+            ..Default::default()
+        },
+        Lang::En,
+    );
     focus(&mut app, 5, 0);
     press(&mut app, KeyCode::Char('n'));
     let before = serde_json::to_value(&app.config).unwrap();
@@ -585,7 +591,13 @@ fn 空行数の範囲外を拒否し極端な設定でも加算と描画が壊�
 
 #[test]
 fn 補完登録を編集し切替と削除ができる() {
-    let mut app = App::new(Config::default(), Lang::Ja);
+    let mut app = App::new(
+        Config {
+            completions: vec![],
+            ..Default::default()
+        },
+        Lang::Ja,
+    );
     focus(&mut app, 7, 0);
     press(&mut app, KeyCode::Char('n'));
     replace_input(&mut app, "example");
@@ -613,7 +625,13 @@ fn 補完登録を編集し切替と削除ができる() {
 
 #[test]
 fn 補完一覧から詳細を開き削除確認と新規取消しができる() {
-    let mut app = App::new(Config::default(), Lang::Ja);
+    let mut app = App::new(
+        Config {
+            completions: vec![],
+            ..Default::default()
+        },
+        Lang::Ja,
+    );
     focus(&mut app, 7, 0);
     press(&mut app, KeyCode::Char('n'));
     press(&mut app, KeyCode::Esc);
@@ -653,6 +671,34 @@ fn 補完一覧から詳細を開き削除確認と新規取消しができる()
     press(&mut app, KeyCode::Char('n'));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.config.completions.len(), 1);
+}
+
+#[test]
+fn gitの初期登録は既存zsh補完として表示し切替できる() {
+    let mut app = App::new(Config::default(), Lang::Ja);
+    focus(&mut app, 7, 0);
+    press(&mut app, KeyCode::Enter);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui(frame, &mut app)).unwrap();
+    let rendered = format!("{:?}", terminal.backend().buffer());
+    assert!(rendered.contains("git"));
+    assert!(rendered.contains("既存の zsh 補完"));
+    focus(&mut app, 7, 4);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.editing.is_none());
+    focus(&mut app, 7, 3);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.config.completions[0].source,
+        crate::completion::Source::Help
+    );
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Enter);
+    }
+    assert_eq!(
+        app.config.completions[0].source,
+        crate::completion::Source::Native
+    );
 }
 
 #[test]

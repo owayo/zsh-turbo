@@ -83,6 +83,9 @@ enum Wrapped {
 
 /// 通常の一覧がないヘルプでは、字下げした `CLI サブコマンド ...` の使用例を読む。
 pub(super) fn parse_top_level(command: &str, text: &str) -> super::TopLevel {
+    if command == "git" {
+        return parse_git_top_level(text);
+    }
     let mut result = parse(text).into_top_level();
     if !result.commands.is_empty() {
         return result;
@@ -110,6 +113,34 @@ pub(super) fn parse_top_level(command: &str, text: &str) -> super::TopLevel {
             && !result.commands.iter().any(|(existing, _)| existing == name)
         {
             result.commands.push((name.to_owned(), String::new()));
+        }
+    }
+    result
+}
+
+fn parse_git_top_level(text: &str) -> super::TopLevel {
+    let mut result = super::TopLevel::default();
+    let mut commands_section = false;
+    let mut seen = std::collections::HashSet::new();
+    for raw in clean(text).lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !raw.starts_with(char::is_whitespace) {
+            let heading = line.trim_end_matches(':').to_ascii_lowercase();
+            // Git 本体の節だけを読み、設定や PATH で変わるエイリアス・外部拡張は除く。
+            commands_section = heading == "main porcelain commands"
+                || heading.starts_with("ancillary commands / ")
+                || heading.starts_with("low-level commands / ")
+                || heading == "interacting with others";
+            continue;
+        }
+        if commands_section {
+            let (name, description) = split_columns(line);
+            if super::valid_command(name) && seen.insert(name.to_owned()) {
+                result.commands.push((name.into(), description.into()));
+            }
         }
     }
     result
@@ -419,6 +450,27 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gitの全一覧から実行コマンドだけを説明付きで読む() {
+        let help = parse_top_level(
+            "git",
+            "See 'git help <command>' for help\n\nMain Porcelain Commands\n   clean          Remove untracked files\n   clone          Clone a repository\n\nAncillary Commands / Manipulators\n   config         Read configuration\n\nInteracting with Others\n   svn            Work with Subversion\n\nLow-level Commands / Internal Helpers\n   check-ignore   Check ignore rules\n   help           Show help\n\nUser-facing repository, command and file interfaces\n   cli            Command-line conventions\n\nDeveloper-facing file formats, protocols and other interfaces\n   protocol-v2    Wire protocol\n\nExternal commands\n   lfs\n   custom.tool\n   bad;command\n\nCommand aliases\n   co             checkout\n   clone          duplicate\n",
+        );
+        assert_eq!(
+            help.commands,
+            [
+                ("clean", "Remove untracked files"),
+                ("clone", "Clone a repository"),
+                ("config", "Read configuration"),
+                ("svn", "Work with Subversion"),
+                ("check-ignore", "Check ignore rules"),
+                ("help", "Show help"),
+            ]
+            .map(|(name, text)| (name.into(), text.into()))
+        );
+        assert!(help.options.is_empty());
+    }
+
     #[test]
     fn 使用例からcli自身のサブコマンドだけを重複なく読む() {
         let help = parse_top_level(

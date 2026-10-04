@@ -33,7 +33,7 @@ fn 全タブの見出しと項目が選択言語で表示される() {
                 "Primary Color",
                 "No custom segments",
                 "Terminal Integration",
-                "No CLI registered",
+                "Registered CLIs",
             ],
         ),
     ] {

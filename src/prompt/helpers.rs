@@ -25,17 +25,23 @@ pub(crate) fn run_cmd_inner(
     stderr_fallback: bool,
     timeout: Duration,
 ) -> Option<String> {
-    run_cmd_core(cmd, args, stderr_fallback, timeout, true)
+    run_cmd_core(cmd, args, &[], stderr_fallback, timeout, true)
 }
 
 /// 終了コードに関わらず出力を返す。`npm --help` のように、使い方を表示して 1 で終わるコマンド向け。
-pub(crate) fn run_cmd_any_status(cmd: &str, args: &[&str], timeout: Duration) -> Option<String> {
-    run_cmd_core(cmd, args, true, timeout, false)
+pub(crate) fn run_cmd_any_status(
+    cmd: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    timeout: Duration,
+) -> Option<String> {
+    run_cmd_core(cmd, args, env, true, timeout, false)
 }
 
 fn run_cmd_core(
     cmd: &str,
     args: &[&str],
+    env: &[(&str, &str)],
     stderr_fallback: bool,
     timeout: Duration,
     require_success: bool,
@@ -43,6 +49,7 @@ fn run_cmd_core(
     let mut command = Command::new(cmd);
     command
         .args(args)
+        .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

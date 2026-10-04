@@ -15,6 +15,7 @@ pub enum Source {
     Help,
     Generator,
     File,
+    Native,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +40,14 @@ impl Default for Registration {
             watch_files: Vec::new(),
         }
     }
+}
+
+pub fn defaults() -> Vec<Registration> {
+    vec![Registration {
+        command: "git".into(),
+        source: Source::Native,
+        ..Default::default()
+    }]
 }
 
 pub fn valid_command(name: &str) -> bool {
@@ -84,7 +93,7 @@ pub fn status(entry: &Registration) -> String {
 pub fn shell_init(entries: &[Registration]) -> String {
     let entries: Vec<_> = entries
         .iter()
-        .filter(|e| e.enabled && valid_command(&e.command))
+        .filter(|e| e.enabled && e.source != Source::Native && valid_command(&e.command))
         .collect();
     if entries.is_empty() {
         return String::new();

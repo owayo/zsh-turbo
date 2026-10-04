@@ -4,7 +4,28 @@ use std::fs;
 #[test]
 fn registration_roundtrips_and_legacy_config_defaults() {
     let config: crate::config::Config = toml::from_str("").unwrap();
-    assert!(config.completions.is_empty());
+    assert_eq!(config.completions, defaults());
+    assert_eq!(crate::config::Config::default().completions, defaults());
+    let saved = toml::to_string(&config).unwrap();
+    assert_eq!(
+        toml::from_str::<crate::config::Config>(&saved)
+            .unwrap()
+            .completions,
+        defaults()
+    );
+    let empty: crate::config::Config = toml::from_str("completions = []").unwrap();
+    assert!(empty.completions.is_empty());
+    let saved = toml::to_string(&empty).unwrap();
+    assert!(
+        toml::from_str::<crate::config::Config>(&saved)
+            .unwrap()
+            .completions
+            .is_empty()
+    );
+    let custom: crate::config::Config =
+        toml::from_str("[[completions]]\ncommand = 'example-cli'").unwrap();
+    assert_eq!(custom.completions.len(), 1);
+    assert_eq!(custom.completions[0].command, "example-cli");
     let entry = Registration {
         command: "example-cli".into(),
         watch_files: vec!["~/bin/real-cli".into()],
@@ -15,6 +36,27 @@ fn registration_roundtrips_and_legacy_config_defaults() {
     assert!(!valid_command("../command"));
     assert!(!valid_command("x;echo"));
     assert!(!valid_command("zsh-turbo"));
+}
+
+#[test]
+fn native_registration_keeps_existing_completion_without_creating_cache() {
+    let root = tempfile::tempdir().unwrap();
+    let entries = defaults();
+    let entry = &entries[0];
+    assert_eq!(entry.command, "git");
+    assert_eq!(entry.source, Source::Native);
+    assert!(shell_init(&entries).is_empty());
+    assert_eq!(cache::refresh(entry, root.path(), true).unwrap(), "native");
+    assert_eq!(cache::status(entry, root.path()), "native");
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    let mut mixed = entries;
+    mixed.push(Registration {
+        command: "example-cli".into(),
+        ..Default::default()
+    });
+    let init = shell_init(&mixed);
+    assert!(init.contains("'example-cli'"));
+    assert!(!init.contains("'git'"));
 }
 
 #[test]

@@ -168,12 +168,13 @@ pub(super) fn activate(app: &mut App) {
             entry.source = match entry.source {
                 Source::Help => Source::Generator,
                 Source::Generator => Source::File,
-                Source::File => Source::Help,
+                Source::File => Source::Native,
+                Source::Native => Source::Help,
             };
             app.dirty = true;
             return;
         }
-        4 if entry.source != Source::Help => Field::Input,
+        4 if matches!(entry.source, Source::Generator | Source::File) => Field::Input,
         5 => Field::Watch,
         _ => return,
     };
@@ -265,11 +266,13 @@ pub(super) fn render(frame: &mut Frame, app: &App, area: Rect) {
             Source::Help => app.lang.text("Help (automatic)", "ヘルプ（自動生成）"),
             Source::Generator => app.lang.text("Native generator", "生成コマンド"),
             Source::File => app.lang.text("Completion file", "補完ファイル"),
+            Source::Native => app.lang.text("Existing zsh completion", "既存の zsh 補完"),
         };
         let state = completion::status(entry);
         let state = match state.as_str() {
             "ready" => app.lang.text("Ready", "利用可能"),
             "pending" => app.lang.text("Pending", "未生成"),
+            "native" => app.lang.text("Provided by zsh", "zsh が提供"),
             _ => &state,
         };
         let selection = format!(
@@ -279,10 +282,13 @@ pub(super) fn render(frame: &mut Frame, app: &App, area: Rect) {
             entry.command,
             state
         );
-        let input = if entry.source == Source::Help {
-            "--help".into()
-        } else {
-            Field::Input.value(entry)
+        let input = match entry.source {
+            Source::Help => "--help".into(),
+            Source::Native => app
+                .lang
+                .text("Uses existing fpath", "既存の fpath を使用")
+                .into(),
+            _ => Field::Input.value(entry),
         };
         let rows = [
             (
@@ -382,12 +388,14 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             let status = match status.as_str() {
                 "ready" => app.lang.text("Ready", "利用可能"),
                 "pending" => app.lang.text("Pending", "未生成"),
+                "native" => app.lang.text("Provided by zsh", "zsh が提供"),
                 _ => &status,
             };
             let source = match entry.source {
                 Source::Help => app.lang.text("help", "ヘルプ"),
                 Source::Generator => app.lang.text("generator", "生成コマンド"),
                 Source::File => app.lang.text("file", "ファイル"),
+                Source::Native => app.lang.text("zsh", "zsh"),
             };
             let marker = if i == app.completion_index {
                 "▶ "

@@ -60,6 +60,102 @@ fn 補完候補数は設定を使いcli指定で上書きできる() {
 
 #[cfg(unix)]
 #[test]
+fn gitは初期登録され全コマンドの候補をキャッシュする() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let config = root.join("zsh-turbo/config.toml");
+    std::fs::create_dir(root.join("zsh-turbo")).unwrap();
+    std::fs::write(&config, "[suggest]\nmax_suggestions=5\n").unwrap();
+    std::fs::write(root.join("history"), "").unwrap();
+    let git = root.join("git");
+    std::fs::write(
+        &git,
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "${0%/*}/calls"
+if [ "$LC_ALL" != C ]; then exit 1; fi
+if [ "$1" = help ] && [ "$2" = -a ]; then
+    printf '%s\n' 'Main Porcelain Commands' \
+        '   clean          Remove untracked files' \
+        '   clone          Clone a repository' \
+        'Ancillary Commands / Manipulators' \
+        '   config         Read configuration' \
+        'Interacting with Others' \
+        '   svn            Work with Subversion' \
+        'User-facing repository, command and file interfaces' \
+        '   cli            Command-line conventions'
+else
+    printf '%s\n' 'Unexpected help request' >&2
+    exit 1
+fi
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let suggest = |buffer| {
+        let output = cli(root)
+            .args(["suggest", "--ui-list", "--history-file"])
+            .arg(root.join("history"))
+            .args(["--", buffer])
+            .env("PATH", root)
+            .env("LC_ALL", "ja_JP.UTF-8")
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    for buffer in ["git", "git ", "git cl"] {
+        let response = suggest(buffer);
+        assert!(response.contains("\tgit clean \n"), "{response}");
+        assert!(response.contains("\tgit clone \n"), "{response}");
+        assert!(!response.contains("\tgit cli \n"), "{response}");
+    }
+    assert!(suggest("git").contains("\tgit svn \n"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    let refresh = cli(root)
+        .args(["completion-refresh", "--force"])
+        .env("PATH", root)
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .output()
+        .unwrap();
+    assert!(refresh.status.success());
+    assert_eq!(
+        String::from_utf8(refresh.stdout).unwrap().trim(),
+        "git: native"
+    );
+    let init = cli(root).arg("init").output().unwrap();
+    assert!(init.status.success());
+    assert!(
+        !String::from_utf8(init.stdout)
+            .unwrap()
+            .contains("_zsh_turbo_registered_completion")
+    );
+    for settings in [
+        "completions=[]\n",
+        "[[completions]]\ncommand='git'\nenabled=false\n",
+    ] {
+        std::fs::write(&config, settings).unwrap();
+        assert!(!suggest("git").contains("\tgit clean \n"));
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn ipセグメントは設定を使い環境変数指定を優先する() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();

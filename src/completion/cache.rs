@@ -137,6 +137,9 @@ pub(super) fn refresh(entry: &Registration, root: &Path, force: bool) -> io::Res
     if !valid_command(&entry.command) {
         return Err(io::Error::other("invalid command name"));
     }
+    if entry.source == Source::Native {
+        return Ok("native");
+    }
     fs::create_dir_all(root)?;
     let lock = OpenOptions::new()
         .create(true)
@@ -193,6 +196,7 @@ fn refresh_locked(entry: &Registration, root: &Path, force: bool) -> io::Result<
         });
     if !unchanged_content {
         let script = match entry.source {
+            Source::Native => return Ok("native"),
             Source::Help => help::generate(&entry.command)?,
             Source::Generator => {
                 let (program, args) = entry
@@ -287,6 +291,9 @@ fn refresh_locked(entry: &Registration, root: &Path, force: bool) -> io::Result<
 }
 
 pub(super) fn status(entry: &Registration, root: &Path) -> String {
+    if entry.source == Source::Native {
+        return "native".into();
+    }
     if !valid_command(&entry.command) {
         return "invalid command name".into();
     }

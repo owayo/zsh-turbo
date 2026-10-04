@@ -1,5 +1,5 @@
 //! 入力欄の下の一覧に出すサブコマンドとオプション。
-//! `--help` を解析した結果をコマンドごとにキャッシュし、キー入力のたびに実行しない。
+//! ヘルプを解析した結果をコマンドごとにキャッシュし、キー入力のたびに実行しない。
 
 use super::{cache, help};
 use serde::{Deserialize, Serialize};
@@ -7,14 +7,14 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 /// mise のシムのようにバイナリが同じでも中身が更新されることがあるため、一定時間で取り直す
 const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// 失敗・タイムアウトは長く覚えず、少し待って取り直す
 const FAILURE_TTL: Duration = Duration::from_secs(5 * 60);
 const HELP_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// `--help` から読み取ったトップレベルのサブコマンドとオプション (名前, 説明)
+/// ヘルプから読み取ったトップレベルのサブコマンドとオプション (名前, 説明)
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopLevel {
     pub commands: Vec<(String, String)>,
@@ -68,9 +68,19 @@ pub fn top_level(command: &str, registrations: &[super::Registration]) -> Option
         &cache_root(),
         SystemTime::now(),
         &|binary| {
+            let args: &[&str] = if command == "git" {
+                &["help", "-a"]
+            } else {
+                &["--help"]
+            };
             // npm のように使い方を表示して 1 で終わるものもあるため、終了コードは問わない
-            crate::prompt::helpers::run_cmd_any_status(binary.to_str()?, &["--help"], HELP_TIMEOUT)
-                .filter(|text| !text.is_empty())
+            crate::prompt::helpers::run_cmd_any_status(
+                binary.to_str()?,
+                args,
+                &[("LC_ALL", "C")],
+                HELP_TIMEOUT,
+            )
+            .filter(|text| !text.is_empty())
         },
     )
 }
