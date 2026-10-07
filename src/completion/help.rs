@@ -203,29 +203,40 @@ pub(super) fn parse(text: &str) -> Help {
         }
         let (syntax, description) = split_columns(line);
         if syntax.starts_with('-') {
+            // `--[no-]color` の角括弧は、値ではなくフラグ名の省略表記。
+            let value_syntax = syntax.replace("[no-]", "");
             let mut flags = Vec::new();
             for token in syntax.split(|c: char| c.is_whitespace() || c == ',' || c == '|') {
-                let flag = token.split(['=', '[', '<']).next().unwrap_or("");
-                if flag.starts_with('-')
-                    && flag.len() > 1
-                    && flag
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
-                {
-                    flags.push(flag.to_string());
+                let expanded = if let Some((head, tail)) = token.split_once("[no-]") {
+                    vec![format!("{head}{tail}"), format!("{head}no-{tail}")]
+                } else {
+                    vec![token.to_owned()]
+                };
+                for token in expanded {
+                    let flag = token.split(['=', '[', '<']).next().unwrap_or("");
+                    if flag.starts_with('-')
+                        && flag != "--"
+                        && flag.len() > 1
+                        && flag
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
+                        && !flags.iter().any(|existing| existing == flag)
+                    {
+                        flags.push(flag.to_string());
+                    }
                 }
             }
             if flags.is_empty() {
                 continue;
             }
-            let value = syntax
+            let value = value_syntax
                 .find(['<', '['])
                 .and_then(|i| {
-                    let end = syntax[i..].find(['>', ']'])? + i;
-                    Some(syntax[i + 1..end].trim_end_matches("...").to_string())
+                    let end = value_syntax[i..].find(['>', ']'])? + i;
+                    Some(value_syntax[i + 1..end].trim_end_matches("...").to_string())
                 })
                 .or_else(|| {
-                    syntax
+                    value_syntax
                         .split([' ', '='])
                         .find(|s| {
                             !s.is_empty() && s.bytes().all(|c| c.is_ascii_uppercase() || c == b'_')
@@ -238,7 +249,7 @@ pub(super) fn parse(text: &str) -> Help {
             result.options.push(OptionSpec {
                 flags,
                 value,
-                optional: syntax.contains('['),
+                optional: value_syntax.contains('['),
                 description: description.into(),
             });
         } else if commands_section {
@@ -282,37 +293,44 @@ pub(super) fn parse(text: &str) -> Help {
     result
 }
 
-pub(super) fn generate(command: &str) -> io::Result<String> {
+pub(super) fn generate(command: &str, binary: &std::path::Path) -> io::Result<String> {
+    let binary = binary
+        .to_str()
+        .ok_or_else(|| io::Error::other("executable path is not UTF-8"))?;
+    generate_with(command, 128, Duration::from_secs(120), &|path, timeout| {
+        let mut args: Vec<_> = path.iter().map(String::as_str).collect();
+        args.push("--help");
+        crate::prompt::helpers::run_cmd_any_status(binary, &args, &[("LC_ALL", "C")], timeout)
+    })
+}
+
+fn generate_with(
+    command: &str,
+    scope_limit: usize,
+    time_limit: Duration,
+    run: &(impl Fn(&[String], Duration) -> Option<String> + Sync),
+) -> io::Result<String> {
     let start = Instant::now();
     let mut queue = VecDeque::from([Vec::<String>::new()]);
     let mut nodes = BTreeMap::new();
+    let mut scanned = 0;
     while !queue.is_empty() {
-        let batch: Vec<_> = (0..4).filter_map(|_| queue.pop_front()).collect();
-        if nodes.len() + batch.len() > 128 || start.elapsed() > Duration::from_secs(120) {
-            return Err(io::Error::other(
-                "help scan exceeded its limit (128 scopes / 120 seconds)",
-            ));
+        let remaining = time_limit.saturating_sub(start.elapsed());
+        if scanned >= scope_limit || remaining.is_zero() {
+            break;
         }
+        let timeout = remaining.min(Duration::from_secs(5));
+        let batch: Vec<_> = (0..4.min(scope_limit - scanned))
+            .filter_map(|_| queue.pop_front())
+            .collect();
+        scanned += batch.len();
         let results = std::thread::scope(|scope| {
             let workers: Vec<_> = batch
                 .into_iter()
                 .map(|path| {
                     scope.spawn(move || {
-                        let mut args: Vec<_> = path.iter().map(String::as_str).collect();
-                        args.push("--help");
-                        let text = crate::prompt::helpers::run_cmd_inner(
-                            command,
-                            &args,
-                            true,
-                            Duration::from_secs(5),
-                        )
-                        .ok_or_else(|| {
-                            io::Error::other(format!(
-                                "help failed or timed out: {}",
-                                path.join(" ")
-                            ))
-                        })?;
-                        Ok::<_, io::Error>((path, parse(&text)))
+                        let help = run(&path, timeout).map(|text| parse(&text));
+                        (path, help)
                     })
                 })
                 .collect();
@@ -321,21 +339,33 @@ pub(super) fn generate(command: &str) -> io::Result<String> {
                 .map(|worker| {
                     worker
                         .join()
-                        .unwrap_or_else(|_| Err(io::Error::other("help worker failed")))
+                        .map_err(|_| io::Error::other("help worker failed"))
                 })
                 .collect::<io::Result<Vec<_>>>()
         })?;
         for (path, help) in results {
-            if path.is_empty() && help.options.is_empty() && help.commands.is_empty() {
-                return Err(io::Error::other(
-                    "no options found in --help; use a native generator or completion file",
-                ));
+            let Some(help) = help else {
+                if path.is_empty() {
+                    return Err(io::Error::other("root help failed or timed out"));
+                }
+                continue;
+            };
+            if help.options.is_empty() && help.commands.is_empty() {
+                if path.is_empty() {
+                    return Err(io::Error::other(
+                        "no options found in --help; use a native generator or completion file",
+                    ));
+                }
+                continue;
             }
             if path.len() < 4 {
                 for (name, _) in &help.commands {
                     let mut child = path.clone();
                     child.push(name.clone());
-                    if !queue.contains(&child) && !nodes.contains_key(&child) {
+                    if scanned + queue.len() < scope_limit
+                        && !queue.contains(&child)
+                        && !nodes.contains_key(&child)
+                    {
                         queue.push_back(child);
                     }
                 }
@@ -343,12 +373,16 @@ pub(super) fn generate(command: &str) -> io::Result<String> {
             nodes.insert(path, help);
         }
     }
+    if nodes.is_empty() {
+        return Err(io::Error::other("no help scopes scanned"));
+    }
     Ok(render(command, &nodes))
 }
 
 fn escape(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control())
+        .take(512)
         .flat_map(|c| {
             if "\\:[]".contains(c) {
                 vec!['\\', c]
@@ -356,13 +390,13 @@ fn escape(text: &str) -> String {
                 vec![c]
             }
         })
-        .take(512)
         .collect()
 }
 
 fn function(command: &str, path: &[String]) -> String {
     format!(
-        "_zsh_turbo_help_{command}_{}",
+        "_zsh_turbo_help_{}_{command}_{}",
+        command.len(),
         path.iter()
             .map(|s| format!("{}_{s}", s.len()))
             .collect::<Vec<_>>()
@@ -450,6 +484,106 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 子のヘルプが取れなくても親と他の子の補完は残す() {
+        let script = generate_with("demo", 128, Duration::from_secs(1), &|path, _| match path
+            .first()
+            .map(String::as_str)
+        {
+            None => Some("Commands:\n  good  Usable\n  broken  Failed\n  empty  No help\n".into()),
+            Some("good") => Some("Options:\n  --usable  Usable flag\n".into()),
+            Some("empty") => Some(String::new()),
+            _ => None,
+        })
+        .unwrap();
+        assert!(script.contains("good:Usable"));
+        assert!(script.contains("--usable[Usable flag]"));
+        assert!(script.contains(&format!(
+            "'good') {} ;;",
+            function("demo", &["good".into()])
+        )));
+        assert!(!script.contains("'broken')"));
+        assert!(!script.contains("'empty')"));
+        for text in [None, Some(String::new())] {
+            assert!(
+                generate_with("demo", 128, Duration::from_secs(1), &|_, _| text.clone()).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn 走査上限を超えても取得済みの補完を返す() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = AtomicUsize::new(0);
+        let script = generate_with("demo", 2, Duration::from_secs(1), &|path, timeout| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            assert!(timeout <= Duration::from_secs(1));
+            Some(if path.is_empty() {
+                "Commands:\n  first  First command\n  second  Second command\n  third  Third command\n".into()
+            } else {
+                "Options:\n  --flag  Test flag\n".into()
+            })
+        })
+        .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert!(script.contains("third:Third command"));
+        assert!(script.contains("--flag[Test flag]"));
+        assert!(!script.contains("'second')"));
+        assert!(
+            generate_with("demo", 128, Duration::ZERO, &|_, _| panic!("must not run")).is_err()
+        );
+    }
+
+    #[test]
+    fn 時間上限に達したら取得済みの親の補完を返す() {
+        let script = generate_with("demo", 128, Duration::from_millis(20), &|path, _| {
+            assert!(path.is_empty());
+            std::thread::sleep(Duration::from_millis(30));
+            Some("Commands:\n  child  Child command\nOptions:\n  --flag  Test flag\n".into())
+        })
+        .unwrap();
+        assert!(script.contains("child:Child command"));
+        assert!(script.contains("--flag[Test flag]"));
+        assert!(!script.contains("'child')"));
+    }
+
+    #[test]
+    fn 否定形を含むオプション名を展開して値と区別する() {
+        let help = parse(
+            "Options:\n  --[no-]color  Colorize output\n  --[no-]mode[=MODE]  Select mode\n  --  End options\n",
+        );
+        assert_eq!(help.options.len(), 2);
+        assert_eq!(help.options[0].flags, ["--color", "--no-color"]);
+        assert!(help.options[0].value.is_none());
+        assert!(!help.options[0].optional);
+        assert_eq!(help.options[1].flags, ["--mode", "--no-mode"]);
+        assert_eq!(help.options[1].value.as_deref(), Some("=MODE"));
+        assert!(help.options[1].optional);
+        let nodes = BTreeMap::from([(Vec::new(), help)]);
+        let script = render("demo", &nodes);
+        assert!(script.contains("(--color --no-color)--color[Colorize output]"));
+        assert!(!script.contains("(--)--="));
+    }
+
+    #[test]
+    fn 説明の長さ上限でエスケープを途中で切らない() {
+        for c in ['[', ']', ':', '\\'] {
+            let description = format!("{}{c}ignored", "a".repeat(511));
+            assert_eq!(escape(&description), format!("{}\\{c}", "a".repeat(511)));
+        }
+        assert_eq!(
+            escape(&format!("{}[ignored", "a".repeat(512))),
+            "a".repeat(512)
+        );
+    }
+
+    #[test]
+    fn 別のcliとサブコマンドの関数名が衝突しない() {
+        let first = function("a", &["b".into(), "c".into()]);
+        let second = function("a_1_b", &["c".into()]);
+        assert_ne!(first, second);
+    }
     #[test]
     fn gitの全一覧から実行コマンドだけを説明付きで読む() {
         let help = parse_top_level(

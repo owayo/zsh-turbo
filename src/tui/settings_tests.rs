@@ -624,6 +624,55 @@ fn 補完登録を編集し切替と削除ができる() {
 }
 
 #[test]
+fn 補完元と監視ファイルの相対パスは編集確定時に拒否する() {
+    use crate::completion::{Registration, Source};
+    use completions::Field;
+    for (source, field, invalid, valid) in [
+        (
+            Source::Generator,
+            Field::Input,
+            r#"["./example"]"#,
+            r#"["example"]"#,
+        ),
+        (
+            Source::File,
+            Field::Input,
+            "./_example",
+            "~/completions/_example",
+        ),
+        (
+            Source::Help,
+            Field::Watch,
+            r#"["./config"]"#,
+            r#"["~/config"]"#,
+        ),
+    ] {
+        let entry = Registration {
+            command: "example".into(),
+            source,
+            ..Default::default()
+        };
+        let mut app = App::new(
+            Config {
+                completions: vec![entry.clone()],
+                ..Default::default()
+            },
+            Lang::Ja,
+        );
+        app.start_edit(EditTarget::Completion(0, field));
+        replace_input(&mut app, invalid);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editing.is_some());
+        assert_eq!(app.config.completions[0], entry);
+        assert!(app.status_msg.as_deref().unwrap().contains("絶対パス"));
+        replace_input(&mut app, valid);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editing.is_none());
+        assert_eq!(field.value(&app.config.completions[0]), valid);
+    }
+}
+
+#[test]
 fn 補完一覧から詳細を開き削除確認と新規取消しができる() {
     let mut app = App::new(
         Config {

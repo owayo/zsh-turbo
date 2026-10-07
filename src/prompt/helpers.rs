@@ -46,7 +46,7 @@ fn run_cmd_core(
     timeout: Duration,
     require_success: bool,
 ) -> Option<String> {
-    let mut command = Command::new(cmd);
+    let mut command = Command::new(crate::executable::resolve(cmd).ok()?);
     command
         .args(args)
         .envs(env.iter().copied())

@@ -1,3 +1,4 @@
+use crate::shell_words::is_blank;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -99,7 +100,7 @@ pub fn defines(command: &str, name: &str, cwd: &Path) -> bool {
 /// 入力中の行のコマンド名 (最初の語)
 pub fn command_of(query: &str) -> &str {
     query
-        .split_once(char::is_whitespace)
+        .split_once(is_blank)
         .map_or(query, |(command, _)| command)
 }
 
@@ -165,8 +166,8 @@ fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList
     if max == 0 || query.chars().any(char::is_control) {
         return TaskList::default();
     }
-    let (command, rest) = query.split_once(char::is_whitespace).unwrap_or((query, ""));
-    let rest = rest.trim_start_matches(char::is_whitespace);
+    let (command, rest) = query.split_once(is_blank).unwrap_or((query, ""));
+    let rest = rest.trim_start_matches(is_blank);
     let (head, prefix) = if takes_task_directly(command) {
         let head = if query == command {
             format!("{command} ")
@@ -182,7 +183,7 @@ fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList
         else {
             return TaskList::default();
         };
-        let head = if prefix.is_empty() && !query.ends_with(char::is_whitespace) {
+        let head = if prefix.is_empty() && !query.ends_with(is_blank) {
             // `npm run` のように、サブコマンド直後でも候補を表示する
             format!("{query} ")
         } else {
@@ -199,10 +200,10 @@ fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList
 
 fn after_keyword<'a>(rest: &'a str, keyword: &str) -> Option<&'a str> {
     let after = rest.strip_prefix(keyword)?;
-    if !after.is_empty() && !after.starts_with(char::is_whitespace) {
+    if !after.is_empty() && !after.starts_with(is_blank) {
         return None;
     }
-    Some(after.trim_start_matches(char::is_whitespace))
+    Some(after.trim_start_matches(is_blank))
 }
 
 fn matching(
@@ -212,7 +213,7 @@ fn matching(
     max: usize,
     include_exact: bool,
 ) -> Vec<(String, String)> {
-    if prefix.chars().any(char::is_whitespace) || prefix.starts_with('-') {
+    if prefix.chars().any(is_blank) || prefix.starts_with('-') {
         return Vec::new();
     }
     names
@@ -750,6 +751,32 @@ mod tests {
                 .items
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn 全角空白はコマンドやrunの区切りとして扱わない() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Makefile"), "fmt:\n").unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            r#"{"scripts":{"dev":"vite"}}"#,
+        )
+        .unwrap();
+        for blank in ['\u{3000}', '\u{00a0}', '\u{2003}'] {
+            for query in [
+                format!("make{blank}f"),
+                format!("npm{blank}run d"),
+                format!("npm run{blank}d"),
+            ] {
+                assert!(
+                    list_in(&query, tmp.path(), 10, false).items.is_empty(),
+                    "{query:?}"
+                );
+            }
+            let query = format!("make{blank}fmt");
+            assert_eq!(command_of(&query), query);
+        }
+        assert_eq!(command_of("make\tfmt"), "make");
     }
 
     #[test]

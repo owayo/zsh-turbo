@@ -1,3 +1,4 @@
+use crate::shell_words::is_blank;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
@@ -49,7 +50,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
         }
 
         // 空白をスキップ
-        if chars[pos].is_whitespace() {
+        if is_blank(chars[pos]) {
             pos += 1;
             continue;
         }
@@ -189,7 +190,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
         // クォート外の文字のみ (引数位置でのオプション/パス/glob 判定用)
         let mut bare = String::new();
         while pos < chars.len()
-            && !chars[pos].is_whitespace()
+            && !is_blank(chars[pos])
             && !matches!(chars[pos], '|' | '&' | ';' | '>' | '<')
         {
             if chars[pos] == '\'' {
@@ -254,7 +255,11 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                 continue;
             }
 
-            if is_assignment_word(&logical) {
+            let quoted_name = chars[word_start..pos]
+                .iter()
+                .take_while(|&&c| c != '=')
+                .any(|&c| matches!(c, '\'' | '"' | '\\'));
+            if !quoted_name && is_assignment_word(&logical) {
                 spans.push(Span {
                     start: word_start,
                     end: pos,
@@ -282,7 +287,8 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
             }
 
             // コマンド位置: 単語を分類
-            let style = classify_command(&logical, &alias_set, &func_set, &path_cmds);
+            let quoted = !quote_segs.is_empty() || bare.contains('\\');
+            let style = classify_command(&logical, quoted, &alias_set, &func_set, &path_cmds);
             spans.push(Span {
                 start: word_start,
                 end: pos,
@@ -291,7 +297,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
             push_quote_segs(&mut spans, &quote_segs);
             // プレフィックスコマンドや `if`/`then` 等の後続コマンドを取る予約語では
             // 次の単語もコマンド位置を維持する。
-            is_command_position = keeps_command_position(&logical);
+            is_command_position = keeps_command_position(&logical, quoted);
             after_prefix_command = is_prefix_command(&logical);
             after_pipe_or_semi = false;
         } else if bare.starts_with('-') {
@@ -347,21 +353,22 @@ fn push_quote_segs(spans: &mut Vec<Span>, segs: &[(usize, usize)]) {
 
 /// 後続の単語をコマンド位置として扱い続ける語。
 /// プレフィックスコマンドに加え、後続がコマンドである予約語を含む。
-fn keeps_command_position(word: &str) -> bool {
+fn keeps_command_position(word: &str, quoted: bool) -> bool {
     is_prefix_command(word)
-        || matches!(
-            word,
-            "if" | "then"
-                | "else"
-                | "elif"
-                | "do"
-                | "while"
-                | "until"
-                | "time"
-                | "coproc"
-                | "!"
-                | "{"
-        )
+        || (!quoted
+            && matches!(
+                word,
+                "if" | "then"
+                    | "else"
+                    | "elif"
+                    | "do"
+                    | "while"
+                    | "until"
+                    | "time"
+                    | "coproc"
+                    | "!"
+                    | "{"
+            ))
 }
 
 /// sudo, env 等のプレフィックスコマンド（次の単語もコマンドとして扱う）
@@ -506,6 +513,7 @@ const RESERVED_WORDS: &[&str] = &[
 
 fn classify_command(
     word: &str,
+    quoted: bool,
     aliases: &HashSet<&str>,
     functions: &HashSet<&str>,
     path_cmds: &HashSet<OsString>,
@@ -530,7 +538,7 @@ fn classify_command(
         return "fg=green,bold".into();
     }
 
-    if RESERVED_SET.contains(word) {
+    if !quoted && RESERVED_SET.contains(word) {
         return "fg=yellow,bold".into();
     }
 
@@ -538,7 +546,7 @@ fn classify_command(
         return "fg=green".into();
     }
 
-    if aliases.contains(word) || functions.contains(word) {
+    if (!quoted && aliases.contains(word)) || functions.contains(word) {
         return "fg=green".into();
     }
 
@@ -758,6 +766,75 @@ mod tests {
     fn highlight_empty_buffer() {
         let spans = highlight_buffer("", "", "");
         assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn 全角空白と非改行空白はコマンド名の一部として分類する() {
+        for blank in ['\u{3000}', '\u{00a0}', '\u{2003}'] {
+            let command = format!("work{blank}tool");
+            let buffer = format!("{command} --flag");
+            assert_eq!(
+                span_styles(&buffer, &command, ""),
+                [
+                    (command.clone(), "fg=green".into()),
+                    ("--flag".into(), "fg=cyan".into())
+                ]
+            );
+            let spans = highlight_buffer(&buffer, "", &command);
+            assert_eq!((spans[0].start, spans[0].end), (0, command.chars().count()));
+            assert_eq!(spans[0].style, "fg=green");
+        }
+    }
+
+    #[test]
+    fn 半角空白とタブだけで語を区切り改行でコマンド位置を戻す() {
+        assert_eq!(
+            span_styles("echo\t--first\ntrue --second", "", ""),
+            [
+                ("echo".into(), "fg=green".into()),
+                ("--first".into(), "fg=cyan".into()),
+                ("true".into(), "fg=green".into()),
+                ("--second".into(), "fg=cyan".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn 語の途中のクォートやエスケープでもエイリアスと予約語を抑止する() {
+        for word in ["onl'y'_alias", "only\\_alias", "only\"_\"alias"] {
+            let buffer = format!("{word} argument");
+            let spans = highlight_buffer(&buffer, "only_alias", "");
+            assert_eq!(spans[0].style, "fg=red,bold", "{word}");
+            assert_eq!(spans[0].end, word.chars().count());
+            assert!(spans.iter().all(|s| s.end <= word.chars().count()));
+            assert_eq!(
+                highlight_buffer(&buffer, "only_alias", "only_alias")[0].style,
+                "fg=green"
+            );
+        }
+        for word in ["i'f'", "i\\f", "t\"hen\""] {
+            let spans = highlight_buffer(&format!("{word} echo"), "", "");
+            assert_eq!(spans[0].style, "fg=red,bold", "{word}");
+            assert!(spans.iter().all(|s| s.end <= word.chars().count()));
+        }
+        assert_eq!(span_styles("ec'ho' --flag", "", "")[0].1, "fg=green");
+        assert_eq!(
+            span_styles("e'nv' echo", "", "").last().unwrap().1,
+            "fg=green"
+        );
+    }
+
+    #[test]
+    fn 代入名にクォートやエスケープがあればコマンドとして扱う() {
+        for word in ["F'O'O=bar", "F\\OO=bar", "FOO\\=bar"] {
+            let spans = highlight_buffer(&format!("{word} echo"), "", "");
+            assert_eq!(spans[0].style, "fg=red,bold", "{word}");
+            assert!(spans.iter().all(|s| s.end <= word.chars().count()));
+        }
+        assert_eq!(
+            span_styles("FOO='a=b' echo", "", "").last().unwrap().1,
+            "fg=green"
+        );
     }
 
     #[test]
@@ -1300,7 +1377,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("sudo", &aliases, &functions, &path_cmds),
+            classify_command("sudo", false, &aliases, &functions, &path_cmds),
             "fg=green,bold"
         );
     }
@@ -1311,7 +1388,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("env", &aliases, &functions, &path_cmds),
+            classify_command("env", false, &aliases, &functions, &path_cmds),
             "fg=green,bold"
         );
     }
@@ -1322,7 +1399,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("echo", &aliases, &functions, &path_cmds),
+            classify_command("echo", false, &aliases, &functions, &path_cmds),
             "fg=green"
         );
     }
@@ -1333,7 +1410,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("while", &aliases, &functions, &path_cmds),
+            classify_command("while", false, &aliases, &functions, &path_cmds),
             "fg=yellow,bold"
         );
     }
@@ -1344,7 +1421,7 @@ mod tests {
         let aliases = HashSet::from(["ll"]);
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("ll", &aliases, &functions, &path_cmds),
+            classify_command("ll", false, &aliases, &functions, &path_cmds),
             "fg=green"
         );
     }
@@ -1355,7 +1432,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::from(["myfunc"]);
         assert_eq!(
-            classify_command("myfunc", &aliases, &functions, &path_cmds),
+            classify_command("myfunc", false, &aliases, &functions, &path_cmds),
             "fg=green"
         );
     }
@@ -1366,7 +1443,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("rustc", &aliases, &functions, &path_cmds),
+            classify_command("rustc", false, &aliases, &functions, &path_cmds),
             "fg=green"
         );
     }
@@ -1377,7 +1454,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("no_such_cmd_xyz", &aliases, &functions, &path_cmds),
+            classify_command("no_such_cmd_xyz", false, &aliases, &functions, &path_cmds),
             "fg=red,bold"
         );
     }

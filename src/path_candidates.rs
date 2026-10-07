@@ -1,5 +1,6 @@
 //! 入力中のパス引数に対するディレクトリ内の候補を返す。
 
+use crate::shell_words::is_blank;
 use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fs;
@@ -691,11 +692,6 @@ fn is_prefix_word(word: &str) -> bool {
             | "!"
             | "{"
     )
-}
-
-/// 語の区切り。zsh と同じく全角空白などは語の一部として扱う
-fn is_blank(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n')
 }
 
 fn is_operator(c: char) -> bool {

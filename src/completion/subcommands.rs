@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 /// mise のシムのようにバイナリが同じでも中身が更新されることがあるため、一定時間で取り直す
 const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// 失敗・タイムアウトは長く覚えず、少し待って取り直す
@@ -65,7 +65,7 @@ pub fn top_level(command: &str, registrations: &[super::Registration]) -> Option
     load(
         command,
         &binary,
-        &cache_root(),
+        &cache_root()?,
         SystemTime::now(),
         &|binary| {
             let args: &[&str] = if command == "git" {
@@ -95,8 +95,8 @@ fn help_allowed(command: &str, registrations: &[super::Registration]) -> bool {
         )
 }
 
-fn cache_root() -> PathBuf {
-    super::cache_dir().with_file_name("subcommands")
+fn cache_root() -> Option<PathBuf> {
+    Some(super::cache_dir()?.with_file_name("subcommands"))
 }
 
 fn seconds(time: SystemTime) -> u64 {

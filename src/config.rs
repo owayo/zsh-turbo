@@ -369,12 +369,12 @@ pub fn config_dir() -> PathBuf {
     config_base_from_xdg(std::env::var_os("XDG_CONFIG_HOME")).join("zsh-turbo")
 }
 
-fn config_base_from_xdg(xdg_config_home: Option<OsString>) -> PathBuf {
-    // XDG_CONFIG_HOME は未設定または空文字列なら無効として扱う。
-    if let Some(value) = xdg_config_home
-        && !value.is_empty()
+pub(crate) fn config_base_from_xdg(xdg_config_home: Option<OsString>) -> PathBuf {
+    // 相対パスはカレントディレクトリの設定を読み込むため採用しない。
+    if let Some(path) = xdg_config_home.map(PathBuf::from)
+        && path.is_absolute()
     {
-        return PathBuf::from(value);
+        return path;
     }
 
     dirs::home_dir()
@@ -597,6 +597,14 @@ mod tests {
             !base.as_os_str().is_empty(),
             "空の XDG_CONFIG_HOME から空パスを採用してはならない"
         );
+    }
+
+    #[test]
+    fn config_base_from_xdg_相対パスは_defaultへフォールバックする() {
+        let fallback = config_base_from_xdg(None);
+        for path in ["config", ".", "./config", "../config", "~/.config"] {
+            assert_eq!(config_base_from_xdg(Some(path.into())), fallback);
+        }
     }
 
     // --- 存在しないパスで load_config がデフォルトを返す ---

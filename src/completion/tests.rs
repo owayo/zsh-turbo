@@ -2,6 +2,63 @@ use super::*;
 use std::fs;
 
 #[test]
+fn キャッシュの保存先は絶対パスだけを使う() {
+    use std::path::PathBuf;
+    let home = Some(PathBuf::from("/home/you"));
+    for value in [None, Some("".into()), Some("relative".into())] {
+        assert_eq!(
+            cache_dir_from(value, home.clone()),
+            Some(PathBuf::from(
+                "/home/you/.cache/zsh-turbo/managed-completions"
+            ))
+        );
+    }
+    assert_eq!(
+        cache_dir_from(Some("/cache".into()), None),
+        Some(PathBuf::from("/cache/zsh-turbo/managed-completions"))
+    );
+    assert_eq!(cache_dir_from(Some("relative".into()), None), None);
+    assert_eq!(cache_dir_from(None, Some(PathBuf::from("relative"))), None);
+}
+
+#[test]
+fn 補完元と監視ファイルの相対パスを拒否する() {
+    let mut entry = Registration {
+        command: "example".into(),
+        source: Source::File,
+        ..Default::default()
+    };
+    for path in [
+        "",
+        "_example",
+        "./_example",
+        "../_example",
+        "~other/_example",
+    ] {
+        entry.file = path.into();
+        assert!(validate(&[entry.clone()]).is_err(), "{path}");
+    }
+    for path in ["/completions/_example", "~/completions/_example"] {
+        entry.file = path.into();
+        assert!(validate(&[entry.clone()]).is_ok());
+    }
+    entry.watch_files = vec!["relative".into()];
+    assert!(validate(&[entry.clone()]).is_err());
+    let root = tempfile::tempdir().unwrap();
+    assert!(cache::refresh(&entry, root.path(), true).is_err());
+    entry.watch_files.clear();
+    entry.source = Source::Generator;
+    for program in ["", "./generator", "bin/generator", "../generator"] {
+        entry.generator = vec![program.into()];
+        assert!(validate(&[entry.clone()]).is_err());
+    }
+    for program in ["generator", "/bin/generator", "~/bin/generator"] {
+        entry.generator = vec![program.into()];
+        assert!(validate(&[entry.clone()]).is_ok());
+    }
+}
+
+#[test]
 fn registration_roundtrips_and_legacy_config_defaults() {
     let config: crate::config::Config = toml::from_str("").unwrap();
     assert_eq!(config.completions, defaults());

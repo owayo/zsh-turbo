@@ -2,7 +2,9 @@
 
 [Back to README](../README.md)
 
-Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` is non-empty; otherwise `~/.config/zsh-turbo/config.toml`.
+Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` is an absolute path; otherwise `~/.config/zsh-turbo/config.toml`. Empty and relative values use the default, following the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/).
+
+Automatic prompt and completion commands use absolute executable paths. If a command is found through an empty or relative PATH entry, it is not executed. Syntax highlighting still recognizes these entries because it only checks filenames.
 
 Configuration saves use atomic replacement. Concurrent saves use independent, exclusively created temporary files so one writer cannot overwrite another writer's in-progress data.
 
@@ -219,11 +221,13 @@ Open **Completions** in `zsh-turbo configure`. The first screen lists registered
 Git is registered by default. Typing `git`, `git `, or `git cl` lists matching commands, including `clean`, from `git help -a`; Concept guides, configured aliases, and external Git extensions are excluded from this cached list; aliases and extensions use normal zsh Tab completion. Tab uses the existing zsh Git completion. A config without `completions` gets this default; an explicit list is used as-is, and `completions = []` disables all registrations.
 
 - **Existing zsh completion** (`native`): keeps the completion already provided by `fpath` and enables the automatic subcommand list without generating a Tab cache.
-- **Help** (default for new registrations): reads `COMMAND --help` and discovered subcommand help, generating option names, subcommands, descriptions, and file/path arguments. It handles common English help layouts; arbitrary help formats, dynamic values, and inherited global options may require native completions. Scans use at most four workers, four subcommand levels, 128 help pages, five seconds per page, and 120 seconds overall.
+- **Help** (default for new registrations): reads `COMMAND --help` and discovered subcommand help, generating option names, subcommands, descriptions, and file/path arguments. Help is read in the C locale even when the command exits with a nonzero status. Flag names such as `--[no-]color` produce both `--color` and `--no-color`. It handles common English help layouts; arbitrary help formats, dynamic values, and inherited global options may require native completions. Scans use at most four workers, four subcommand levels, 128 help pages, five seconds per page, and 120 seconds overall. Unavailable child help and scan limits keep the information already collected; unavailable root help fails generation.
 - **Native generator**: enter an executable and its arguments as a JSON array, for example `["tool", "completion", "zsh"]`. No shell expansion or pipelines are applied. Use the CLI's documented generation command. A generator has a ten-second deadline.
 - **Completion file**: enter a path to a trusted zsh `#compdef` file. `~/` is supported. This also works for a CLI not installed yet.
 
 The source is explicit: zsh-turbo does not guess commands that might perform an unrelated action. Generator output and files are executable zsh code, just like existing `fpath` completions.
+
+Background help and generator commands are resolved through absolute PATH entries and executed by that resolved path, preserving symlink names used by shims. An executable found through an empty or relative PATH entry is rejected. The generator executable may also be an absolute path or start with `~/`; completion files and extra watched files must use one of these two forms. Relative paths such as `./generator` or `completions/_tool` are rejected because shell checks run in the current directory.
 
 ```toml
 [[completions]]
@@ -241,6 +245,6 @@ watch_files = [] # e.g. ["~/bin/tool-core"] for a wrapper's actual executable
 
 At shell startup and subsequent prompts (at least 30 seconds between checks), a background worker resolves executable paths and compares file metadata. It calculates SHA-256 only when metadata changes, then rebuilds when content, target path, registration, or extra watched files change. For a wrapper, shim, or plugin-driven CLI, add its actual executable/configuration files to **Extra files to watch**. Changes hidden behind an unchanged wrapper are not detected automatically. File sources watch both the completion file and the CLI executable when installed.
 
-Cache files live in `${XDG_CACHE_HOME:-~/.cache}/zsh-turbo/managed-completions`. Tab uses already loaded functions and checks the cache file with zsh's built-in stat module; the cache layer does not launch a CLI/help/hash process on every keypress or Tab. Native completion scripts can still run their own commands to fetch dynamic candidates. Generation is locked per CLI, syntax-checked, and atomically published. A failure preserves the last working cache and is shown in the TUI. Updates load on the next Tab after publication; a failed initial generation leaves existing zsh completion available. Missing/empty XDG cache settings fall back to `~/.cache`.
+Cache files live in `${XDG_CACHE_HOME:-~/.cache}/zsh-turbo/managed-completions`. Tab uses already loaded functions and checks the cache file with zsh's built-in stat module; the cache layer does not launch a CLI/help/hash process on every keypress or Tab. Native completion scripts can still run their own commands to fetch dynamic candidates. Generation is locked per CLI, syntax-checked, and atomically published. A failure preserves the last working cache and is shown in the TUI. Unchanged failed inputs are retried after five minutes; changed settings/files and `--force` bypass this wait. Updates load on the next Tab after publication; a failed initial generation leaves existing zsh completion available. Missing, empty, or relative XDG cache settings fall back to `~/.cache`. If no absolute cache directory can be determined, managed caches and automatic help lists are disabled; existing zsh completion remains available.
 
 Run `zsh-turbo completion-refresh` for an immediate change check, or add `--force` to rebuild without waiting for metadata to change. These commands report each registration's result.

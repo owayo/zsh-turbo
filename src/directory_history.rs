@@ -43,7 +43,9 @@ pub fn record(line: &str, cwd: &Path, store: &Path) -> io::Result<bool> {
         .open(path.with_extension("lock"))?;
     lock.lock()?;
     let mut bytes = match fs::read(&path) {
-        Ok(bytes) if bytes.len() <= MAX_BYTES && bytes.ends_with(b"\n") => bytes,
+        Ok(bytes) if bytes.len() <= MAX_BYTES && (bytes.is_empty() || bytes.ends_with(b"\n")) => {
+            bytes
+        }
         Ok(_) => return Ok(false),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error),
@@ -85,6 +87,17 @@ pub fn record(line: &str, cwd: &Path, store: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 空にした履歴ファイルへ再び記録できる() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("task-usage.json");
+        assert!(record("echo before", tmp.path(), &store).unwrap());
+        let path = path_in(tmp.path(), &store).unwrap();
+        fs::write(&path, []).unwrap();
+        assert!(record("echo after", tmp.path(), &store).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b": 0:0;echo after\n");
+    }
 
     #[test]
     fn 古い履歴を行単位で捨て保存件数とサイズを制限する() {

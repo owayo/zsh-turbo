@@ -41,7 +41,7 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **Custom Command Segments**: Define any segment in the TUI or TOML
 - **Parallel Execution**: All segments run concurrently via `std::thread::scope`
 - **Async Autosuggestions**: History-based with prefix, substring, and fuzzy strategies
-- **Syntax Highlighting**: Commands, assignments, redirections including fd duplication (`2>&1`), paths, glob patterns with shell escape handling, strings, variables including zsh special parameters, and newline command separators
+- **Syntax Highlighting**: Commands, assignments, redirections including fd duplication (`2>&1`), paths, glob patterns with shell escape handling, strings, variables including zsh special parameters, and newline command separators. Full-width spaces and other Unicode spaces remain part of the word, as in zsh. Partially quoted or escaped names suppress alias and reserved-word recognition.
 - **PATH-Aware Highlighting**: Executable files in the current directory are recognized when `$PATH` contains an empty entry, as zsh does
 - **Transient Prompt**: Previous prompts simplify after command execution
 - **Semantic Prompt Markers**: OSC 133 prompt markers for iTerm2 3.7+ and Warp, including right prompt and secondary prompt (`PS2`) ranges
@@ -53,7 +53,7 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **`zsh-turbo doctor`**: Diagnose terminal, fonts, tools, and config
 - **Enhanced Completions**: Case-insensitive, grouped, cached, color-coded, and optional external completion directories
 
-- **Managed CLI Completions**: Git is registered by default; its subcommand list includes `clean` from `git help -a`, while Tab keeps the existing zsh completion. Register any CLI in the Completions tab using help, a native generator, or a completion file. Select a registration and press Backspace (⌫) or `d` twice to remove it. Binary changes trigger background cache rebuilds; Tab uses the cache. See [configuration](docs/configuration.md#cli-completion-registration).
+- **Managed CLI Completions**: Git is registered by default; its subcommand list includes `clean` from `git help -a`, while Tab keeps the existing zsh completion. Register any CLI in the Completions tab using help, a native generator, or a completion file. Select a registration and press Backspace (⌫) or `d` twice to remove it. Binary changes trigger background cache rebuilds; Tab uses the cache. Background commands require absolute PATH entries; completion files and watched files use absolute paths or `~/`. Failed rebuilds preserve the working cache and wait five minutes before retrying unchanged inputs. See [configuration](docs/configuration.md#cli-completion-registration).
 
 ## Requirements
 
@@ -232,7 +232,7 @@ After installation, configure the terminal if needed and open a new terminal win
 
 ## Configuration
 
-Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` is non-empty; otherwise `~/.config/zsh-turbo/config.toml`.
+Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` is an absolute path; otherwise `~/.config/zsh-turbo/config.toml`. Empty and relative values use the default.
 
 Configuration saves use atomic replacement. Concurrent saves use independent, exclusively created temporary files so one writer cannot overwrite another writer's in-progress data.
 

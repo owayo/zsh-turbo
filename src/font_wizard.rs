@@ -312,10 +312,7 @@ fn config_candidates(terminal: TerminalKind) -> io::Result<Vec<PathBuf>> {
             "Library/Application Support/com.cmuxterm.app/config.ghostty",
         )]);
     }
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
+    let xdg = crate::config::config_base_from_xdg(std::env::var_os("XDG_CONFIG_HOME"));
     let mut choices = vec![xdg.join("ghostty/config.ghostty")];
     let old = xdg.join("ghostty/config");
     if old.exists() {
@@ -418,6 +415,20 @@ fn resolve_path(path: &Path) -> io::Result<PathBuf> {
 }
 
 fn write_config(path: &Path, expected: &str, updated: &str) -> io::Result<()> {
+    write_config_with_sequence(
+        path,
+        expected,
+        updated,
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
+    )
+}
+
+fn write_config_with_sequence(
+    path: &Path,
+    expected: &str,
+    updated: &str,
+    sequence: u64,
+) -> io::Result<()> {
     let current = match fs::read_to_string(path) {
         Ok(value) => value,
         Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
@@ -433,17 +444,16 @@ fn write_config(path: &Path, expected: &str, updated: &str) -> io::Result<()> {
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid config path"))?;
     fs::create_dir_all(parent)?;
-    let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let temp = parent.join(format!(
         ".{name}.zsh-turbo-{}-{sequence}",
         std::process::id()
     ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)?;
         if let Ok(metadata) = fs::metadata(path) {
             file.set_permissions(metadata.permissions())?;
         }
@@ -479,6 +489,25 @@ fn write_config(path: &Path, expected: &str, updated: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 一時ファイルの予約に失敗しても既存ファイルを残す() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        let temp = dir
+            .path()
+            .join(format!(".config.zsh-turbo-{}-42", std::process::id()));
+        fs::write(&config, "theme = dark\n").unwrap();
+        fs::write(&temp, "another writer\n").unwrap();
+        assert_eq!(
+            write_config_with_sequence(&config, "theme = dark\n", "theme = light\n", 42)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read_to_string(&config).unwrap(), "theme = dark\n");
+        assert_eq!(fs::read_to_string(&temp).unwrap(), "another writer\n");
+    }
 
     #[test]
     fn managed_block_is_idempotent_and_keeps_other_settings() {
