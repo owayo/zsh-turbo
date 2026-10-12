@@ -79,4 +79,41 @@ mod tests {
         assert_eq!(resolve_in("shim", &path_env).unwrap(), shim);
         assert!(resolve_in("./shim", &path_env).is_err());
     }
+
+    #[test]
+    fn 実行できる名前はコマンド名と絶対パスとホーム起点だけ() {
+        for program in ["tool", "/usr/bin/tool", "~/bin/tool"] {
+            assert!(valid_program(program), "{program}");
+        }
+        for program in ["", "bin/tool", "./tool", "../tool", "~user/tool"] {
+            assert!(!valid_program(program), "{program}");
+        }
+    }
+
+    #[test]
+    fn ホーム起点のパスはpathを探さずホームディレクトリに解決する() {
+        let home = dirs::home_dir().filter(|home| home.is_absolute()).unwrap();
+        assert_eq!(
+            resolve_in("~/bin/tool", std::ffi::OsStr::new("")).unwrap(),
+            home.join("bin/tool")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn 実行権限のないファイルとディレクトリを飛ばして次のpathを使う() {
+        use std::os::unix::fs::PermissionsExt;
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let third = tempfile::tempdir().unwrap();
+        std::fs::write(first.path().join("tool"), b"#!/bin/sh\n").unwrap();
+        std::fs::create_dir(second.path().join("tool")).unwrap();
+        let actual = third.path().join("tool");
+        std::fs::write(&actual, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&actual, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path_env = std::env::join_paths([first.path(), second.path(), third.path()]).unwrap();
+        assert_eq!(resolve_in("tool", &path_env).unwrap(), actual);
+        let error = resolve_in("missing-tool", &path_env).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
 }

@@ -830,6 +830,33 @@ prompt_style = "classic"
     }
 
     #[test]
+    fn カスタムセグメントは名前とコマンドだけで既定の色と表示条件を補う() {
+        let config: Config =
+            toml::from_str("[[prompt.custom]]\nname = 'weather'\ncommand = 'echo sunny'\n")
+                .unwrap();
+        let custom = &config.prompt.custom[0];
+        assert_eq!(custom.name, "weather");
+        assert_eq!(custom.command, "echo sunny");
+        assert_eq!(custom.icon, "");
+        assert_eq!(custom.fg, "white");
+        assert_eq!(custom.bg, "238");
+        assert_eq!(custom.when, "always");
+        // 必須の名前かコマンドが無ければ設定全体を読み込まない
+        assert!(toml::from_str::<Config>("[[prompt.custom]]\nname = 'weather'\n").is_err());
+    }
+
+    #[test]
+    fn 表示言語の切り替えは前後の操作が互いに逆になる() {
+        for language in [UiLanguage::Auto, UiLanguage::En, UiLanguage::Ja] {
+            assert_eq!(language.next().prev(), language);
+            assert_eq!(language.prev().next(), language);
+        }
+        // 3 つの値を一巡する
+        assert_eq!(UiLanguage::Auto.next().next().next(), UiLanguage::Auto);
+        assert_ne!(UiLanguage::Auto.next(), UiLanguage::Auto);
+    }
+
+    #[test]
     fn save_config_to_は新規ファイルを書き込み一時ファイルを残さない() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("config.toml");

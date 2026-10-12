@@ -1435,6 +1435,26 @@ mod tests {
     // ── segment_custom のテスト ─────────────────────────────────
 
     #[test]
+    fn make_segment_は組み込み以外の名前を設定のカスタムセグメントから引く() {
+        let mut config = Config::default();
+        config.prompt.custom = vec![CustomSegment {
+            name: "weather".into(),
+            command: "printf 'sunny\\n'".into(),
+            icon: "*".into(),
+            fg: "white".into(),
+            bg: "24".into(),
+            when: "always".into(),
+        }];
+        let icons = Icons::for_level(crate::icons::FontLevel::Ascii);
+        let seg = make_segment("weather", &config, &icons, 0, 0, 0)
+            .expect("設定にある名前ならカスタムセグメントを返す");
+        assert_eq!(seg.text, "sunny");
+        assert_eq!(seg.icon, "*");
+        // 設定にも組み込みにも無い名前は表示しない
+        assert!(make_segment("unknown", &config, &icons, 0, 0, 0).is_none());
+    }
+
+    #[test]
     fn segment_custom_標準出力を表示する() {
         let custom = CustomSegment {
             name: "test".into(),

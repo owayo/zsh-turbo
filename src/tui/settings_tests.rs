@@ -823,3 +823,49 @@ fn タスクの利用記録を左右キーとenterで切り替えて表示する
     terminal.draw(|frame| ui(frame, &mut app)).unwrap();
     assert!(format!("{:?}", terminal.backend().buffer()).contains("Record Task Usage: OFF"));
 }
+
+#[test]
+fn 補完の詳細画面で左右キーは登録を巡回し一覧画面では切り替えない() {
+    use crate::completion::Registration;
+    let completions = ["alpha", "beta", "gamma"]
+        .into_iter()
+        .map(|command| Registration {
+            command: command.into(),
+            ..Default::default()
+        })
+        .collect();
+    let mut app = App::new(
+        Config {
+            completions,
+            ..Default::default()
+        },
+        Lang::En,
+    );
+    app.tab = 7;
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.completion_index, 0);
+    assert!(!app.dirty);
+    app.completion_detail = true;
+    app.completion_focus = 0;
+    // 先頭から左で末尾へ、末尾から右で先頭へ戻る
+    press(&mut app, KeyCode::Left);
+    assert_eq!(app.completion_index, 2);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.completion_index, 0);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.completion_index, 1);
+
+    // 登録が無くても詳細画面の左右キーで panic しない
+    let mut empty = App::new(
+        Config {
+            completions: vec![],
+            ..Default::default()
+        },
+        Lang::En,
+    );
+    empty.tab = 7;
+    empty.completion_detail = true;
+    press(&mut empty, KeyCode::Left);
+    press(&mut empty, KeyCode::Right);
+    assert_eq!(empty.completion_index, 0);
+}
