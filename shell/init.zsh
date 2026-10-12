@@ -85,19 +85,33 @@ function _zsh_turbo_render_prompt() {
     if { IFS= read -r -d '' left && IFS= read -r -d '' right } < <(
         "$ZSH_TURBO_CMD" prompt --last-status "${_ZSH_TURBO_LAST_STATUS:-0}" --duration-ms "${_ZSH_TURBO_DURATION_MS:-0}" --jobs "${_ZSH_TURBO_JOBS:-0}" --side both 2>/dev/null
     ); then
-        PROMPT="$left"
-        RPROMPT="$right"
+        :
     else
-        PROMPT='%~ %# '
-        RPROMPT=''
+        left='%~ %# '
+        right=''
     fi
     # transient で表示を簡略化した後も、先頭の空行を維持する。
-    local prompt_body="$PROMPT"
+    local prompt_body="$left"
     typeset -g _ZSH_TURBO_PROMPT_PADDING=""
     while [[ "$prompt_body" == $'\n'* ]]; do
         _ZSH_TURBO_PROMPT_PADDING+=$'\n'
         prompt_body="${prompt_body#$'\n'}"
     done
+    # PROMPT_SUBST が有効だと、PROMPT の文字列は描画のたびに `$(...)` 等を評価される。
+    # ディレクトリ名やブランチ名を直接入れず変数の参照を置き、値は評価せずに表示させる。
+    # emulate -L は PROMPT_SUBST を戻さないため、ここで利用者の設定を判定できる。
+    typeset -g _ZSH_TURBO_LEFT_PROMPT="$left" _ZSH_TURBO_RIGHT_PROMPT="$right"
+    if [[ -o prompt_subst ]]; then
+        PROMPT='${_ZSH_TURBO_LEFT_PROMPT}'
+        if [[ -n "$right" ]]; then
+            RPROMPT='${_ZSH_TURBO_RIGHT_PROMPT}'
+        else
+            RPROMPT=''
+        fi
+    else
+        PROMPT="$left"
+        RPROMPT="$right"
+    fi
     _zsh_turbo_apply_semantic_prompt_markers
 }
 

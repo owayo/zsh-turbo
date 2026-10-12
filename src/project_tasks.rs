@@ -3,7 +3,6 @@ use crate::shell_words::is_blank;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-const MAX_PROJECT_FILE_BYTES: u64 = 1024 * 1024;
 /// 入力欄の下の一覧に送るタスクの上限。入力中は候補の最大数の行まで表示し、残りは ↓ のメニューで選ぶ
 pub const LIST_LIMIT: usize = 256;
 
@@ -228,10 +227,7 @@ fn matching(
 }
 
 fn read_small(path: &Path) -> Option<String> {
-    if path.metadata().ok()?.len() > MAX_PROJECT_FILE_BYTES {
-        return None;
-    }
-    std::fs::read_to_string(path).ok()
+    crate::small_file::read_to_string(path, crate::small_file::PROJECT_FILE_LIMIT)
 }
 
 fn safe_name(name: &str) -> bool {
@@ -249,11 +245,26 @@ fn make_targets(cwd: &Path) -> Vec<String> {
         return Vec::new();
     };
     let mut targets = Vec::new();
+    // 複数行の変数定義 (`define NAME` … `endef`) の入れ子の深さ。本文はルールではない
+    let mut define_depth = 0usize;
     for line in text.lines() {
         if line.starts_with('\t') {
             continue;
         }
         let line = line.split('#').next().unwrap_or("").trim();
+        let directive = line
+            .split_whitespace()
+            .find(|word| !matches!(*word, "override" | "export" | "private"));
+        if directive == Some("define") {
+            define_depth += 1;
+            continue;
+        }
+        if define_depth > 0 {
+            if directive == Some("endef") {
+                define_depth -= 1;
+            }
+            continue;
+        }
         let Some((heads, rest)) = line.split_once(':') else {
             continue;
         };
@@ -447,6 +458,8 @@ fn just_recipes(cwd: &Path) -> Vec<String> {
         }
         if let Some((head, tail)) = line.split_once(':') {
             let name = head.split_whitespace().next().unwrap_or("");
+            // `@name:` は各行の表示を抑えるだけで、呼び出し名は `@` を除いた名前
+            let name = name.strip_prefix('@').unwrap_or(name);
             if !tail.starts_with('=') && !private && !name.starts_with('_') && safe_name(name) {
                 names.push(name.to_owned());
             }
@@ -628,6 +641,42 @@ mod tests {
             labeled_in("mise r te", tmp.path(), 10),
             [("test".to_owned(), "mise r test".to_owned())]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn デバイスへのリンクのタスク定義は読まずに候補なしで返す() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["Makefile", "package.json"] {
+            std::os::unix::fs::symlink("/dev/zero", tmp.path().join(name)).unwrap();
+        }
+        assert!(candidates_in("make ", tmp.path(), 10).is_empty());
+        assert!(candidates_in("npm run ", tmp.path(), 10).is_empty());
+    }
+
+    #[test]
+    fn makefileのdefineからendefまでの本文はターゲットにしない() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Makefile"),
+            "define HELP_TEXT\nUsage: make <target>\nTargets:\n  build: compile everything\nendef\nexport HELP_TEXT\n\
+             override define NESTED\ndefine INNER\nphantom: x\nendef\nalso-phantom: y\nendef\n\
+             help:\n\t@echo \"$$HELP_TEXT\"\nbuild:\n\t@echo build\n",
+        )
+        .unwrap();
+        assert_eq!(make_targets(tmp.path()), ["build", "help"]);
+    }
+
+    #[test]
+    fn justの出力を抑えるレシピは先頭の記号を除いた名前で呼ぶ() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("justfile"),
+            "build:\n    cargo build\n\n@deploy:\n    ./deploy.sh\n\n@fmt target:\n    echo {{target}}\n\n@_hidden:\n    echo hidden\n",
+        )
+        .unwrap();
+        assert_eq!(just_recipes(tmp.path()), ["build", "deploy", "fmt"]);
+        assert!(defines("just", "deploy", tmp.path()));
     }
 
     #[test]

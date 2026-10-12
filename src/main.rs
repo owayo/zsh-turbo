@@ -13,6 +13,7 @@ mod path_candidates;
 mod project_tasks;
 mod prompt;
 mod shell_words;
+mod small_file;
 mod state;
 mod style;
 mod suggest;
@@ -686,6 +687,69 @@ fi
         assert_eq!(count_bytes(lines[1], b"\x1b]133;B\x07"), 1);
         assert_eq!(count_bytes(lines[2], b"\x1b]133;A;k=s\x07"), 1);
         assert_eq!(count_bytes(lines[2], b"\x1b]133;B\x07"), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_script_prompt_substが有効でもディレクトリ名などを評価せずに表示する() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let fake_bin = tmp.path().join("zsh-turbo");
+        std::fs::write(
+            &fake_bin,
+            "#!/bin/sh\n[ \"$1\" = prompt ] && printf '%s\\000%s\\000' \"$ZT_TEST_LEFT\" \"$ZT_TEST_RIGHT\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // ディレクトリ名・ブランチ名として入り得る文字列 (Rust 側で `%` は `%%` にしてある)
+        let left = "\n\np$(touch zt-marker) `touch zt-marker` $((1 + 2)) $HOME 100%% \\tail";
+        let right = "`touch zt-marker` $(touch zt-marker)";
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let zsh_code = format!(
+            // シェル連携を無効にすると印を付ける関数が 1 を返すため、source の終了状態は見ない
+            "setopt SH_GLOB NO_UNSET\nsource {}\n\
+             if [[ $ZT_TEST_SUBST == on ]]; then setopt prompt_subst; else unsetopt prompt_subst; fi\n\
+             _zsh_turbo_precmd\n\
+             print -rnP -- \"$PROMPT\"; print -rn -- $'\\0'\n\
+             print -rnP -- \"$RPROMPT\"; print -rn -- $'\\0'\n\
+             print -rn -- ${{#_ZSH_TURBO_PROMPT_PADDING}}\n",
+            shell_single_quote(&script.display().to_string())
+        );
+        let path = format!(
+            "{}:{}",
+            tmp.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        for subst in ["on", "off"] {
+            let output = std::process::Command::new("zsh")
+                .args(["-dfi", "-c", &zsh_code])
+                .current_dir(tmp.path())
+                .env("PATH", &path)
+                .env("ZDOTDIR", tmp.path())
+                .env("XDG_STATE_HOME", tmp.path().join("state"))
+                .env("XDG_CACHE_HOME", tmp.path().join("cache"))
+                .env("ZSH_TURBO_TERM_SHELL_INTEGRATION", "0")
+                .env("ZT_TEST_LEFT", left)
+                .env("ZT_TEST_RIGHT", right)
+                .env("ZT_TEST_SUBST", subst)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "prompt_subst={subst}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let parts: Vec<&str> = stdout.split('\0').collect();
+            assert_eq!(parts[0], left.replace("%%", "%"), "prompt_subst={subst}");
+            assert_eq!(parts[1], right, "prompt_subst={subst}");
+            assert_eq!(parts[2], "2", "prompt_subst={subst}");
+            assert!(
+                !tmp.path().join("zt-marker").exists(),
+                "prompt_subst={subst} でコマンドが実行された"
+            );
+        }
     }
 
     #[test]
