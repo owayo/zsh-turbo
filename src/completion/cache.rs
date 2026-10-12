@@ -6,7 +6,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const VERSION: u32 = 2;
+// 生成する補完スクリプトの形を変えたら上げ、既存のキャッシュを作り直させる。
+const VERSION: u32 = 3;
 const FAILURE_BACKOFF: u64 = 300;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

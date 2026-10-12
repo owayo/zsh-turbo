@@ -404,10 +404,12 @@ fn function(command: &str, path: &[String]) -> String {
     )
 }
 
+// 補完関数は候補を追加したときだけ 0 を返す。0 を返すと _main_complete が matcher-list の
+// 残りの照合 (部分一致など) を試さないため、末尾の case の終了状態をそのまま返さない。
 fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
     let mut script = String::new();
     for (path, help) in nodes {
-        script.push_str(&format!("{}() {{\n emulate -L zsh\n setopt extendedglob ${{_comp_options[@]}}\n local context state state_descr line\n local -a commands\n typeset -A opt_args\n _arguments -s -S -C", function(command, path)));
+        script.push_str(&format!("{}() {{\n emulate -L zsh\n setopt extendedglob ${{_comp_options[@]}}\n local context state state_descr line ret=1\n local -a commands\n typeset -A opt_args\n _arguments -s -S -C", function(command, path)));
         let mut specs = Vec::new();
         for option in &help.options {
             for flag in &option.flags {
@@ -448,7 +450,7 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
         for spec in specs {
             script.push_str(&format!(" \\\n  {}", quote(&spec)));
         }
-        script.push('\n');
+        script.push_str(" && ret=0\n");
         if !help.commands.is_empty() {
             script.push_str(" case $state in\n commands)\n commands=(\n");
             for (name, desc) in &help.commands {
@@ -457,13 +459,15 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
                     quote(&format!("{name}:{}", escape(desc)))
                 ));
             }
-            script.push_str(" )\n _describe command commands ;;\n args)\n case ${words[1]} in\n");
+            script.push_str(
+                " )\n _describe command commands && ret=0 ;;\n args)\n case ${words[1]} in\n",
+            );
             for (name, _) in &help.commands {
                 let mut child = path.clone();
                 child.push(name.clone());
                 if nodes.contains_key(&child) {
                     script.push_str(&format!(
-                        " {}) {} ;;\n",
+                        " {}) {} && ret=0 ;;\n",
                         quote(name),
                         function(command, &child)
                     ));
@@ -471,7 +475,7 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
             }
             script.push_str(" esac ;;\n esac\n");
         }
-        script.push_str("}\n");
+        script.push_str(" return ret\n}\n");
     }
     script.push_str(&format!(
         "compdef {} {}\n",
@@ -500,7 +504,7 @@ mod tests {
         assert!(script.contains("good:Usable"));
         assert!(script.contains("--usable[Usable flag]"));
         assert!(script.contains(&format!(
-            "'good') {} ;;",
+            "'good') {} && ret=0 ;;",
             function("demo", &["good".into()])
         )));
         assert!(!script.contains("'broken')"));
@@ -576,6 +580,28 @@ mod tests {
             escape(&format!("{}[ignored", "a".repeat(512))),
             "a".repeat(512)
         );
+    }
+
+    #[test]
+    fn 候補を足せたときだけ補完関数が0を返す() {
+        let parent = parse("Options:\n  --config <FILE>  Config file\nCommands:\n  child  Child\n");
+        let child = parse("Options:\n  --flag  Flag\n");
+        let nodes = BTreeMap::from([(Vec::new(), parent), (vec!["child".to_string()], child)]);
+        let script = render("demo", &nodes);
+        // 末尾の case の終了状態 (一致しなければ 0) を返さず、各補完の成否だけを ret に集める
+        assert_eq!(
+            script
+                .matches(" local context state state_descr line ret=1\n")
+                .count(),
+            2
+        );
+        assert_eq!(script.matches(" && ret=0\n").count(), 2);
+        assert_eq!(script.matches(" return ret\n}\n").count(), 2);
+        assert!(script.contains(" _describe command commands && ret=0 ;;\n"));
+        assert!(script.contains(&format!(
+            " 'child') {} && ret=0 ;;\n",
+            function("demo", &["child".into()])
+        )));
     }
 
     #[test]

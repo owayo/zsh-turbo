@@ -187,6 +187,25 @@ fn suggest_highlight_style(value: &str) -> String {
     format!("fg={color}")
 }
 
+/// 検索する履歴ファイルを決める。`--directory-history` か、`--history-file` が未指定・空なら
+/// ディレクトリ別履歴を使う。保存先が決まらなければ `None` を返し、呼び出し側は
+/// 共通の履歴へフォールバックせずに終える。
+fn resolve_history_file(history_file: Option<String>, directory_history: bool) -> Option<String> {
+    resolve_history_file_with(history_file, directory_history, directory_history::path)
+}
+
+fn resolve_history_file_with(
+    history_file: Option<String>,
+    directory_history: bool,
+    directory_path: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Option<String> {
+    if directory_history || history_file.as_deref().is_none_or(str::is_empty) {
+        directory_path().map(|path| path.to_string_lossy().into_owned())
+    } else {
+        history_file
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -235,18 +254,13 @@ fn main() {
             selected,
         } => {
             let config = config::load_config();
-            let history_file =
-                if directory_history || history_file.as_deref().is_none_or(str::is_empty) {
-                    let Some(path) = directory_history::path() else {
-                        if ui_list {
-                            print!("v1\tnone\t0\tcomplete\t0\t\nend\n");
-                        }
-                        return;
-                    };
-                    Some(path.to_string_lossy().into_owned())
-                } else {
-                    history_file
-                };
+            let Some(history_file) = resolve_history_file(history_file, directory_history) else {
+                if ui_list {
+                    print!("v1\tnone\t0\tcomplete\t0\t\nend\n");
+                }
+                return;
+            };
+            let history_file = Some(history_file);
             let strat = suggest::Strategy::from_str(
                 strategy.as_deref().unwrap_or(&config.suggest.strategy),
             );
@@ -335,15 +349,10 @@ fn main() {
             max,
             project_only,
         } => {
-            let history_file =
-                if directory_history || history_file.as_deref().is_none_or(str::is_empty) {
-                    let Some(path) = directory_history::path() else {
-                        return;
-                    };
-                    Some(path.to_string_lossy().into_owned())
-                } else {
-                    history_file
-                };
+            let Some(history_file) = resolve_history_file(history_file, directory_history) else {
+                return;
+            };
+            let history_file = Some(history_file);
             let max = max.unwrap_or_else(|| config::load_config().suggest.max_suggestions);
             let completions = if project_only {
                 project_tasks::candidates(&prefix, max)
@@ -548,6 +557,35 @@ mod tests {
     #[test]
     fn suggest_highlight_style_は空値で安全な既定値を返す() {
         assert_eq!(suggest_highlight_style("  "), "fg=8");
+    }
+
+    #[test]
+    fn 履歴ファイルは明示された空でないパスだけを使いそれ以外はディレクトリ別履歴にする() {
+        let dir = || Some(std::path::PathBuf::from("/state/history/abc"));
+        let explicit = Some("/tmp/hist".to_string());
+        let directory = Some("/state/history/abc".to_string());
+        assert_eq!(resolve_history_file_with(None, false, dir), directory);
+        assert_eq!(
+            resolve_history_file_with(Some(String::new()), false, dir),
+            directory
+        );
+        assert_eq!(
+            resolve_history_file_with(explicit.clone(), true, dir),
+            directory
+        );
+        // 明示されたパスではディレクトリ別履歴の保存先を求めない
+        assert_eq!(
+            resolve_history_file_with(explicit.clone(), false, || unreachable!()),
+            explicit
+        );
+        // 空白だけのパスは空文字列と同一視しない
+        assert_eq!(
+            resolve_history_file_with(Some(" ".into()), false, || unreachable!()),
+            Some(" ".into())
+        );
+        // 保存先が決まらなければ共通の履歴へフォールバックしない
+        assert_eq!(resolve_history_file_with(None, false, || None), None);
+        assert_eq!(resolve_history_file_with(explicit, true, || None), None);
     }
 
     #[test]
