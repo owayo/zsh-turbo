@@ -41,11 +41,11 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **Custom Command Segments**: Define any segment in the TUI or TOML
 - **Parallel Execution**: All segments run concurrently via `std::thread::scope`
 - **Async Autosuggestions**: History-based with prefix, substring, and fuzzy strategies
-- **Syntax Highlighting**: Commands, assignments, redirections including fd duplication (`2>&1`), paths, glob patterns with shell escape handling, strings, variables including zsh special parameters, and newline command separators
+- **Syntax Highlighting**: Commands, assignments, redirections including fd duplication (`2>&1`), paths, glob patterns with shell escape handling, strings, variables including zsh special parameters, and newline command separators. Full-width spaces and other Unicode spaces remain part of the word, as in zsh. Partially quoted or escaped names suppress alias and reserved-word recognition.
 - **PATH-Aware Highlighting**: Executable files in the current directory are recognized when `$PATH` contains an empty entry, as zsh does
 - **Transient Prompt**: Previous prompts simplify after command execution
 - **Semantic Prompt Markers**: OSC 133 prompt markers for iTerm2 3.7+ and Warp, including right prompt and secondary prompt (`PS2`) ranges
-- **Robust zsh Integration**: Initialization, widgets, and `compinit` tolerate user shell options such as `SH_GLOB` and `NO_UNSET`, and CLI values derived from zsh buffers accept leading `-`
+- **Robust zsh Integration**: Initialization, widgets, and `compinit` tolerate user shell options such as `SH_GLOB` and `NO_UNSET`, preserve existing ZLE hooks and larger history limits, and accept CLI buffer values beginning with `-`. Suggestions and highlighting are limited to command input, excluding `vared` and `select`.
 - **Safe Prompt Output**: Segment text escapes zsh prompt expansion and replaces terminal control characters
 - **Interactive Configuration TUI**: Edit every setting in tabs (Prompt / Segments / Git / Suggest / Style / Custom / Shell / Completions), with live preview
 - **`zsh-turbo install-font`**: Download MesloLGS NF into the OS user font directory
@@ -53,7 +53,7 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **`zsh-turbo doctor`**: Diagnose terminal, fonts, tools, and config
 - **Enhanced Completions**: Case-insensitive, grouped, cached, color-coded, and optional external completion directories
 
-- **Managed CLI Completions**: Git is registered by default; its subcommand list includes `clean` from `git help -a`, while Tab keeps the existing zsh completion. Register any CLI in the Completions tab using help, a native generator, or a completion file. Select a registration and press Backspace (⌫) or `d` twice to remove it. Binary changes trigger background cache rebuilds; Tab uses the cache. See [configuration](docs/configuration.md#cli-completion-registration).
+- **Managed CLI Completions**: Git is registered by default; its subcommand list includes `clean` from `git help -a`, while Tab keeps the existing zsh completion. Register any CLI in the Completions tab using help, a native generator, or a completion file. Select a registration and press Backspace (⌫) or `d` twice to remove it. Binary changes trigger background cache rebuilds; Tab uses the cache. Background commands require absolute PATH entries; completion files and watched files use absolute paths or `~/`. Failed rebuilds preserve the working cache and wait five minutes before retrying unchanged inputs. See [configuration](docs/configuration.md#cli-completion-registration).
 
 ## Requirements
 
@@ -168,7 +168,7 @@ In `zsh-turbo configure`, use **Style → Rainbow palette** to choose from 14 pa
 | Key         | Action                  |
 | ----------- | ----------------------- |
 | Right Arrow | Accept one path segment or the next word |
-| Alt+F       | Accept one word         |
+| Alt+F       | Accept one word (emacs keymap) |
 | Ctrl+Right  | Accept one word         |
 | Up Arrow    | History search (prefix) |
 | Down Arrow  | Select from a visible list (tasks, commands, files), starting at the entry matching the ghost suggestion (or the first) and filtering it as you type; otherwise search history (prefix) |
@@ -185,6 +185,8 @@ Equally strong matches are ranked by frequency, then recency. `Ctrl+R` searches 
 History suggestions prefer a prefix match over substring and fuzzy matches across the entire history file. Incomplete final entries and fragments of multiline commands are excluded, including fragments at the 64 KiB read boundary. Only the top candidates are selected, avoiding a full sort of all matches.
 
 Ghost suggestions and Ctrl+R use history recorded in the directory where each command ran. Commands from other directories and older shared history without directory metadata are excluded. Regular Up/Down navigation still uses shared shell history. Suggestions accumulate as you run commands in each directory after enabling this feature. Records live in `${XDG_STATE_HOME:-~/.local/state}/zsh-turbo/directory-history/`; set `[suggest].record_directory_history = false` to stop new records. See [stored content and deletion](docs/configuration.md#directory-history).
+
+Shell recording respects disabled history saving and `HISTORY_IGNORE`. When a `zshaddhistory` hook is present, recording stops by default because its exclusions cannot be identified from `preexec`. See [recording exclusions](docs/configuration.md#directory-history) before opting in. History files also preserve escaped trailing spaces and exclude all multiline continuations.
 
 Project tasks in the current directory take priority over history suggestions. Typing `make` shows targets from the Makefile below the input, and `just` and `task` show their recipes and tasks the same way. Commands that run scripts through a subcommand show them after it: `npm run`, `pnpm run`, `bun run`, `yarn run`, `uv run`, `deno task`, and `mise run`. Typing only the name of a registered CLI, such as `brew`, or a supported task runner, such as `uv` or `npm`, lists its subcommands instead (options after `-`). Disabled registrations are excluded. Registered files and generators provide Tab completion; the automatic list reads the CLI help. Candidates and available descriptions are cached from `--help` (`git help -a` for Git). Help that lists usage examples instead of commands is also supported; for example, `brew` and `brew i` show commands such as `install`. Only executables found through absolute PATH entries are queried. Further input filters the list by prefix. Press Down while the list is visible to select the ghost suggestion's task, then use Up/Down (or Shift+Tab to move up) to move through the tasks. The list stays in one column, with the selected task highlighted in cyan. Typing while a task is selected adds the characters to the input and filters the list in place; pasting and Backspace work the same way. For example, with `install` selected after `make`, typing `i` changes the input to `make i` and leaves only the targets starting with `i`. While you are selecting, the list also keeps a task whose name matches what you typed exactly, so with `fmt` and `fmt-check` defined, typing `fmt` and pressing Enter inserts `make fmt`, not `make fmt-check`. Tab or Enter inserts the selected command without running it; before you enter the list, Enter runs the line as typed, such as `make`. The selection ends when nothing matches what you typed. Esc cancels only the selection, and Ctrl+C also closes the list until you edit the input. In each case, the characters you typed stay in the input. Task files are parsed without running the tools. Tab accepts the ghost suggestion before entering the list; **Suggest → Tab: Default** uses normal zsh completion. See [supported commands and task files](docs/configuration.md#project-task-completion).
 
@@ -232,7 +234,7 @@ After installation, configure the terminal if needed and open a new terminal win
 
 ## Configuration
 
-Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` is non-empty; otherwise `~/.config/zsh-turbo/config.toml`.
+Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` is an absolute path; otherwise `~/.config/zsh-turbo/config.toml`. Empty and relative values use the default.
 
 Configuration saves use atomic replacement. Concurrent saves use independent, exclusively created temporary files so one writer cannot overwrite another writer's in-progress data.
 

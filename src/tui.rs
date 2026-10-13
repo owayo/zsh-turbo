@@ -1976,63 +1976,14 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
 
-    // テキスト編集モード
+    // 色の選択
     if app.color_picker.is_some() {
         colors::handle_picker(app, key);
         return false;
     }
+    // テキスト編集モード
     if app.editing.is_some() {
-        match key.code {
-            KeyCode::Enter
-                if key.modifiers.contains(KeyModifiers::ALT)
-                    && matches!(
-                        app.editing,
-                        Some(EditTarget::Custom(_, CustomField::Command))
-                    ) =>
-            {
-                app.edit_buffer.insert(app.edit_cursor, '\n');
-                app.edit_cursor += 1;
-            }
-            KeyCode::Enter => app.confirm_edit(),
-            KeyCode::Esc => app.cancel_edit(),
-            KeyCode::Backspace => {
-                if app.edit_cursor > 0 {
-                    let prev = app.edit_buffer[..app.edit_cursor]
-                        .char_indices()
-                        .next_back()
-                        .unwrap()
-                        .0;
-                    app.edit_buffer.drain(prev..app.edit_cursor);
-                    app.edit_cursor = prev;
-                }
-            }
-            KeyCode::Left => {
-                app.edit_cursor = app.edit_buffer[..app.edit_cursor]
-                    .char_indices()
-                    .next_back()
-                    .map_or(0, |(i, _)| i)
-            }
-            KeyCode::Right => {
-                if let Some(c) = app.edit_buffer[app.edit_cursor..].chars().next() {
-                    app.edit_cursor += c.len_utf8();
-                }
-            }
-            KeyCode::Home => app.edit_cursor = 0,
-            KeyCode::End => app.edit_cursor = app.edit_buffer.len(),
-            KeyCode::Delete if app.edit_cursor < app.edit_buffer.len() => {
-                app.edit_buffer.remove(app.edit_cursor);
-            }
-            // Ctrl/Alt 付きキー (Ctrl+C 等) を生文字として挿入しない
-            KeyCode::Char(c)
-                if !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                app.edit_buffer.insert(app.edit_cursor, c);
-                app.edit_cursor += c.len_utf8();
-            }
-            _ => {}
-        }
+        handle_edit_key(app, key);
         return false;
     }
 
@@ -2125,6 +2076,61 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
         _ => {}
     }
     false
+}
+
+/// テキスト編集中のキー入力。カーソルは UTF-8 のバイト位置で、常に文字境界に置く。
+fn handle_edit_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter
+            if key.modifiers.contains(KeyModifiers::ALT)
+                && matches!(
+                    app.editing,
+                    Some(EditTarget::Custom(_, CustomField::Command))
+                ) =>
+        {
+            app.edit_buffer.insert(app.edit_cursor, '\n');
+            app.edit_cursor += 1;
+        }
+        KeyCode::Enter => app.confirm_edit(),
+        KeyCode::Esc => app.cancel_edit(),
+        KeyCode::Backspace => {
+            if app.edit_cursor > 0 {
+                let prev = app.edit_buffer[..app.edit_cursor]
+                    .char_indices()
+                    .next_back()
+                    .unwrap()
+                    .0;
+                app.edit_buffer.drain(prev..app.edit_cursor);
+                app.edit_cursor = prev;
+            }
+        }
+        KeyCode::Left => {
+            app.edit_cursor = app.edit_buffer[..app.edit_cursor]
+                .char_indices()
+                .next_back()
+                .map_or(0, |(i, _)| i)
+        }
+        KeyCode::Right => {
+            if let Some(c) = app.edit_buffer[app.edit_cursor..].chars().next() {
+                app.edit_cursor += c.len_utf8();
+            }
+        }
+        KeyCode::Home => app.edit_cursor = 0,
+        KeyCode::End => app.edit_cursor = app.edit_buffer.len(),
+        KeyCode::Delete if app.edit_cursor < app.edit_buffer.len() => {
+            app.edit_buffer.remove(app.edit_cursor);
+        }
+        // Ctrl/Alt 付きキー (Ctrl+C 等) を生文字として挿入しない
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            app.edit_buffer.insert(app.edit_cursor, c);
+            app.edit_cursor += c.len_utf8();
+        }
+        _ => {}
+    }
 }
 
 fn handle_left(app: &mut App) {
@@ -3046,6 +3052,33 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT);
         handle_event(&mut app, key);
         assert_eq!(app.edit_buffer, "aB");
+    }
+
+    #[test]
+    fn handle_event_編集モードのsは保存せず文字として入る() {
+        let mut app = App::new(Config::default(), Lang::En);
+        // 誤って保存処理に入っても、外部変更の検知で止まり実環境の設定を書き換えない
+        app.initial_config_bytes = Some(Some(b"\0not-a-config".to_vec()));
+        app.start_edit(EditTarget::HomeSymbol);
+        app.edit_buffer.clear();
+        app.edit_cursor = 0;
+        for c in ['s', 'S'] {
+            assert!(!handle_event(&mut app, KeyEvent::from(KeyCode::Char(c))));
+        }
+        assert_eq!(app.edit_buffer, "sS");
+        assert!(app.editing.is_some());
+        assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn handle_event_alt_enterはコマンド欄以外では通常の確定になる() {
+        let mut app = App::new(Config::default(), Lang::En);
+        app.start_edit(EditTarget::HomeSymbol);
+        app.edit_buffer = "NEW".into();
+        app.edit_cursor = app.edit_buffer.len();
+        handle_event(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        assert!(app.editing.is_none());
+        assert_eq!(app.config.prompt.dir.home_symbol, "NEW");
     }
 
     // ── セグメントリストの空化境界 ─────────────────────────────

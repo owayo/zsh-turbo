@@ -9,6 +9,9 @@ zpty -b fixture zsh -di || exit 1
     await_fixture buffer 'demohelp --before ' || exit 2
     zpty -w -n fixture $'\x15demohelp remote --trans\t'
     await_fixture buffer 'demohelp remote --transport=' || exit 3
+    # 候補を足せなかった補完関数が 0 を返すと、部分一致の matcher まで進まない
+    zpty -w -n fixture $'\x15demohelp --config ettings\t'
+    await_fixture buffer 'demohelp --config sample-settings.toml ' || exit 7
     zpty -w -n fixture $'\x15demogen --nat\t'
     await_fixture buffer 'demogen --native ' || exit 4
     zpty -w -n fixture $'\x15demofile --file-o\t'

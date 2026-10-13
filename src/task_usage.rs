@@ -67,10 +67,14 @@ pub fn store_path() -> Option<PathBuf> {
 }
 
 fn store_path_from(state_home: Option<OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
+    // 相対パスのホームも、記録を実行したディレクトリ (プロジェクトの中) に書くことになるため使わない
     let base = state_home
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .or_else(|| home.map(|home| home.join(".local/state")))?;
+        .or_else(|| {
+            home.filter(|home| home.is_absolute())
+                .map(|home| home.join(".local/state"))
+        })?;
     Some(base.join("zsh-turbo").join("task-usage.json"))
 }
 
@@ -470,7 +474,8 @@ mod tests {
                 ))
             );
         }
-        // ホームも分からなければ記録しない (カレントディレクトリへ書かない)
+        // ホームも分からない・相対パスなら記録しない (カレントディレクトリへ書かない)
         assert_eq!(store_path_from(None, None), None);
+        assert_eq!(store_path_from(None, Some(PathBuf::from("home"))), None);
     }
 }

@@ -1,3 +1,4 @@
+use crate::shell_words::is_blank;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
@@ -18,6 +19,74 @@ static BUILTIN_SET: LazyLock<HashSet<&'static str>> =
 static RESERVED_SET: LazyLock<HashSet<&'static str>> =
     LazyLock::new(|| RESERVED_WORDS.iter().copied().collect());
 
+/// 次の語をコマンド名として分類するかを決める走査状態。
+/// フラグを個別に書き換えず、トークンの種類ごとの遷移メソッドだけで更新する
+/// (区切りやリダイレクトの後で一部のフラグを落とし忘れると、後続の語を誤分類する)。
+#[derive(Debug, Clone, Copy)]
+struct CommandPosition {
+    is_command_position: bool,
+    after_pipe_or_semi: bool,
+    // 直前の語が sudo/env 等のプレフィックスコマンドだったか。
+    // プレフィックス直後のオプション (`sudo -u` 等) の扱いにのみ使う。
+    after_prefix_command: bool,
+}
+
+impl CommandPosition {
+    fn initial() -> Self {
+        Self {
+            is_command_position: true,
+            after_pipe_or_semi: false,
+            after_prefix_command: false,
+        }
+    }
+
+    fn expects_command(&self) -> bool {
+        self.is_command_position || self.after_pipe_or_semi
+    }
+
+    fn after_prefix(&self) -> bool {
+        self.after_prefix_command
+    }
+
+    /// 改行・`;`・`|`・`&` 等の区切りの後は、新しいコマンドが始まる。
+    fn separator(&mut self) {
+        *self = Self {
+            is_command_position: true,
+            after_pipe_or_semi: true,
+            after_prefix_command: false,
+        };
+    }
+
+    /// 変数展開や全体がクォートの語など、コマンド名として消費された語の後。
+    fn consume_command_name(&mut self) {
+        *self = Self {
+            is_command_position: false,
+            after_pipe_or_semi: false,
+            after_prefix_command: false,
+        };
+    }
+
+    /// リダイレクトの後の語はリダイレクト先で、新しいコマンドではない。
+    fn redirect(&mut self) {
+        self.consume_command_name();
+    }
+
+    /// 代入語の後もコマンド位置が続く。プレフィックス直後の状態は保持する
+    /// (`env FOO=bar -u value` の `-u` をオプションとして扱う)。
+    fn assignment(&mut self) {
+        self.is_command_position = true;
+        self.after_pipe_or_semi = false;
+    }
+
+    /// コマンド名を分類した後。プレフィックスコマンドや後続がコマンドの予約語なら
+    /// 次の語もコマンド位置として扱う。
+    fn command_word(&mut self, logical: &str, quoted: bool) {
+        self.is_command_position = keeps_command_position(logical, quoted);
+        self.after_prefix_command = is_prefix_command(logical);
+        self.after_pipe_or_semi = false;
+    }
+}
+
 /// シェルコマンドラインのトークンを分類し、ハイライトスパンを返す。
 pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Span> {
     if buffer.is_empty() {
@@ -30,11 +99,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
     let path_cmds = build_path_cache();
     let mut spans = Vec::new();
     let mut pos = 0;
-    let mut is_command_position = true;
-    let mut after_pipe_or_semi = false;
-    // 直前の語が sudo/env 等のプレフィックスコマンドだったか。
-    // プレフィックス直後のオプション (`sudo -u` 等) の扱いにのみ使う。
-    let mut after_prefix_command = false;
+    let mut position = CommandPosition::initial();
 
     let chars: Vec<char> = buffer.chars().collect();
 
@@ -42,14 +107,12 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
         // 改行はシェル構文上のコマンド区切りとして扱う。
         if chars[pos] == '\n' {
             pos += 1;
-            is_command_position = true;
-            after_pipe_or_semi = true;
-            after_prefix_command = false;
+            position.separator();
             continue;
         }
 
         // 空白をスキップ
-        if chars[pos].is_whitespace() {
+        if is_blank(chars[pos]) {
             pos += 1;
             continue;
         }
@@ -80,9 +143,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                 style: "fg=cyan".into(),
             });
             // 変数展開がコマンド名として消費されるため、区切り直後フラグも落とす。
-            is_command_position = false;
-            after_pipe_or_semi = false;
-            after_prefix_command = false;
+            position.consume_command_name();
             continue;
         }
 
@@ -111,12 +172,10 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                     end: pos,
                     style: "fg=magenta".into(),
                 });
-                is_command_position = false;
                 // `;`/`|` 直後にリダイレクトが来た場合、次の単語はリダイレクト先
-                // (ファイル名等) であって新コマンドではないため、after_pipe_or_semi も
-                // 落とす必要がある (例: `; > file nextcmd` の file をコマンドと誤認しない)。
-                after_pipe_or_semi = false;
-                after_prefix_command = false;
+                // (ファイル名等) であって新コマンドではないため、区切り直後の状態も
+                // 落とす (例: `; > file nextcmd` の file をコマンドと誤認しない)。
+                position.redirect();
                 continue;
             }
         }
@@ -132,9 +191,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                 end: pos,
                 style: "fg=magenta".into(),
             });
-            is_command_position = false;
-            after_pipe_or_semi = false;
-            after_prefix_command = false;
+            position.redirect();
             continue;
         }
 
@@ -154,9 +211,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                 end: pos,
                 style: "fg=magenta".into(),
             });
-            is_command_position = false;
-            after_pipe_or_semi = false;
-            after_prefix_command = false;
+            position.redirect();
             continue;
         }
 
@@ -173,9 +228,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                 end: pos,
                 style: "fg=magenta".into(),
             });
-            is_command_position = true;
-            after_pipe_or_semi = true;
-            after_prefix_command = false;
+            position.separator();
             continue;
         }
 
@@ -189,7 +242,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
         // クォート外の文字のみ (引数位置でのオプション/パス/glob 判定用)
         let mut bare = String::new();
         while pos < chars.len()
-            && !chars[pos].is_whitespace()
+            && !is_blank(chars[pos])
             && !matches!(chars[pos], '|' | '&' | ';' | '>' | '<')
         {
             if chars[pos] == '\'' {
@@ -243,30 +296,31 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
             pos += 1;
         }
 
-        if is_command_position || after_pipe_or_semi {
+        if position.expects_command() {
             if bare.is_empty() && !quote_segs.is_empty() {
                 // 全体がクォートの語 (`; 'ls' -la` 等) はコマンド名として消費される。
                 // 中身は分類せず文字列色のみ付け、後続をコマンド誤分類しない。
                 push_quote_segs(&mut spans, &quote_segs);
-                is_command_position = false;
-                after_pipe_or_semi = false;
-                after_prefix_command = false;
+                position.consume_command_name();
                 continue;
             }
 
-            if is_assignment_word(&logical) {
+            let quoted_name = chars[word_start..pos]
+                .iter()
+                .take_while(|&&c| c != '=')
+                .any(|&c| matches!(c, '\'' | '"' | '\\'));
+            if !quoted_name && is_assignment_word(&logical) {
                 spans.push(Span {
                     start: word_start,
                     end: pos,
                     style: "fg=cyan".into(),
                 });
                 push_quote_segs(&mut spans, &quote_segs);
-                is_command_position = true;
-                after_pipe_or_semi = false;
+                position.assignment();
                 continue;
             }
 
-            if after_prefix_command && logical.starts_with('-') {
+            if position.after_prefix() && logical.starts_with('-') {
                 // プレフィックスコマンド直後のオプション (`sudo -u` 等) は
                 // 未知コマンド (赤) ではなくオプションとして扱う。値付きオプションを
                 // 区別できないため、以降はコマンド位置を消費する (誤検出ゼロ優先)。
@@ -275,25 +329,20 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                     end: pos,
                     style: "fg=cyan".into(),
                 });
-                is_command_position = false;
-                after_pipe_or_semi = false;
-                after_prefix_command = false;
+                position.consume_command_name();
                 continue;
             }
 
             // コマンド位置: 単語を分類
-            let style = classify_command(&logical, &alias_set, &func_set, &path_cmds);
+            let quoted = !quote_segs.is_empty() || bare.contains('\\');
+            let style = classify_command(&logical, quoted, &alias_set, &func_set, &path_cmds);
             spans.push(Span {
                 start: word_start,
                 end: pos,
                 style,
             });
             push_quote_segs(&mut spans, &quote_segs);
-            // プレフィックスコマンドや `if`/`then` 等の後続コマンドを取る予約語では
-            // 次の単語もコマンド位置を維持する。
-            is_command_position = keeps_command_position(&logical);
-            after_prefix_command = is_prefix_command(&logical);
-            after_pipe_or_semi = false;
+            position.command_word(&logical, quoted);
         } else if bare.starts_with('-') {
             // オプション
             spans.push(Span {
@@ -347,21 +396,22 @@ fn push_quote_segs(spans: &mut Vec<Span>, segs: &[(usize, usize)]) {
 
 /// 後続の単語をコマンド位置として扱い続ける語。
 /// プレフィックスコマンドに加え、後続がコマンドである予約語を含む。
-fn keeps_command_position(word: &str) -> bool {
+fn keeps_command_position(word: &str, quoted: bool) -> bool {
     is_prefix_command(word)
-        || matches!(
-            word,
-            "if" | "then"
-                | "else"
-                | "elif"
-                | "do"
-                | "while"
-                | "until"
-                | "time"
-                | "coproc"
-                | "!"
-                | "{"
-        )
+        || (!quoted
+            && matches!(
+                word,
+                "if" | "then"
+                    | "else"
+                    | "elif"
+                    | "do"
+                    | "while"
+                    | "until"
+                    | "time"
+                    | "coproc"
+                    | "!"
+                    | "{"
+            ))
 }
 
 /// sudo, env 等のプレフィックスコマンド（次の単語もコマンドとして扱う）
@@ -506,6 +556,7 @@ const RESERVED_WORDS: &[&str] = &[
 
 fn classify_command(
     word: &str,
+    quoted: bool,
     aliases: &HashSet<&str>,
     functions: &HashSet<&str>,
     path_cmds: &HashSet<OsString>,
@@ -530,7 +581,7 @@ fn classify_command(
         return "fg=green,bold".into();
     }
 
-    if RESERVED_SET.contains(word) {
+    if !quoted && RESERVED_SET.contains(word) {
         return "fg=yellow,bold".into();
     }
 
@@ -538,7 +589,7 @@ fn classify_command(
         return "fg=green".into();
     }
 
-    if aliases.contains(word) || functions.contains(word) {
+    if (!quoted && aliases.contains(word)) || functions.contains(word) {
         return "fg=green".into();
     }
 
@@ -758,6 +809,75 @@ mod tests {
     fn highlight_empty_buffer() {
         let spans = highlight_buffer("", "", "");
         assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn 全角空白と非改行空白はコマンド名の一部として分類する() {
+        for blank in ['\u{3000}', '\u{00a0}', '\u{2003}'] {
+            let command = format!("work{blank}tool");
+            let buffer = format!("{command} --flag");
+            assert_eq!(
+                span_styles(&buffer, &command, ""),
+                [
+                    (command.clone(), "fg=green".into()),
+                    ("--flag".into(), "fg=cyan".into())
+                ]
+            );
+            let spans = highlight_buffer(&buffer, "", &command);
+            assert_eq!((spans[0].start, spans[0].end), (0, command.chars().count()));
+            assert_eq!(spans[0].style, "fg=green");
+        }
+    }
+
+    #[test]
+    fn 半角空白とタブだけで語を区切り改行でコマンド位置を戻す() {
+        assert_eq!(
+            span_styles("echo\t--first\ntrue --second", "", ""),
+            [
+                ("echo".into(), "fg=green".into()),
+                ("--first".into(), "fg=cyan".into()),
+                ("true".into(), "fg=green".into()),
+                ("--second".into(), "fg=cyan".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn 語の途中のクォートやエスケープでもエイリアスと予約語を抑止する() {
+        for word in ["onl'y'_alias", "only\\_alias", "only\"_\"alias"] {
+            let buffer = format!("{word} argument");
+            let spans = highlight_buffer(&buffer, "only_alias", "");
+            assert_eq!(spans[0].style, "fg=red,bold", "{word}");
+            assert_eq!(spans[0].end, word.chars().count());
+            assert!(spans.iter().all(|s| s.end <= word.chars().count()));
+            assert_eq!(
+                highlight_buffer(&buffer, "only_alias", "only_alias")[0].style,
+                "fg=green"
+            );
+        }
+        for word in ["i'f'", "i\\f", "t\"hen\""] {
+            let spans = highlight_buffer(&format!("{word} echo"), "", "");
+            assert_eq!(spans[0].style, "fg=red,bold", "{word}");
+            assert!(spans.iter().all(|s| s.end <= word.chars().count()));
+        }
+        assert_eq!(span_styles("ec'ho' --flag", "", "")[0].1, "fg=green");
+        assert_eq!(
+            span_styles("e'nv' echo", "", "").last().unwrap().1,
+            "fg=green"
+        );
+    }
+
+    #[test]
+    fn 代入名にクォートやエスケープがあればコマンドとして扱う() {
+        for word in ["F'O'O=bar", "F\\OO=bar", "FOO\\=bar"] {
+            let spans = highlight_buffer(&format!("{word} echo"), "", "");
+            assert_eq!(spans[0].style, "fg=red,bold", "{word}");
+            assert!(spans.iter().all(|s| s.end <= word.chars().count()));
+        }
+        assert_eq!(
+            span_styles("FOO='a=b' echo", "", "").last().unwrap().1,
+            "fg=green"
+        );
     }
 
     #[test]
@@ -1300,7 +1420,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("sudo", &aliases, &functions, &path_cmds),
+            classify_command("sudo", false, &aliases, &functions, &path_cmds),
             "fg=green,bold"
         );
     }
@@ -1311,7 +1431,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("env", &aliases, &functions, &path_cmds),
+            classify_command("env", false, &aliases, &functions, &path_cmds),
             "fg=green,bold"
         );
     }
@@ -1322,7 +1442,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("echo", &aliases, &functions, &path_cmds),
+            classify_command("echo", false, &aliases, &functions, &path_cmds),
             "fg=green"
         );
     }
@@ -1333,7 +1453,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("while", &aliases, &functions, &path_cmds),
+            classify_command("while", false, &aliases, &functions, &path_cmds),
             "fg=yellow,bold"
         );
     }
@@ -1344,7 +1464,7 @@ mod tests {
         let aliases = HashSet::from(["ll"]);
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("ll", &aliases, &functions, &path_cmds),
+            classify_command("ll", false, &aliases, &functions, &path_cmds),
             "fg=green"
         );
     }
@@ -1355,7 +1475,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::from(["myfunc"]);
         assert_eq!(
-            classify_command("myfunc", &aliases, &functions, &path_cmds),
+            classify_command("myfunc", false, &aliases, &functions, &path_cmds),
             "fg=green"
         );
     }
@@ -1366,7 +1486,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("rustc", &aliases, &functions, &path_cmds),
+            classify_command("rustc", false, &aliases, &functions, &path_cmds),
             "fg=green"
         );
     }
@@ -1377,7 +1497,7 @@ mod tests {
         let aliases = HashSet::new();
         let functions = HashSet::new();
         assert_eq!(
-            classify_command("no_such_cmd_xyz", &aliases, &functions, &path_cmds),
+            classify_command("no_such_cmd_xyz", false, &aliases, &functions, &path_cmds),
             "fg=red,bold"
         );
     }
@@ -1713,7 +1833,7 @@ mod tests {
         // `; > file` の `file` はリダイレクト先（引数）であり、新コマンドではない。
         // 旧バグでは `;` で after_pipe_or_semi=true、リダイレクト演算子が
         // is_command_position=false のみ落として after_pipe_or_semi が残り、
-        // 213 行目の `is_command_position || after_pipe_or_semi` で `out` が
+        // `CommandPosition::expects_command` で `out` が
         // classify_command に渡されてコマンド扱いされてしまっていた（回帰防止）。
         let pairs = span_styles("ls ; > out rest", "", "");
         let out = pairs.iter().find(|(t, _)| t == "out");
@@ -1759,6 +1879,84 @@ mod tests {
             rest.is_none(),
             "fd 指定リダイレクト先後続 rest にスパンが付いてはならない: {pairs:?}"
         );
+    }
+
+    #[test]
+    fn highlight_区切り代入プレフィックスをまたぐ状態遷移() {
+        let cases: &[(&str, &[(&str, &str)])] = &[
+            // 代入語はプレフィックス直後の状態を保ち、続くオプションがコマンド位置を消費する
+            (
+                "env FOO=bar -u value echo",
+                &[
+                    ("env", "fg=green,bold"),
+                    ("FOO=bar", "fg=cyan"),
+                    ("-u", "fg=cyan"),
+                ],
+            ),
+            // 区切り後の代入語の次もコマンド位置
+            (
+                "true; FOO='a b' echo",
+                &[
+                    ("true", "fg=green"),
+                    (";", "fg=magenta"),
+                    ("FOO='a b'", "fg=cyan"),
+                    ("'a b'", "fg=yellow"),
+                    ("echo", "fg=green"),
+                ],
+            ),
+            // 区切り後の変数展開・クォートだけの語はコマンド名として消費される
+            (
+                "true; $cmd -x",
+                &[
+                    ("true", "fg=green"),
+                    (";", "fg=magenta"),
+                    ("$cmd", "fg=cyan"),
+                    ("-x", "fg=cyan"),
+                ],
+            ),
+            (
+                "true | 'echo' -x",
+                &[
+                    ("true", "fg=green"),
+                    ("|", "fg=magenta"),
+                    ("'echo'", "fg=yellow"),
+                    ("-x", "fg=cyan"),
+                ],
+            ),
+            // 区切り直後のリダイレクトの先とその後の語はコマンドではない
+            (
+                "true; >| file rest",
+                &[
+                    ("true", "fg=green"),
+                    (";", "fg=magenta"),
+                    (">|", "fg=magenta"),
+                ],
+            ),
+            (
+                "true | 2>&1 rest",
+                &[
+                    ("true", "fg=green"),
+                    ("|", "fg=magenta"),
+                    ("2>&", "fg=magenta"),
+                ],
+            ),
+            // 区切りの後はプレフィックス直後の扱いが消え、`-` 始まりの語は未知コマンド
+            (
+                "sudo ; -foo",
+                &[
+                    ("sudo", "fg=green,bold"),
+                    (";", "fg=magenta"),
+                    ("-foo", "fg=red,bold"),
+                ],
+            ),
+        ];
+        for (buffer, expected) in cases {
+            let expected: Vec<(String, String)> = expected
+                .iter()
+                .map(|(text, style)| (text.to_string(), style.to_string()))
+                .collect();
+            assert_eq!(span_styles(buffer, "", ""), expected, "{buffer}");
+        }
     }
 
     // ---------------------------------------------------------------

@@ -1,8 +1,8 @@
+use crate::shell_words::is_blank;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-const MAX_PROJECT_FILE_BYTES: u64 = 1024 * 1024;
 /// 入力欄の下の一覧に送るタスクの上限。入力中は候補の最大数の行まで表示し、残りは ↓ のメニューで選ぶ
 pub const LIST_LIMIT: usize = 256;
 
@@ -99,7 +99,7 @@ pub fn defines(command: &str, name: &str, cwd: &Path) -> bool {
 /// 入力中の行のコマンド名 (最初の語)
 pub fn command_of(query: &str) -> &str {
     query
-        .split_once(char::is_whitespace)
+        .split_once(is_blank)
         .map_or(query, |(command, _)| command)
 }
 
@@ -165,8 +165,8 @@ fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList
     if max == 0 || query.chars().any(char::is_control) {
         return TaskList::default();
     }
-    let (command, rest) = query.split_once(char::is_whitespace).unwrap_or((query, ""));
-    let rest = rest.trim_start_matches(char::is_whitespace);
+    let (command, rest) = query.split_once(is_blank).unwrap_or((query, ""));
+    let rest = rest.trim_start_matches(is_blank);
     let (head, prefix) = if takes_task_directly(command) {
         let head = if query == command {
             format!("{command} ")
@@ -182,7 +182,7 @@ fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList
         else {
             return TaskList::default();
         };
-        let head = if prefix.is_empty() && !query.ends_with(char::is_whitespace) {
+        let head = if prefix.is_empty() && !query.ends_with(is_blank) {
             // `npm run` のように、サブコマンド直後でも候補を表示する
             format!("{query} ")
         } else {
@@ -199,10 +199,10 @@ fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList
 
 fn after_keyword<'a>(rest: &'a str, keyword: &str) -> Option<&'a str> {
     let after = rest.strip_prefix(keyword)?;
-    if !after.is_empty() && !after.starts_with(char::is_whitespace) {
+    if !after.is_empty() && !after.starts_with(is_blank) {
         return None;
     }
-    Some(after.trim_start_matches(char::is_whitespace))
+    Some(after.trim_start_matches(is_blank))
 }
 
 fn matching(
@@ -212,7 +212,7 @@ fn matching(
     max: usize,
     include_exact: bool,
 ) -> Vec<(String, String)> {
-    if prefix.chars().any(char::is_whitespace) || prefix.starts_with('-') {
+    if prefix.chars().any(is_blank) || prefix.starts_with('-') {
         return Vec::new();
     }
     names
@@ -227,10 +227,7 @@ fn matching(
 }
 
 fn read_small(path: &Path) -> Option<String> {
-    if path.metadata().ok()?.len() > MAX_PROJECT_FILE_BYTES {
-        return None;
-    }
-    std::fs::read_to_string(path).ok()
+    crate::small_file::read_to_string(path, crate::small_file::PROJECT_FILE_LIMIT)
 }
 
 fn safe_name(name: &str) -> bool {
@@ -248,11 +245,26 @@ fn make_targets(cwd: &Path) -> Vec<String> {
         return Vec::new();
     };
     let mut targets = Vec::new();
+    // 複数行の変数定義 (`define NAME` … `endef`) の入れ子の深さ。本文はルールではない
+    let mut define_depth = 0usize;
     for line in text.lines() {
         if line.starts_with('\t') {
             continue;
         }
         let line = line.split('#').next().unwrap_or("").trim();
+        let directive = line
+            .split_whitespace()
+            .find(|word| !matches!(*word, "override" | "export" | "private"));
+        if directive == Some("define") {
+            define_depth += 1;
+            continue;
+        }
+        if define_depth > 0 {
+            if directive == Some("endef") {
+                define_depth -= 1;
+            }
+            continue;
+        }
         let Some((heads, rest)) = line.split_once(':') else {
             continue;
         };
@@ -446,6 +458,8 @@ fn just_recipes(cwd: &Path) -> Vec<String> {
         }
         if let Some((head, tail)) = line.split_once(':') {
             let name = head.split_whitespace().next().unwrap_or("");
+            // `@name:` は各行の表示を抑えるだけで、呼び出し名は `@` を除いた名前
+            let name = name.strip_prefix('@').unwrap_or(name);
             if !tail.starts_with('=') && !private && !name.starts_with('_') && safe_name(name) {
                 names.push(name.to_owned());
             }
@@ -629,6 +643,42 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn デバイスへのリンクのタスク定義は読まずに候補なしで返す() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["Makefile", "package.json"] {
+            std::os::unix::fs::symlink("/dev/zero", tmp.path().join(name)).unwrap();
+        }
+        assert!(candidates_in("make ", tmp.path(), 10).is_empty());
+        assert!(candidates_in("npm run ", tmp.path(), 10).is_empty());
+    }
+
+    #[test]
+    fn makefileのdefineからendefまでの本文はターゲットにしない() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Makefile"),
+            "define HELP_TEXT\nUsage: make <target>\nTargets:\n  build: compile everything\nendef\nexport HELP_TEXT\n\
+             override define NESTED\ndefine INNER\nphantom: x\nendef\nalso-phantom: y\nendef\n\
+             help:\n\t@echo \"$$HELP_TEXT\"\nbuild:\n\t@echo build\n",
+        )
+        .unwrap();
+        assert_eq!(make_targets(tmp.path()), ["build", "help"]);
+    }
+
+    #[test]
+    fn justの出力を抑えるレシピは先頭の記号を除いた名前で呼ぶ() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("justfile"),
+            "build:\n    cargo build\n\n@deploy:\n    ./deploy.sh\n\n@fmt target:\n    echo {{target}}\n\n@_hidden:\n    echo hidden\n",
+        )
+        .unwrap();
+        assert_eq!(just_recipes(tmp.path()), ["build", "deploy", "fmt"]);
+        assert!(defines("just", "deploy", tmp.path()));
+    }
+
     #[test]
     fn no_project_file_does_not_supply_tasks() {
         let tmp = tempfile::tempdir().unwrap();
@@ -750,6 +800,32 @@ mod tests {
                 .items
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn 全角空白はコマンドやrunの区切りとして扱わない() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Makefile"), "fmt:\n").unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            r#"{"scripts":{"dev":"vite"}}"#,
+        )
+        .unwrap();
+        for blank in ['\u{3000}', '\u{00a0}', '\u{2003}'] {
+            for query in [
+                format!("make{blank}f"),
+                format!("npm{blank}run d"),
+                format!("npm run{blank}d"),
+            ] {
+                assert!(
+                    list_in(&query, tmp.path(), 10, false).items.is_empty(),
+                    "{query:?}"
+                );
+            }
+            let query = format!("make{blank}fmt");
+            assert_eq!(command_of(&query), query);
+        }
+        assert_eq!(command_of("make\tfmt"), "make");
     }
 
     #[test]

@@ -420,7 +420,9 @@ fn segment_ssh(icons: &Icons) -> Option<Segment> {
 fn segment_package(icons: &Icons) -> Option<Segment> {
     let cwd = env::current_dir().ok()?;
     let pkg_path = find_up(&cwd, "package.json")?;
-    let content = std::fs::read_to_string(pkg_path).ok()?;
+    // リポジトリのファイルは信頼できないため、デバイスや FIFO で描画を止めないよう上限付きで読む
+    let content =
+        crate::small_file::read_to_string(&pkg_path, crate::small_file::PROJECT_FILE_LIMIT)?;
     let name = extract_json_value(&content, "name")?;
     let version = extract_json_value(&content, "version")?;
     Some(Segment {
@@ -1190,14 +1192,9 @@ fn check_custom_condition(when: &str) -> bool {
 /// "## No commits yet on main" → "main" (初期化直後の unborn ブランチ)
 fn parse_git_branch(header: &str) -> String {
     let rest = header.strip_prefix("## ").unwrap_or(header);
-    // 初期化直後でまだコミットがない場合、ブランチ名は末尾に出る。
-    if let Some(branch_part) = rest.strip_prefix("No commits yet on ") {
-        return branch_part
-            .split_whitespace()
-            .next()
-            .unwrap_or(branch_part)
-            .to_string();
-    }
+    // 初期化直後でまだコミットがない場合、ブランチ名は末尾に出る。追跡先が設定されていれば
+    // `No commits yet on main...origin/main [gone]` となるため、通常のブランチと同じく除く。
+    let rest = rest.strip_prefix("No commits yet on ").unwrap_or(rest);
     // `...` があれば追跡先より前まで、なければ行全体を使う。
     let branch = if let Some(idx) = rest.find("...") {
         &rest[..idx]
@@ -1435,6 +1432,26 @@ mod tests {
     // ── segment_custom のテスト ─────────────────────────────────
 
     #[test]
+    fn make_segment_は組み込み以外の名前を設定のカスタムセグメントから引く() {
+        let mut config = Config::default();
+        config.prompt.custom = vec![CustomSegment {
+            name: "weather".into(),
+            command: "printf 'sunny\\n'".into(),
+            icon: "*".into(),
+            fg: "white".into(),
+            bg: "24".into(),
+            when: "always".into(),
+        }];
+        let icons = Icons::for_level(crate::icons::FontLevel::Ascii);
+        let seg = make_segment("weather", &config, &icons, 0, 0, 0)
+            .expect("設定にある名前ならカスタムセグメントを返す");
+        assert_eq!(seg.text, "sunny");
+        assert_eq!(seg.icon, "*");
+        // 設定にも組み込みにも無い名前は表示しない
+        assert!(make_segment("unknown", &config, &icons, 0, 0, 0).is_none());
+    }
+
+    #[test]
     fn segment_custom_標準出力を表示する() {
         let custom = CustomSegment {
             name: "test".into(),
@@ -1503,6 +1520,19 @@ mod tests {
     fn parse_git_branch_unborn_branch() {
         // git init 直後 (まだコミットがない) の状態
         assert_eq!(parse_git_branch("## No commits yet on main"), "main");
+    }
+
+    #[test]
+    fn parse_git_branch_unborn_branchの追跡先と付加情報を除く() {
+        // 空のリポジトリを clone した直後は追跡先が設定され、`[gone]` が付く
+        assert_eq!(
+            parse_git_branch("## No commits yet on main...origin/main [gone]"),
+            "main"
+        );
+        assert_eq!(
+            parse_git_branch("## No commits yet on feature/foo...origin/feature/foo"),
+            "feature/foo"
+        );
     }
 
     #[test]

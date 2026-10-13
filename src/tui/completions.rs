@@ -77,8 +77,21 @@ pub(super) fn validate(
                     "先頭に実行ファイルを指定してください。",
                 ));
             }
+            if (field == Field::Watch
+                && args.iter().any(|path| !completion::valid_source_path(path)))
+                || (field == Field::Input && !completion::valid_generator(&args[0]))
+            {
+                return Err(app.lang.text(
+                    "Use absolute paths or ~/; a generator can also use a PATH command.",
+                    "絶対パスか ~/ を使ってください。生成コマンド名は PATH からも検索できます。",
+                ));
+            }
             Ok(())
         }
+        Field::Input if !completion::valid_source_path(value) => Err(app.lang.text(
+            "Use an absolute completion file path or ~/.",
+            "補完ファイルは絶対パスか ~/ で指定してください。",
+        )),
         _ => Ok(()),
     }
 }

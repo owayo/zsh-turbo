@@ -18,22 +18,23 @@
 
 - プロンプト出力 (`style::colored*`) は `text` 中の制御文字を U+FFFD に置換し、`%` を `%%` にエスケープして zsh の prompt expansion と端末制御シーケンス注入を防ぐ。`plain_colored` も制御文字を置換するが `%` は維持する。新しい色付き出力ヘルパーにも同じ境界処理を適用する。
 - `zsh-turbo init` が出力する変数代入は値を single-quote で囲むこと。`shell_single_quote` ヘルパーを使い、設定ファイル経由のコマンド注入を防ぐ。
-- `XDG_CONFIG_HOME` は未設定または空文字列なら無効として扱い、`~/.config/zsh-turbo` にフォールバックすること。空文字列を相対パスとして採用しない。
+- `XDG_CONFIG_HOME` は未設定・空・相対パスなら無効として扱い、`~/.config/zsh-turbo` にフォールバックすること。カレントディレクトリの設定ファイルを自動で読み込まない。
 - オートサジェストのハイライト設定は zsh の `region_highlight` 形式（例: `fg=8`）で扱う。Rust 側の色名（例: `bright_black`）をそのまま渡さないこと。
 - zsh から渡る `$BUFFER` やエイリアス/関数名は `-` 始まりも有り得るため、それらを受ける CLI 引数には `#[arg(allow_hyphen_values = true)]` を付ける。positional の `buffer`/`prefix` だけでなく、`highlight --aliases`/`--functions`、`suggest --strategy`、`suggest`/`complete --history-file` などのオプションも対象（`-` 始まりの値で clap が exit 2 になり、ハイライト等が無言で停止する）。
 - `git status -b` のヘッダーは `## No commits yet on <branch>` (unborn) や `## HEAD (no branch)` (detached) のような特殊形式を返す。`parse_git_branch` で網羅する。
 - zsh 拡張履歴 `: <ts>:<dur>;<cmd>` の判定は timestamp/duration が数字であることを必ず検証する。`: echo a;cmd` のような通常履歴を誤って分割しないこと。
 - zsh histfile は非 ASCII バイトを metafy（`0x83` + `byte^0x20`）して保存するため、読み込み時は必ず `unmetafy` してから UTF-8 変換する。復元しないと日本語履歴の候補が文字化けし、生 UTF-8 のクエリと一致しない。テストで履歴ファイルを作る際も metafied 形式で書くこと（Meta ペアの 2 バイト目は 0x80 以上のため改行と衝突せず、行分割の前後どちらで unmetafy しても安全）。
-- zsh histfile の複数行コマンドは内部改行が `\`+LF で書かれる。`\` 終端（ただし `\\` 終端は除く、zsh readhistline と同規則）の行とその継続行は 1 行プロトコルで運べないため候補から除外する（`history_candidates_rev`）。実際に `\` で終わる単一行コマンドは `\ `+LF で書かれるため誤検出しない。
+- zsh histfile の複数行コマンドは内部改行が `\`+LF で書かれる。`\\` を含むすべての `\` 終端の行とその継続行は、1 行プロトコルで運べないため候補から除外する（`history_candidates_rev`）。`\` と空白で終わる単一行コマンドには保存時に空白を 1 つ足し、`history_command` でその 1 つだけを外す。非拡張形式の `\:` で始まる行はコロンのエスケープも復元する。
 - 履歴の末尾チャンクを読むときは境界直前のバックスラッシュも確認し、境界をまたぐ複数行コマンドの残りを候補にしない。境界で候補を取り逃した場合は全ファイル検索で補う。
 - サジェストはファイル全体で前方一致 → 部分一致 → 曖昧一致の順に選ぶ。末尾チャンクの部分一致を、古い前方一致より先に返さない。
 - 履歴読み込みでは改行終端でない最終行（zsh が追記中の torn read）を捨てる（`drop_partial_tail`）。完全なファイルでは no-op。
-- `--history-file` の空文字列指定・空の `HISTFILE` 環境変数は未設定として扱い、`~/.zsh_history` へフォールバックする（`XDG_CONFIG_HOME` と同じ規約）。
+- `--history-file` の未指定・空文字列は `main::resolve_history_file` がディレクトリ別履歴へ解決する。保存先が決まらなければ履歴を使わず、共通履歴へ暗黙に切り替えない。その場合もタスク・ファイルなど履歴を使わない一覧は返す。`XDG_STATE_HOME` とホームの両方が絶対パスでなければ、作業ディレクトリへ記録を書かない。
 - gcloud セグメントは、空でない `CLOUDSDK_CONFIG` があればその配下、未指定または空文字列なら `~/.config/gcloud` 配下の `active_config` と `configurations/config_<name>` を読む。ファイルベースのため `gcloud` バイナリ呼び出しなしでプロジェクト ID を解決できる。`parse_gcloud_project` は INI ライク形式の `[core]` セクション内 `project = <id>` のみを採用する。
 - Terraform セグメントは Terraform/OpenTofu の両方を扱う。プロジェクト判定では `*.tf`, `*.tf.json`, `*.tofu`, `*.tofu.json`, `.terraform` を対象にし、ワークスペース取得は `terraform` がなければ `tofu` を試す。
 - シンタックスハイライトの `$PATH` キャッシュは実行可能ファイルだけをコマンド候補にする。判定は symlink を辿る `fs::metadata` で行うこと（`DirEntry::metadata()` は lstat 相当のため、Homebrew 等の symlink されたコマンドがほぼ全て未知コマンド扱いになる）。壊れた symlink は除外のまま。コマンド位置の `FOO=bar` 形式は代入語として扱い、その後の単語を引き続きコマンド位置として解析する。
 - `$PATH` の空要素は zsh と同じくカレントディレクトリとして走査する。空文字列をそのまま `read_dir` に渡すと、そのディレクトリ内の実行可能ファイルが未知コマンド扱いになる。
 - シンタックスハイライトの単語走査はクォートを shell の語結合と同様に単語の一部として消費する（`FOO='a b' cmd` の cmd がコマンド位置を維持、`ec'ho'` は 1 語として分類）。分類はクォートを剥いだ論理語で行い、クォートセグメントには文字列色スパンを単語スパンの後に重ねる。引数位置のオプション/パス/glob 判定はクォート外の文字のみで行う。
+- 語の一部でもクォート・エスケープされていればエイリアス展開と予約語解釈を抑止し、予約語の後続コマンド位置も維持しない。builtin・関数・PATH の検索には論理語を使う。代入は `=` より前の名前がクォート・エスケープされていない場合だけ認め、`F'O'O=bar` を代入扱いしない。
 - シンタックスハイライトのスパンは zsh の `region_highlight`・`CURSOR` と同じ**文字（コードポイント）単位**。パイプライン全体（Rust の `Vec<char>` ベース走査 → init.zsh の `${#BUFFER}` 比較）が文字単位で整合しており、バイト単位への「修正」はマルチバイト入力で全スパンをズラす本物のバグになる。
 - シンタックスハイライトの CLOBBER リダイレクト `>|`/`>>|`/`N>|` の `|` は演算子の一部として 1 トークンで消費する。パイプ扱いすると `after_pipe_or_semi` が立ち、リダイレクト先ファイル名がコマンド分類される。
 - プレフィックスコマンド（sudo/env 等）直後の `-` 始まりの語はオプション（シアン）として扱い、コマンド位置を消費する。値付きオプションを区別できないため後続をコマンド分類しない（誤検出ゼロ優先）。この救済はプレフィックス直後限定で、`;` 直後の `-foo` は引き続き未知コマンド（赤）。
@@ -71,8 +72,10 @@
 - `dir_writable` セグメントは Unix で `access(2)` を直接呼び、書き込み不可ディレクトリでのみ警告を出す。`std::fs::Permissions` では sticky/ACL を考慮できないため `access` を使う。
 - `ip` セグメントは `ZSH_TURBO_IP_INTERFACE` が指定されればそのインターフェース、未指定時は macOS で `en0`、Linux で `scope global` の最初の IPv4 を採用する。
 - `shell/init.zsh` で `${VAR#PATTERN}` や `${VAR%PATTERN}` の右辺に `$BUFFER` を渡す際は必ず `"$BUFFER"` のように quote する。zsh はパラメータ展開の PATTERN 部分を glob パターンとして解釈するため、quote を忘れると `[`/`*`/`?` を含む入力でパターンエラーや想定外のマッチを引き起こす。
-- `shell/init.zsh` の各関数（ZLE ウィジェット・フック）と `compinit` 呼び出しは先頭で `emulate -L zsh` を実行し、ユーザのシェルオプション（`SH_GLOB`/`KSH_ARRAYS`/`SH_WORD_SPLIT` 等）から隔離すること。これらを設定したユーザのもとでは `<->` 数値 glob や `(k)`/`(Ie)` などの zsh 固有展開・添字が壊れる。新しい関数を追加する際も必ず `emulate -L zsh` を付ける（`main.rs` のテストで全 `_zsh_turbo_*` 関数を検査）。唯一の例外は precmd の `local last_status=$?` — `emulate` 自身が `$?` を 0 に潰すため、終了ステータスの捕捉だけは emulate より前に置く（テストもこの 1 行のみ許容）。
+- `shell/init.zsh` の各関数（ZLE ウィジェット・フック）と `compinit` 呼び出しは先頭で `emulate -L zsh` を実行し、ユーザのシェルオプション（`SH_GLOB`/`KSH_ARRAYS`/`SH_WORD_SPLIT` 等）から隔離すること。これらを設定したユーザのもとでは `<->` 数値 glob や `(k)`/`(Ie)` などの zsh 固有展開・添字が壊れる。新しい関数を追加する際も必ず `emulate -L zsh` を付ける（`main.rs` のテストで全 `_zsh_turbo_*` 関数を検査）。例外は precmd の `local last_status=$?` と、preexec の履歴照合用 glob オプションを控える代入だけ。`emulate` によって値が失われるため、その 1 行を直前に置く。`HISTORY_IGNORE` は専用関数内で `EXTENDED_GLOB`・`KSH_GLOB`・`SH_GLOB` を復元して照合し、他の処理には利用者のオプションを漏らさない。
 - `shell/init.zsh` は関数本体も source 時のシェルオプションで構文解析されるため、`SH_GLOB` で無効になる裸の拡張 glob を関数内に書かず `case` などを使う。トップレベルで未設定の可能性がある変数は `${VAR:-}` で参照し、`NO_UNSET` 下でも初期化できるようにする。
+- `zle-line-pre-redraw`・`zle-line-finish`・`zle-keymap-select` は `add-zle-hook-widget` で登録し、既存ウィジェットを保持する。候補の更新は `CONTEXT=start|cont` のコマンド入力だけで行い、`vared`・`select` に表示しない。Alt+F・Alt+B は emacs キーマップだけに割り当て、vi の Esc に続く文字を奪わない。各 precmd では vi モードを insert に戻す。
+- 記録の preexec フックは、履歴保存なし（`HISTFILE` が空・`SAVEHIST=0`・`fc -p`）、`HISTORY_IGNORE` に一致する行、空白で始まるエイリアスの行を除外する。`zshaddhistory` フックがある場合も既定で記録しない。`ZSH_TURBO_RECORD_WITH_ZSHADDHISTORY=1` は除外を判別できないことを承知した明示指定として扱う。初期化では既存の大きな `HISTSIZE`・`SAVEHIST` を縮めない。
 - init.zsh のコマンド実行時間は `local -i duration_ms` への算術代入 `(( duration_ms = (EPOCHREALTIME - start) * 1000 ))` で切り捨てる。float の文字列パース（`${elapsed%.*}` 等）は 1e-4 秒未満で指数表記（`3.69e-05`）になり、瞬時に終わる builtin に「3.7s」等の誤表示を生む。
 - init.zsh の aliases/functions 一覧は **非クオート代入の `${(F)${(k)aliases}}`** で実改行 join する。double quote 付きのネスト展開は zsh の展開規則（quoted joining が先行）で空白 join になり、`(j:\n:)` の `\n` はリテラル 2 文字のため、Rust 側 `split('\n')` と一致せず全エイリアス・関数が赤表示になる。
 - init.zsh から `suggest`/`highlight` を呼ぶ際は positional の前に必ず `--` を置く。`allow_hyphen_values` は未登録の `-la` 等しか救済せず、BUFFER が `-h`/`--help` と完全一致すると clap の help が stdout へ漏れて候補・ハイライトに混入する。suggest には `--history-file "$HISTFILE"` も明示する（HISTFILE は export されないシェル変数のため子プロセスから見えない）。
@@ -94,7 +97,7 @@
 - メニューの Enter または Tab は、取り直し中なら期限まで応答を待って（`_zsh_turbo_list_menu_settle`）新しい一覧から選ぶ。打った文字に一覧が追いついていない（stale）ときに応答が空・期限切れなら、選ばずに打った文字を残して閉じる。メニューを開いた直後の取り直し（まだ何も打っていない）が期限切れ・空（`--menu` を知らない旧版の CLI など）なら、同じ入力に対する入力中の一覧（表示中の選択）をそのまま採用する。待っている間に Ctrl+C（SIGINT）が来たら取り消しとして扱い（打った文字を残し、入力を変えるまで一覧を閉じる）、trap が積んだ Esc は読み捨てる。
 - メニューへの貼り付けは `zle .bracketed-paste 変数名` で受け取ってから挿入する（区切りを補うかを先に決めるため）。多バイト文字は `zle .self-insert` に任せる（残りのバイトも ZLE が読む）。メニューで編集した後は構文色を外し、閉じた後に取り直す。
 - 実 ZLE のドライバ（`tests/zle-driver.zsh`）でメニューの状態を見るには、テスト用 zshrc（`tests/zle-init.zsh`）で `_zsh_turbo_list_menu_show` と `_zsh_turbo_list_menu` を包み、描画のたびに BUFFER と POSTDISPLAY を、閉じたときに `closed` をファイルへ書いて待ち合わせる。メニューのキーマップでは観測用の widget を呼べず、閉じる前に送った観測用のキー（`\e[24~`）はメニューが Esc と文字として読んでしまうため。ZLE は変化した部分だけを書き直すので、端末出力の文字列で一覧の状態を判定しない。
-- パスの字句解析では語の区切りを半角空白・タブ・改行に限る（`char::is_whitespace` は使わない）。zsh は全角空白で語を分けず、候補側も全角空白をエスケープしないため、区切ると全角空白入りのディレクトリへ進めなくなる。ダブルクォート内の `\!` はエスケープとして扱う（対話 zsh の BANG_HIST では `"\!"` が `!` になり、候補側も `\!` を出す）。
+- パス・構文ハイライト・タスク入力の語区切りは `shell_words::is_blank`（半角空白・タブ・改行）で統一する（`char::is_whitespace` は使わない）。zsh は全角空白で語を分けず、候補側も全角空白をエスケープしないため、区切ると全角空白入りのディレクトリへ進めなくなり、コマンド名やタスクの境界も誤判定する。ダブルクォート内の `\!` はエスケープとして扱う（対話 zsh の BANG_HIST では `"\!"` が `!` になり、候補側も `\!` を出す）。
 - `npm`・`pnpm`・`bun`・`yarn`・`uv`・`deno`・`mise` のスクリプト・タスクは `run` 等のサブコマンドの後だけに出す（`project_tasks::run_keywords`）。名前だけ・2 語目の入力中は `--help` を解析したサブコマンド（`-` 始まりならオプション）を一覧にする。`make`・`just`・`task` はターゲットを直接取るので従来どおり。`shell/project_completion.zsh` の Tab 補完も同じ区切りに合わせる。
 - サブコマンド一覧の `--help` はキー入力ごとに実行しない。`completion::top_level` が `$XDG_CACHE_HOME/zsh-turbo/subcommands/<cmd>.json` にキャッシュし、実行ファイルのスタンプが同じで 24 時間以内（失敗は 5 分）なら再利用する。取り直しは flock で 1 プロセスに絞り、待っていた側はロック取得後にキャッシュを読み直す（`try_lock` で諦めると、直後の入力の応答が一覧なしになる）。mise のシムは実体が mise なのでスタンプが変わらず、期限で取り直す。help の解析は npm の `All commands:`（カンマ区切り）と yarn v1 の字下げした `Commands:`・`- name` にも対応する。入力しただけで `--help` を実行するため、PATH の `.` や空要素（カレントディレクトリ）で見つかった実行ファイルは使わない（信頼できないリポジトリの `./uv` を起動しない）。`npm --help` は終了コード 1 で使い方を出すため、終了コードは問わず出力を読む（`run_cmd_any_status`）。何も読み取れなかった結果（mise の未信頼の設定のエラー文など）は失敗として短い期限で取り直す。
 - テストでファイルロックを取るときは `try_lock` ではなく `lock` を使う。並列テストの別スレッドが fork した直後は、子プロセスが exec するまでロック用 fd を共有して flock が解放されず、`try_lock` が一時的に WouldBlock になる。
@@ -106,6 +109,9 @@
 
 - CLI 補完の登録は `Config.completions` で管理する。help 解析・更新検知・SHA-256・キャッシュ生成は Rust 側、zsh 側は `shell/completion.zsh` の補完呼び出しと非同期更新の起動だけに限定する。CLI ごとの定義を本体に固定しない。
 - 補完キャッシュは CLI ごとのファイルロックを保持し、生成中のバイナリ変更と zsh 構文を検証してからアトミックに公開する。失敗時に旧キャッシュを削除しない。メタデータが同じ間はハッシュを再計算せず、Tab では help や Rust の更新処理を同期実行しない。
+- プロンプト・ヘルプ・生成コマンド・構文検証用 zsh の自動実行は `executable::resolve` で絶対パスへ解決してから行う。PATH の相対・空要素で見つかった実行ファイルを拒否し、symlink の呼び出し名はシムのために維持する。構文ハイライトの実行可能ファイル一覧は実行を伴わないため、zsh と同じく相対・空 PATH を含める。補完元・監視ファイルは絶対パスか `~/` に限る。`XDG_CACHE_HOME` の空・相対パスはホーム配下へフォールバックし、絶対パスの保存先が決まらなければ管理キャッシュを使わない。
+- 補完生成の失敗は設定・入力スタンプと時刻を記録し、同じ入力での再試行を5分抑える。強制更新・設定変更・監視ファイル変更は待たない。ヘルプは C ロケール・終了コード不問で読み、子の取得失敗や走査上限で取得済みの情報を捨てない。ヘルプ解析を変えたら管理補完とサブコマンド一覧のキャッシュ版を両方見直す。
+- 一時ファイルは `create_new(true)` で作成できたものだけを後始末で削除する。予約に失敗した既存ファイルを、補完キャッシュや端末フォント設定の保存失敗時に消さない。
 - `_arguments` を呼ぶ補完関数は `emulate -L zsh` の後に `setopt extendedglob ${_comp_options[@]}` で補完用オプションを復元する。completion が有効化した EXTENDED_GLOB を emulate が解除するとオプション補完が無言で失敗する。生成定義の再読込時には、その定義が追加した関数も更新する。
 
 ## ローカル検証

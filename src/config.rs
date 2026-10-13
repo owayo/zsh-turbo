@@ -369,12 +369,12 @@ pub fn config_dir() -> PathBuf {
     config_base_from_xdg(std::env::var_os("XDG_CONFIG_HOME")).join("zsh-turbo")
 }
 
-fn config_base_from_xdg(xdg_config_home: Option<OsString>) -> PathBuf {
-    // XDG_CONFIG_HOME は未設定または空文字列なら無効として扱う。
-    if let Some(value) = xdg_config_home
-        && !value.is_empty()
+pub(crate) fn config_base_from_xdg(xdg_config_home: Option<OsString>) -> PathBuf {
+    // 相対パスはカレントディレクトリの設定を読み込むため採用しない。
+    if let Some(path) = xdg_config_home.map(PathBuf::from)
+        && path.is_absolute()
     {
-        return PathBuf::from(value);
+        return path;
     }
 
     dirs::home_dir()
@@ -599,6 +599,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn config_base_from_xdg_相対パスは_defaultへフォールバックする() {
+        let fallback = config_base_from_xdg(None);
+        for path in ["config", ".", "./config", "../config", "~/.config"] {
+            assert_eq!(config_base_from_xdg(Some(path.into())), fallback);
+        }
+    }
+
     // --- 存在しないパスで load_config がデフォルトを返す ---
 
     #[test]
@@ -819,6 +827,33 @@ prompt_style = "classic"
         assert_eq!(loaded.prompt.custom[0].command, "curl -s wttr.in");
         assert_eq!(loaded.prompt.custom[0].fg, "white");
         assert_eq!(loaded.prompt.custom[0].when, "always");
+    }
+
+    #[test]
+    fn カスタムセグメントは名前とコマンドだけで既定の色と表示条件を補う() {
+        let config: Config =
+            toml::from_str("[[prompt.custom]]\nname = 'weather'\ncommand = 'echo sunny'\n")
+                .unwrap();
+        let custom = &config.prompt.custom[0];
+        assert_eq!(custom.name, "weather");
+        assert_eq!(custom.command, "echo sunny");
+        assert_eq!(custom.icon, "");
+        assert_eq!(custom.fg, "white");
+        assert_eq!(custom.bg, "238");
+        assert_eq!(custom.when, "always");
+        // 必須の名前かコマンドが無ければ設定全体を読み込まない
+        assert!(toml::from_str::<Config>("[[prompt.custom]]\nname = 'weather'\n").is_err());
+    }
+
+    #[test]
+    fn 表示言語の切り替えは前後の操作が互いに逆になる() {
+        for language in [UiLanguage::Auto, UiLanguage::En, UiLanguage::Ja] {
+            assert_eq!(language.next().prev(), language);
+            assert_eq!(language.prev().next(), language);
+        }
+        // 3 つの値を一巡する
+        assert_eq!(UiLanguage::Auto.next().next().next(), UiLanguage::Auto);
+        assert_ne!(UiLanguage::Auto.next(), UiLanguage::Auto);
     }
 
     #[test]
