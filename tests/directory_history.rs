@@ -202,3 +202,94 @@ fn 実際のpreexecは通常コマンドも実行前のディレクトリに記�
         );
     }
 }
+
+#[test]
+fn 履歴の保存先が決まらなくても履歴を使わない一覧は返し作業ディレクトリへ書かない() {
+    let tmp = setup();
+    let root = tmp.path();
+    std::fs::write(root.join("app/Makefile"), "build:\n\t@true\n").unwrap();
+    std::fs::write(root.join("app/notes.txt"), "").unwrap();
+    // 相対パスのホームと未設定の XDG_STATE_HOME では、記録と履歴の保存先を決めない
+    let relative_home = |command: &mut Command| {
+        command.env("HOME", "home").env_remove("XDG_STATE_HOME");
+    };
+    let mut list = cli(root, "app");
+    relative_home(&mut list);
+    let files = output(list.args([
+        "suggest",
+        "--ui-list",
+        "--directory-history",
+        "--columns",
+        "80",
+        "--",
+        "cat ./no",
+    ]));
+    assert!(files.starts_with("v1\tfiles\t1\t"), "{files}");
+    assert!(files.contains("\nitem\tnotes.txt\t"), "{files}");
+    let mut tasks = cli(root, "app");
+    relative_home(&mut tasks);
+    assert_eq!(
+        output(tasks.args(["complete", "--project-only", "--", "make "])),
+        "make build\n"
+    );
+    let mut child = cli(root, "app");
+    relative_home(&mut child);
+    let mut child = child.arg("record").stdin(Stdio::piped()).spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"make build")
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(!root.join("app/home").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn zsh自身が保存した履歴から末尾の空白を復元し行継続を除外する() {
+    let tmp = setup();
+    let root = tmp.path();
+    let history = root.join("written-history");
+    // 非対話 zsh は履歴をディスクへ保存しないため、対話モードで保存先を指定する
+    let script = r#"HISTFILE=$1
+setopt EXTENDED_HISTORY
+HISTSIZE=100
+SAVEHIST=100
+print -sr -- 'touch file\ '
+print -sr -- 'echo trailing\'
+print -sr -- 'echo first \
+second-part'
+print -sr -- ': colon-command'
+fc -W "$HISTFILE"
+"#;
+    for extended in [true, false] {
+        let script = if extended {
+            script.to_owned()
+        } else {
+            script.replace("setopt EXTENDED_HISTORY", "unsetopt EXTENDED_HISTORY")
+        };
+        let saved = Command::new("zsh")
+            .args(["-dfi", "-c", &script, "--"])
+            .arg(&history)
+            .env("ZDOTDIR", root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .output()
+            .unwrap();
+        assert!(saved.status.success(), "{saved:?}");
+        let suggest = |query| {
+            output(cli(root, "app").args([
+                "suggest",
+                "--history-file",
+                history.to_str().unwrap(),
+                "--",
+                query,
+            ]))
+        };
+        assert_eq!(suggest("touch"), "touch file\\ ");
+        assert_eq!(suggest("echo trailing"), "echo trailing\\");
+        assert_eq!(suggest("second"), "");
+        assert_eq!(suggest("echo first"), "");
+        assert_eq!(suggest(": colon"), ": colon-command");
+    }
+}

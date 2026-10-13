@@ -106,15 +106,27 @@ fn read_history_full(path: &PathBuf) -> Option<String> {
 }
 
 /// zsh histfile の物理行が次の物理行へ継続する (`\` 終端) かどうか。
-/// zsh は複数行コマンドの改行を `\`+LF で書く。`\\` 終端は継続ではない
-/// (zsh readhistline と同じ規則)。実際に `\` で終わる単一行コマンドは
-/// `\ `+LF で書かれるため誤検出しない。
+/// zsh は複数行コマンドの改行を `\`+LF で書き、読むときは `\\` を含めて `\` で終わる行を
+/// すべて継続とみなす (readhistline と同じ規則)。`\` (と空白) で終わるコマンドは
+/// 書くときに空白を 1 つ足すため、継続と取り違えない。
 fn continues_to_next_line(line: &str) -> bool {
     continues_to_next_line_bytes(line.as_bytes())
 }
 
 fn continues_to_next_line_bytes(line: &[u8]) -> bool {
-    line.ends_with(b"\\") && !line.ends_with(b"\\\\")
+    line.ends_with(b"\\")
+}
+
+/// 履歴の 1 行からコマンドを取り出す。zsh は `\` (と空白) で終わるコマンドに空白を 1 つ
+/// 足して書くため、その空白だけを外して `touch file\ ` の末尾の空白を残す。
+fn history_command(line: &str) -> &str {
+    let command = parse_history_line(line).trim_start();
+    let body = command.trim_end_matches(' ');
+    if body.len() < command.len() && body.ends_with('\\') {
+        &command[..command.len() - 1]
+    } else {
+        command.trim_end()
+    }
 }
 
 /// 履歴テキストを新しい順に走査し、複数行エントリ (継続行) を除いた
@@ -131,7 +143,7 @@ fn history_candidates_rev(text: &str) -> impl Iterator<Item = &str> {
             if prev_continues || continues_to_next_line(line) {
                 continue;
             }
-            return Some(parse_history_line(line).trim());
+            return Some(history_command(line));
         }
         None
     })
@@ -338,18 +350,10 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
     true
 }
 
+/// 検索する履歴ファイル。呼び出し側 (main の `resolve_history_file`) が決めたパスだけを使い、
+/// 指定が無ければ履歴を使わない (実行場所のない共通の履歴へ暗黙に切り替えない)。
 fn resolve_history_path(history_file: Option<&str>) -> Option<PathBuf> {
-    // 空文字列の指定・HISTFILE は未設定として扱う (XDG_CONFIG_HOME 等と同じ規約)
-    history_file
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HISTFILE")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-        })
-        .or_else(|| dirs::home_dir().map(|h| h.join(".zsh_history")))
+    history_file.filter(|s| !s.is_empty()).map(PathBuf::from)
 }
 
 /// zsh 拡張履歴形式をパース: ": <timestamp>:<duration>;<command>"
@@ -357,7 +361,11 @@ fn resolve_history_path(history_file: Option<&str>) -> Option<PathBuf> {
 /// 形式に合致しない場合は元の行をそのまま返す（例: `: echo a;git` のような通常履歴）。
 fn parse_history_line(line: &str) -> &str {
     let Some(rest) = line.strip_prefix(": ") else {
-        return line;
+        // 非拡張形式では `:` で始まるコマンドを `\:` と書く
+        return line
+            .strip_prefix('\\')
+            .filter(|rest| rest.starts_with(':'))
+            .unwrap_or(line);
     };
     let Some(colon_idx) = rest.find(':') else {
         return line;
@@ -627,10 +635,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_history_path_noneでもフォールバック() {
-        // HISTFILE 環境変数またはデフォルトパスにフォールバック
-        let path = resolve_history_path(None);
-        assert!(path.is_some(), "フォールバックパスが返されるべき");
+    fn resolve_history_path_指定が無ければ共通の履歴へ切り替えない() {
+        assert_eq!(resolve_history_path(None), None);
     }
 
     // -------------------------------------------------------
@@ -990,11 +996,43 @@ mod tests {
     #[test]
     fn continues_to_next_line_の判定規則() {
         assert!(continues_to_next_line("echo foo\\"));
-        // `\\` (二重バックスラッシュ) 終端は継続ではない (zsh readhistline と同じ)
-        assert!(!continues_to_next_line("echo foo\\\\"));
+        // zsh の readhistline は `\\` 終端も継続とみなす (`echo first \` + 改行 + 続き を
+        // 入力すると、改行の前の `\` に継続の `\` が足されて `echo first \\` と書かれる)
+        assert!(continues_to_next_line("echo foo\\\\"));
         // 実際に `\` で終わるコマンドは `\ `+LF で書かれる
         assert!(!continues_to_next_line("echo foo\\ "));
         assert!(!continues_to_next_line("echo foo"));
+    }
+
+    #[test]
+    fn 行継続を含む複数行の履歴は断片を候補にしない() {
+        // zsh 5.9 で `echo first \` Enter `second-part` と入力したときの書き方
+        let text = ": 1:0;echo first \\\\\nsecond-part\n: 2:0;git status\n";
+        assert_eq!(search_text("sec", text, &Strategy::Prefix), None);
+        assert_eq!(search_text("echo first", text, &Strategy::Prefix), None);
+        assert_eq!(
+            search_text("git", text, &Strategy::Prefix).as_deref(),
+            Some("git status")
+        );
+    }
+
+    #[test]
+    fn バックスラッシュと空白で終わるコマンドは書き足された空白だけを外す() {
+        // `touch file\ ` は zsh が空白を 1 つ足して `touch file\  ` と書く
+        assert_eq!(history_command(": 1:0;touch file\\  "), "touch file\\ ");
+        assert_eq!(history_command(": 1:0;echo foo\\ "), "echo foo\\");
+        assert_eq!(history_command(": 1:0;  ls -la  "), "ls -la");
+    }
+
+    #[test]
+    fn 非拡張形式のコロン始まりのコマンドはエスケープを外す() {
+        assert_eq!(parse_history_line("\\: colon-cmd arg"), ": colon-cmd arg");
+        assert_eq!(parse_history_line("\\ls"), "\\ls");
+        let text = "\\: > truncated.log\nls\n";
+        assert_eq!(
+            search_text(": >", text, &Strategy::Prefix).as_deref(),
+            Some(": > truncated.log")
+        );
     }
 
     #[test]
@@ -1071,10 +1109,8 @@ mod tests {
 
     #[test]
     fn resolve_history_path_空文字列指定は未設定として扱う() {
-        // 空の --history-file (HISTFILE 未設定の init.zsh 経由) で
         // 空パスをそのまま開こうとしないこと
-        let resolved = resolve_history_path(Some(""));
-        assert_ne!(resolved, Some(PathBuf::from("")));
+        assert_eq!(resolve_history_path(Some("")), None);
     }
 
     // ---------------------------------------------------------------

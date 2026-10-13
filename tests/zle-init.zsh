@@ -5,15 +5,23 @@ fpath=(
   ${(M)fpath:#*/zsh/*/functions}
   ${(M)fpath:#*/zsh/*/functions/*}
 )
+# 初期化前に登録されたフックが、初期化後も実際の ZLE から呼ばれることを確認する
+function history_redraw_fixture() {
+    print -rn -- "$BUFFER" > "$TEST_ROOT/history-buffer"
+}
+zle -N zle-line-pre-redraw history_redraw_fixture
+function line_finish_fixture() {
+    print -rn -- "$BUFFER" > "$TEST_ROOT/finished-buffer"
+}
+zle -N zle-line-finish line_finish_fixture
+function keymap_select_fixture() {
+    print -rn -- "$KEYMAP" > "$TEST_ROOT/selected-keymap"
+}
+zle -N zle-keymap-select keymap_select_fixture
 eval "$("$TEST_BINARY" init)"
 bindkey -e
 bindkey -M emacs '^[[B' down-line-or-beginning-search
 bindkey -M emacs '^[OB' down-line-or-beginning-search
-function history_redraw_fixture() {
-    _zsh_turbo_line_pre_redraw
-    print -rn -- "$BUFFER" > "$TEST_ROOT/history-buffer"
-}
-zle -N zle-line-pre-redraw history_redraw_fixture
 # メニュー中は観測用の widget を呼べないため、描くたびに入力欄と一覧を書き出す
 functions[_zsh_turbo_list_menu_show_fixture]=$functions[_zsh_turbo_list_menu_show]
 function _zsh_turbo_list_menu_show() {

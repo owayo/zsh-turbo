@@ -189,8 +189,8 @@ fn suggest_highlight_style(value: &str) -> String {
 }
 
 /// 検索する履歴ファイルを決める。`--directory-history` か、`--history-file` が未指定・空なら
-/// ディレクトリ別履歴を使う。保存先が決まらなければ `None` を返し、呼び出し側は
-/// 共通の履歴へフォールバックせずに終える。
+/// ディレクトリ別履歴を使う。保存先が決まらなければ `None` を返し、履歴を使わない
+/// (共通の履歴へフォールバックしない)。
 fn resolve_history_file(history_file: Option<String>, directory_history: bool) -> Option<String> {
     resolve_history_file_with(history_file, directory_history, directory_history::path)
 }
@@ -255,13 +255,8 @@ fn main() {
             selected,
         } => {
             let config = config::load_config();
-            let Some(history_file) = resolve_history_file(history_file, directory_history) else {
-                if ui_list {
-                    print!("v1\tnone\t0\tcomplete\t0\t\nend\n");
-                }
-                return;
-            };
-            let history_file = Some(history_file);
+            // 保存先が決まらなくても (カレントディレクトリが消えた等)、履歴を使わない一覧は返す
+            let history_file = resolve_history_file(history_file, directory_history);
             let strat = suggest::Strategy::from_str(
                 strategy.as_deref().unwrap_or(&config.suggest.strategy),
             );
@@ -350,10 +345,7 @@ fn main() {
             max,
             project_only,
         } => {
-            let Some(history_file) = resolve_history_file(history_file, directory_history) else {
-                return;
-            };
-            let history_file = Some(history_file);
+            let history_file = resolve_history_file(history_file, directory_history);
             let max = max.unwrap_or_else(|| config::load_config().suggest.max_suggestions);
             let completions = if project_only {
                 project_tasks::candidates(&prefix, max)
@@ -617,6 +609,38 @@ mod tests {
         assert!(script.contains(r"\e]133;P;k=r\a"));
         assert!(script.contains(r"\e]133;A;k=s\a"));
         assert!(script.contains("ITERM2_SQUELCH_PS2_MARK"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_script_はglobオプションの組み合わせでも全体を構文解析できる() {
+        use std::io::Write;
+        let script = render_init(&config::Config::default());
+        for options in [
+            &["-o", "shglob"][..],
+            &["-o", "kshglob"],
+            &["-o", "shglob", "-o", "kshglob"],
+        ] {
+            let mut child = std::process::Command::new("zsh")
+                .arg("-dfn")
+                .args(options)
+                .stdin(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(script.as_bytes())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{options:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -1007,6 +1031,91 @@ sleep 0.3
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn init_script_zshが履歴に残さない行は記録しない() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let log = tmp.path().join("log");
+        let stub = tmp.path().join("stub");
+        // 記録は背景で並行に走るため、1 行を 1 回の書き込みで追記し、到着順は比べない
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\n[ \"$1\" = record ] || exit 1\nline=$(cat)\nprintf '%s\\n' \"$line\" >> {}\n",
+                shell_single_quote(&log.display().to_string())
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = format!(
+            r#"source {}
+ZSH_TURBO_CMD={}
+log={}
+ZSH_TURBO_RECORD_DIRECTORY_HISTORY=1
+alias hidden=' echo hidden'
+_zsh_turbo_record_task_usage 'hidden secret'
+HISTORY_IGNORE='(echo token=*|ls)'
+_zsh_turbo_record_task_usage 'echo token=abc'
+_zsh_turbo_record_task_usage 'ls'
+HISTORY_IGNORE='(broken'
+_zsh_turbo_record_task_usage 'echo kept-with-broken-pattern'
+unset HISTORY_IGNORE
+SAVEHIST=0
+_zsh_turbo_record_task_usage 'echo savehist-zero'
+SAVEHIST=100
+fc -p
+_zsh_turbo_record_task_usage 'echo incognito'
+fc -P
+setopt EXTENDED_GLOB
+HISTORY_IGNORE='(#i)*token*'
+_zsh_turbo_preexec 'export TOKEN=abc'
+_zsh_turbo_preexec 'echo extended-kept'
+unsetopt EXTENDED_GLOB
+setopt KSH_GLOB
+HISTORY_IGNORE='@(echo ksh-token=*)'
+_zsh_turbo_preexec 'echo ksh-token=abc'
+_zsh_turbo_preexec 'echo ksh-kept'
+unsetopt KSH_GLOB
+setopt SH_GLOB
+HISTORY_IGNORE='(echo sh-kept|ls)'
+_zsh_turbo_preexec 'echo sh-kept'
+unsetopt SH_GLOB
+unset HISTORY_IGNORE
+zshaddhistory() {{ [[ $1 != *SECRET* ]] }}
+_zsh_turbo_record_task_usage 'echo hook-defined'
+ZSH_TURBO_RECORD_WITH_ZSHADDHISTORY=1
+_zsh_turbo_record_task_usage 'echo hook-allowed'
+unset ZSH_TURBO_RECORD_WITH_ZSHADDHISTORY
+unfunction zshaddhistory
+zshaddhistory_functions=(true)
+_zsh_turbo_record_task_usage 'echo hook-array'
+zshaddhistory_functions=()
+_zsh_turbo_record_task_usage 'echo after'
+repeat 200; do (( ${{#${{(f)"$(<$log)"}}}} >= 6 )) 2>/dev/null && break; sleep 0.05; done
+sleep 0.3
+[[ ${{(j:,:)${{(o)${{(f)"$(<$log)"}}}}}} == 'echo after,echo extended-kept,echo hook-allowed,echo kept-with-broken-pattern,echo ksh-kept,echo sh-kept' ]] || {{ cat "$log" >&2; exit 1; }}
+"#,
+            shell_single_quote(&init_path.display().to_string()),
+            shell_single_quote(&stub.display().to_string()),
+            shell_single_quote(&log.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .env("HISTFILE", tmp.path().join("history"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "履歴に残さない行の選別に失敗: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn init_script_はタスクを実行するコマンドの一覧と記録の設定を渡す() {
         let mut config = config::Config::default();
@@ -1147,6 +1256,7 @@ function _zsh_turbo_after_modify() {{ (( calls += 1 )); }}
 BUFFER='ls books/'
 CURSOR=${{#BUFFER}}
 HISTNO=14
+CONTEXT=start
 _zsh_turbo_line_pre_redraw
 (( calls == 1 )) || exit 1
 _zsh_turbo_line_pre_redraw
@@ -1154,6 +1264,15 @@ _zsh_turbo_line_pre_redraw
 HISTNO=13
 _zsh_turbo_line_pre_redraw
 (( calls == 2 )) || exit 3
+# コマンド以外の入力では取り直さず、複数行コマンドの続きでは取り直す
+for CONTEXT in vared select; do
+    HISTNO=12
+    _zsh_turbo_line_pre_redraw
+    (( calls == 2 )) || exit 4
+done
+CONTEXT=cont
+_zsh_turbo_line_pre_redraw
+(( calls == 3 )) || exit 5
 "#,
             shell_single_quote(&init_path.display().to_string())
         );
@@ -1208,11 +1327,16 @@ _zsh_turbo_line_pre_redraw
             let trimmed = line.trim_start();
             if trimmed.starts_with("function _zsh_turbo_") && trimmed.ends_with("() {") {
                 let next = lines.get(i + 1).copied().unwrap_or("").trim();
-                // 例外: `$?` は emulate 自身が 0 に潰すため、終了ステータスの
-                // 捕捉 (glob/配列展開を含まない安全な代入) だけは emulate より
-                // 先に置くことを許容する。それ以外の前置処理は不可。
+                // emulate で失われる終了ステータスと履歴の照合条件だけ、担当する
+                // フックで直前に控えることを許容する。それ以外の前置処理は不可。
+                let captures_status = trimmed == "function _zsh_turbo_precmd() {"
+                    && next.starts_with("local last_status=$?");
+                let captures_history_options = trimmed == "function _zsh_turbo_preexec() {"
+                    && next.starts_with(
+                        r#"local history_glob_options="${options[extendedglob]} ${options[kshglob]} ${options[shglob]}""#,
+                    );
                 let ok = next.starts_with("emulate -L zsh")
-                    || (next.starts_with("local last_status=$?")
+                    || ((captures_status || captures_history_options)
                         && lines
                             .get(i + 2)
                             .copied()
@@ -1222,7 +1346,7 @@ _zsh_turbo_line_pre_redraw
                 assert!(
                     ok,
                     "{trimmed} の直後は `emulate -L zsh` でオプション隔離する必要がある \
-                     (例外は `local last_status=$?` の 1 行のみ)"
+                     (例外は precmd の終了ステータスと preexec の履歴照合条件の捕捉のみ)"
                 );
                 checked += 1;
             }

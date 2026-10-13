@@ -57,9 +57,20 @@ function _zsh_turbo_apply_semantic_prompt_markers() {
 }
 
 function _zsh_turbo_preexec() {
+    local history_glob_options="${options[extendedglob]} ${options[kshglob]} ${options[shglob]}"  # emulate 前に履歴の照合条件を控える
     emulate -L zsh  # ユーザのシェルオプション(SH_GLOB/KSH_ARRAYS 等)から隔離する
     typeset -g _ZSH_TURBO_START_TIME="${EPOCHREALTIME}"
-    _zsh_turbo_record_task_usage "$1"
+    _zsh_turbo_record_task_usage "$1" "$history_glob_options"
+}
+
+# zsh 本体と同じ glob オプションで HISTORY_IGNORE を照合し、他の処理には漏らさない
+function _zsh_turbo_history_ignored() {
+    emulate -L zsh
+    local -a glob_options=(${=2})
+    [[ "${glob_options[1]:-off}" == on ]] && setopt extendedglob
+    [[ "${glob_options[2]:-off}" == on ]] && setopt kshglob
+    [[ "${glob_options[3]:-off}" == on ]] && setopt shglob
+    [[ "$1" == ${~HISTORY_IGNORE} ]]
 }
 
 # 実行行を Rust に渡し、履歴とタスクの利用をディレクトリごとに記録する。
@@ -69,6 +80,26 @@ function _zsh_turbo_record_task_usage() {
     [[ -n "$line" ]] || return 0
     # 先頭が空白の行は、履歴に残さない慣習に合わせて記録しない
     [[ "$line" == [[:space:]]* ]] && return 0
+    # zsh が履歴ファイルに残さない行も記録しない: 履歴を保存しない状態 (`fc -p` の中・
+    # HISTFILE なし・SAVEHIST=0)、HISTORY_IGNORE に一致する行、値が空白で始まるエイリアスの行
+    [[ -n "${HISTFILE:-}" ]] && (( ${SAVEHIST:-0} > 0 )) || return 0
+    local -i ignored=0
+    if [[ -n "${HISTORY_IGNORE:-}" ]]; then
+        # 壊れたパターンのエラーで関数ごと中断しないよう、エラーを打ち消して記録を続ける
+        {
+            _zsh_turbo_history_ignored "$line" "${2:-}" && ignored=1
+        } always {
+            TRY_BLOCK_ERROR=0
+        } 2>/dev/null
+    fi
+    (( ignored )) && return 0
+    [[ "${aliases[${line%%[[:space:]]*}]:-}" == [[:space:]]* ]] && return 0
+    # zshaddhistory フックが除外した行は preexec からは見分けられないため、秘密を残さないよう
+    # フックがあれば記録しない (ZSH_TURBO_RECORD_WITH_ZSHADDHISTORY=1 なら記録する)
+    if [[ "${ZSH_TURBO_RECORD_WITH_ZSHADDHISTORY:-0}" != 1 ]] &&
+        (( ${+functions[zshaddhistory]} || ${#zshaddhistory_functions} )); then
+        return 0
+    fi
     if [[ "$ZSH_TURBO_RECORD_DIRECTORY_HISTORY" != 1 ]]; then
         [[ "$ZSH_TURBO_RECORD_TASK_USAGE" == 1 ]] || return 0
         (( ${_ZSH_TURBO_TASK_COMMANDS[(Ie)${line%%[[:space:]]*}]} )) || return 0
@@ -82,7 +113,7 @@ function _zsh_turbo_record_task_usage() {
 function _zsh_turbo_render_prompt() {
     emulate -L zsh
     local left right
-    if { IFS= read -r -d '' left && IFS= read -r -d '' right } < <(
+    if { IFS= read -r -d '' left && IFS= read -r -d '' right; } < <(
         "$ZSH_TURBO_CMD" prompt --last-status "${_ZSH_TURBO_LAST_STATUS:-0}" --duration-ms "${_ZSH_TURBO_DURATION_MS:-0}" --jobs "${_ZSH_TURBO_JOBS:-0}" --side both 2>/dev/null
     ); then
         :
@@ -130,7 +161,7 @@ function _zsh_turbo_precmd() {
 
     # vi モードセグメント連携: 行頭は insert モードから始まる。
     # Rust 側は環境変数として読むため export (-x) が必須。
-    typeset -gx ZSH_TURBO_VI_MODE="${ZSH_TURBO_VI_MODE:-insert}"
+    typeset -gx ZSH_TURBO_VI_MODE=insert
 
     # keymap-select からの再生成でも同じ素材を使えるようにキャッシュする
     typeset -g _ZSH_TURBO_LAST_STATUS=$last_status
@@ -155,7 +186,10 @@ function _zsh_turbo_zle_keymap_select() {
         zle .reset-prompt 2>/dev/null
     fi
 }
-zle -N zle-keymap-select _zsh_turbo_zle_keymap_select
+# 既存の zle-* フック (他のプラグインや add-zle-hook-widget の登録) を上書きしない
+zmodload zsh/zle
+autoload -Uz add-zle-hook-widget
+add-zle-hook-widget keymap-select _zsh_turbo_zle_keymap_select
 
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec _zsh_turbo_preexec
@@ -184,7 +218,7 @@ function _zsh_turbo_zle_line_finish() {
     _zsh_turbo_apply_semantic_prompt_markers
     zle .reset-prompt 2>/dev/null
 }
-zle -N zle-line-finish _zsh_turbo_zle_line_finish
+add-zle-hook-widget line-finish _zsh_turbo_zle_line_finish
 
 # ─── オートサジェスト連携（非同期） ────────────────────────────
 
@@ -279,7 +313,7 @@ function _zsh_turbo_close_async_fd() {
     (( fd > 0 )) || return 0
     zle -F "$fd" 2>/dev/null
     # exec 単体へのリダイレクトは呼び出し元の stderr まで変更する。
-    { exec {fd}<&- } 2>/dev/null
+    { exec {fd}<&-; } 2>/dev/null
 }
 
 # 非同期描画を直前のキー操作として記録すると、連続する履歴検索が途切れる。
@@ -655,7 +689,7 @@ zle -N _zsh_turbo_clear_suggestion
 bindkey '^I'      _zsh_turbo_accept_tab
 bindkey '^[[C'    _zsh_turbo_accept_right
 bindkey '^[OC'    _zsh_turbo_accept_right
-bindkey '^[f'     _zsh_turbo_accept_alt_f
+bindkey -M emacs '^[f' _zsh_turbo_accept_alt_f
 bindkey '^[[1;5C' _zsh_turbo_accept_ctrl_right
 
 # BUFFER と CURSOR の変更を一元検知してサジェスト・ハイライトを更新する。
@@ -669,6 +703,11 @@ function _zsh_turbo_line_pre_redraw() {
     emulate -L zsh
     {
         [[ "${_ZSH_TURBO_MENU_ACTIVE:-0}" == 1 ]] && return
+        # vared や select の入力はコマンド行ではないため、候補・一覧・ハイライトを出さない
+        case "${CONTEXT:-}" in
+            start|cont) ;;
+            *) return ;;
+        esac
         # 同じ文字列の履歴へ移ると BUFFER は変わらないが HISTNO は変わる。取り直して
         # 入力中に出していたファイル・サブコマンドの一覧 (と取得中の応答) を捨てる
         if [[ "$BUFFER" != "$_ZSH_TURBO_LAST_BUFFER" ]] || (( HISTNO != _ZSH_TURBO_LAST_HISTNO )); then
@@ -690,7 +729,7 @@ function _zsh_turbo_line_pre_redraw() {
         _ZSH_TURBO_DRAWN_LINES=${#${POSTDISPLAY//[^$'\n']/}}
     }
 }
-zle -N zle-line-pre-redraw _zsh_turbo_line_pre_redraw
+add-zle-hook-widget line-pre-redraw _zsh_turbo_line_pre_redraw
 
 # 履歴検索と順位付けは Rust、選択操作と編集バッファへの挿入は ZLE が担当する。
 function _zsh_turbo_history_menu_show() {
@@ -753,6 +792,9 @@ function _zsh_turbo_history_menu() {
                     (( menu_index = menu_index % ${#menu_candidates} + 1 )) ;;
                 up-line-or-history)
                     (( menu_index = (menu_index + ${#menu_candidates} - 2) % ${#menu_candidates} + 1 )) ;;
+                _zsh_turbo_menu_sequence)
+                    _zsh_turbo_menu_skip_sequence
+                    zle beep ;;
                 *) zle beep ;;
             esac
         done
@@ -871,6 +913,9 @@ function _zsh_turbo_list_menu() {
                     menu_moved=1 ;;
                 self-insert|bracketed-paste|backward-delete-char)
                     _zsh_turbo_list_menu_edit "$REPLY" ;;
+                _zsh_turbo_menu_sequence)
+                    _zsh_turbo_menu_skip_sequence
+                    zle beep ;;
                 *) zle beep ;;
             esac
         done
@@ -1044,6 +1089,27 @@ function _zsh_turbo_list_cancel() {
     emulate -L zsh
 }
 zle -N _zsh_turbo_list_cancel
+# メニューに割り当てのないエスケープシーケンス (← → Home Delete など) の先頭を受ける名前。
+# ESC を send-break に割り当てた keymap では、未割り当てのシーケンスが ESC と残りの文字に分かれ、
+# メニューを閉じたうえで `[D` などを入力欄へ挿入してしまう
+function _zsh_turbo_menu_sequence() {
+    emulate -L zsh
+}
+zle -N _zsh_turbo_menu_sequence
+# CSI (ESC [ ... 終端 0x40-0x7e) / SS3 (ESC O + 1 文字) の残りを読み捨てる
+function _zsh_turbo_menu_skip_sequence() {
+    emulate -L zsh
+    local REPLY
+    if [[ "$KEYS" == $'\eO' ]]; then
+        (( KEYS_QUEUED_COUNT + PENDING )) && zle .read-command
+        return 0
+    fi
+    while (( KEYS_QUEUED_COUNT + PENDING )); do
+        zle .read-command || return 0
+        [[ "$KEYS" == [@-~] ]] && return 0
+    done
+    return 0
+}
 bindkey -N zsh-turbo-history
 bindkey -M zsh-turbo-history '^I' down-line-or-history
 bindkey -M zsh-turbo-history '^[[B' down-line-or-history
@@ -1057,7 +1123,11 @@ bindkey -M zsh-turbo-history '^M' accept-line
 bindkey -M zsh-turbo-history '^J' accept-line
 bindkey -M zsh-turbo-history '^[' send-break
 bindkey -M zsh-turbo-history '^C' send-break
+bindkey -M zsh-turbo-history '^[[' _zsh_turbo_menu_sequence
+bindkey -M zsh-turbo-history '^[O' _zsh_turbo_menu_sequence
 bindkey -N zsh-turbo-list
+bindkey -M zsh-turbo-list '^[[' _zsh_turbo_menu_sequence
+bindkey -M zsh-turbo-list '^[O' _zsh_turbo_menu_sequence
 # 打った文字・貼り付け・Backspace は入力欄を編集して一覧を絞り込む
 bindkey -M zsh-turbo-list -R ' '-'~' self-insert
 bindkey -M zsh-turbo-list -R '\M-^@'-'\M-^?' self-insert
@@ -1082,7 +1152,6 @@ for _zsh_turbo_keymap in emacs viins; do
     bindkey -M "$_zsh_turbo_keymap" '^I' _zsh_turbo_accept_tab
     bindkey -M "$_zsh_turbo_keymap" '^[[C' _zsh_turbo_accept_right
     bindkey -M "$_zsh_turbo_keymap" '^[OC' _zsh_turbo_accept_right
-    bindkey -M "$_zsh_turbo_keymap" '^[f' _zsh_turbo_accept_alt_f
     bindkey -M "$_zsh_turbo_keymap" '^[[1;5C' _zsh_turbo_accept_ctrl_right
 done
 unset _zsh_turbo_keymap
@@ -1237,14 +1306,15 @@ bindkey '^[OB' down-line-or-beginning-search  # 下矢印（代替）
 
 # 単語単位の移動
 bindkey '^[[1;5D' backward-word  # Ctrl+左矢印
-bindkey '^[b'     backward-word  # Alt+b
+bindkey -M emacs '^[b' backward-word  # Alt+b (viins では ESC 直後の b を奪うため割り当てない)
 bindkey '^A'      beginning-of-line
 bindkey '^E'      end-of-line
 
 # ─── 履歴設定 ───────────────────────────────────────────────────
 
-HISTSIZE=50000
-SAVEHIST=50000
+# 利用者が先に大きくしていた値は縮めない (SAVEHIST を縮めると履歴ファイルが切り詰められる)
+(( HISTSIZE >= 50000 )) || HISTSIZE=50000
+(( SAVEHIST >= 50000 )) || SAVEHIST=50000
 HISTFILE="${HISTFILE:-$HOME/.zsh_history}"
 setopt EXTENDED_HISTORY
 setopt HIST_EXPIRE_DUPS_FIRST

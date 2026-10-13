@@ -146,6 +146,7 @@ zpty -b fixture zsh -di || exit 1
         zselect -t 5
     done
     [[ "$(<"$TEST_ROOT/boot")" == 2 ]] || exit 12
+    [[ "$(<"$TEST_ROOT/finished-buffer")" == 'echo newer-fixture' ]] || exit 12
     await_fixture buffer '' || exit 12
     zpty -w -n fixture 'echo new'
     await_fixture ghost 'er-fixture' || exit 13
@@ -190,6 +191,13 @@ zpty -b fixture zsh -di || exit 1
     : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
     await_selected 'build' || exit 67
+    # 未割り当ての CSI/SS3 キーを押しても、メニューを閉じたり残りを入力欄へ入れたりしない
+    for sequence in $'\e[D' $'\e[C' $'\e[3~' $'\eOH' $'\eOF'; do
+        : > "$TEST_ROOT/menu"
+        zpty -w -n fixture "$sequence"
+        await_selected 'build' || exit 67
+        [[ "$(<"$TEST_ROOT/menu")" == make$'\n'* ]] || exit 67
+    done
     zpty -w -n fixture $'\e[Z'
     await_selected 'deploy' || exit 68
     zpty -w -n fixture $'\r'
@@ -200,6 +208,7 @@ zpty -b fixture zsh -di || exit 1
     await_fixture buffer 'echo sample-alpha' || exit 27
     zpty -w -n fixture $'\x15echo sam\x12\t\r'
     await_fixture buffer 'echo sample-beta' || exit 28
+    [[ -s "$TEST_ROOT/selected-keymap" ]] || exit 28
     zpty -w -n fixture $'\x15ls -l'
     await_fixture ghost ' /path/to/hoge/fuga' || exit 29
     zpty -w -n fixture $'\e[C'
