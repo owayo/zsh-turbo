@@ -202,9 +202,13 @@ Ghost suggestions and Ctrl+R use commands run in the current directory. Parent a
 
 Records are stored in `${XDG_STATE_HOME:-~/.local/state}/zsh-turbo/directory-history/` (empty or relative XDG_STATE_HOME values are ignored). Filenames hash the directory path. Full command lines, including arguments, are saved with owner-only permissions (0600). Each directory keeps the latest 1000 executions, up to 1 MiB. Lines starting with whitespace, containing control characters or newlines, or exceeding 4096 bytes are skipped. Unreadable configuration also stops recording.
 
+Shell recording skips both directory history and task usage when history saving is disabled (`HISTFILE` is empty, `SAVEHIST=0`, or a private history context was opened with `fc -p`), when the line matches `HISTORY_IGNORE`, or when its command alias begins with whitespace. If a `zshaddhistory` function or hook array is present, recording is disabled by default: `preexec` cannot determine which lines the hook excluded. Set `ZSH_TURBO_RECORD_WITH_ZSHADDHISTORY=1` only if recording those lines is acceptable. Initialization keeps `HISTSIZE` and `SAVEHIST` values above 50,000.
+
 Turn off **Suggest → Record Directory History**, or set `record_directory_history = false` under `[suggest]` to stop new records. Existing history remains searchable. This setting is independent of task usage recording. Restart the shell after changing it. To remove records, disable recording, wait for recording processes to finish, and delete the `directory-history` directory.
 
 The public `suggest` / `complete` commands use this history by default. An explicit `--history-file <path>` searches that file instead; shell integration always uses directory history.
+
+When neither `XDG_STATE_HOME` nor the home directory provides an absolute storage path, history is unavailable and nothing is saved in the working directory. Task and file lists continue to work. Reading explicit zsh history files restores escaped trailing spaces and non-extended `\:` entries; multiline continuation fragments are excluded even when the line ends in multiple backslashes.
 
 ## File list
 

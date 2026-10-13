@@ -24,11 +24,11 @@
 - `git status -b` のヘッダーは `## No commits yet on <branch>` (unborn) や `## HEAD (no branch)` (detached) のような特殊形式を返す。`parse_git_branch` で網羅する。
 - zsh 拡張履歴 `: <ts>:<dur>;<cmd>` の判定は timestamp/duration が数字であることを必ず検証する。`: echo a;cmd` のような通常履歴を誤って分割しないこと。
 - zsh histfile は非 ASCII バイトを metafy（`0x83` + `byte^0x20`）して保存するため、読み込み時は必ず `unmetafy` してから UTF-8 変換する。復元しないと日本語履歴の候補が文字化けし、生 UTF-8 のクエリと一致しない。テストで履歴ファイルを作る際も metafied 形式で書くこと（Meta ペアの 2 バイト目は 0x80 以上のため改行と衝突せず、行分割の前後どちらで unmetafy しても安全）。
-- zsh histfile の複数行コマンドは内部改行が `\`+LF で書かれる。`\` 終端（ただし `\\` 終端は除く、zsh readhistline と同規則）の行とその継続行は 1 行プロトコルで運べないため候補から除外する（`history_candidates_rev`）。実際に `\` で終わる単一行コマンドは `\ `+LF で書かれるため誤検出しない。
+- zsh histfile の複数行コマンドは内部改行が `\`+LF で書かれる。`\\` を含むすべての `\` 終端の行とその継続行は、1 行プロトコルで運べないため候補から除外する（`history_candidates_rev`）。`\` と空白で終わる単一行コマンドには保存時に空白を 1 つ足し、`history_command` でその 1 つだけを外す。非拡張形式の `\:` で始まる行はコロンのエスケープも復元する。
 - 履歴の末尾チャンクを読むときは境界直前のバックスラッシュも確認し、境界をまたぐ複数行コマンドの残りを候補にしない。境界で候補を取り逃した場合は全ファイル検索で補う。
 - サジェストはファイル全体で前方一致 → 部分一致 → 曖昧一致の順に選ぶ。末尾チャンクの部分一致を、古い前方一致より先に返さない。
 - 履歴読み込みでは改行終端でない最終行（zsh が追記中の torn read）を捨てる（`drop_partial_tail`）。完全なファイルでは no-op。
-- `--history-file` の空文字列指定・空の `HISTFILE` 環境変数は未設定として扱い、`~/.zsh_history` へフォールバックする（`XDG_CONFIG_HOME` と同じ規約）。
+- `--history-file` の未指定・空文字列は `main::resolve_history_file` がディレクトリ別履歴へ解決する。保存先が決まらなければ履歴を使わず、共通履歴へ暗黙に切り替えない。その場合もタスク・ファイルなど履歴を使わない一覧は返す。`XDG_STATE_HOME` とホームの両方が絶対パスでなければ、作業ディレクトリへ記録を書かない。
 - gcloud セグメントは、空でない `CLOUDSDK_CONFIG` があればその配下、未指定または空文字列なら `~/.config/gcloud` 配下の `active_config` と `configurations/config_<name>` を読む。ファイルベースのため `gcloud` バイナリ呼び出しなしでプロジェクト ID を解決できる。`parse_gcloud_project` は INI ライク形式の `[core]` セクション内 `project = <id>` のみを採用する。
 - Terraform セグメントは Terraform/OpenTofu の両方を扱う。プロジェクト判定では `*.tf`, `*.tf.json`, `*.tofu`, `*.tofu.json`, `.terraform` を対象にし、ワークスペース取得は `terraform` がなければ `tofu` を試す。
 - シンタックスハイライトの `$PATH` キャッシュは実行可能ファイルだけをコマンド候補にする。判定は symlink を辿る `fs::metadata` で行うこと（`DirEntry::metadata()` は lstat 相当のため、Homebrew 等の symlink されたコマンドがほぼ全て未知コマンド扱いになる）。壊れた symlink は除外のまま。コマンド位置の `FOO=bar` 形式は代入語として扱い、その後の単語を引き続きコマンド位置として解析する。
@@ -72,8 +72,10 @@
 - `dir_writable` セグメントは Unix で `access(2)` を直接呼び、書き込み不可ディレクトリでのみ警告を出す。`std::fs::Permissions` では sticky/ACL を考慮できないため `access` を使う。
 - `ip` セグメントは `ZSH_TURBO_IP_INTERFACE` が指定されればそのインターフェース、未指定時は macOS で `en0`、Linux で `scope global` の最初の IPv4 を採用する。
 - `shell/init.zsh` で `${VAR#PATTERN}` や `${VAR%PATTERN}` の右辺に `$BUFFER` を渡す際は必ず `"$BUFFER"` のように quote する。zsh はパラメータ展開の PATTERN 部分を glob パターンとして解釈するため、quote を忘れると `[`/`*`/`?` を含む入力でパターンエラーや想定外のマッチを引き起こす。
-- `shell/init.zsh` の各関数（ZLE ウィジェット・フック）と `compinit` 呼び出しは先頭で `emulate -L zsh` を実行し、ユーザのシェルオプション（`SH_GLOB`/`KSH_ARRAYS`/`SH_WORD_SPLIT` 等）から隔離すること。これらを設定したユーザのもとでは `<->` 数値 glob や `(k)`/`(Ie)` などの zsh 固有展開・添字が壊れる。新しい関数を追加する際も必ず `emulate -L zsh` を付ける（`main.rs` のテストで全 `_zsh_turbo_*` 関数を検査）。唯一の例外は precmd の `local last_status=$?` — `emulate` 自身が `$?` を 0 に潰すため、終了ステータスの捕捉だけは emulate より前に置く（テストもこの 1 行のみ許容）。
+- `shell/init.zsh` の各関数（ZLE ウィジェット・フック）と `compinit` 呼び出しは先頭で `emulate -L zsh` を実行し、ユーザのシェルオプション（`SH_GLOB`/`KSH_ARRAYS`/`SH_WORD_SPLIT` 等）から隔離すること。これらを設定したユーザのもとでは `<->` 数値 glob や `(k)`/`(Ie)` などの zsh 固有展開・添字が壊れる。新しい関数を追加する際も必ず `emulate -L zsh` を付ける（`main.rs` のテストで全 `_zsh_turbo_*` 関数を検査）。例外は precmd の `local last_status=$?` と、preexec の履歴照合用 glob オプションを控える代入だけ。`emulate` によって値が失われるため、その 1 行を直前に置く。`HISTORY_IGNORE` は専用関数内で `EXTENDED_GLOB`・`KSH_GLOB`・`SH_GLOB` を復元して照合し、他の処理には利用者のオプションを漏らさない。
 - `shell/init.zsh` は関数本体も source 時のシェルオプションで構文解析されるため、`SH_GLOB` で無効になる裸の拡張 glob を関数内に書かず `case` などを使う。トップレベルで未設定の可能性がある変数は `${VAR:-}` で参照し、`NO_UNSET` 下でも初期化できるようにする。
+- `zle-line-pre-redraw`・`zle-line-finish`・`zle-keymap-select` は `add-zle-hook-widget` で登録し、既存ウィジェットを保持する。候補の更新は `CONTEXT=start|cont` のコマンド入力だけで行い、`vared`・`select` に表示しない。Alt+F・Alt+B は emacs キーマップだけに割り当て、vi の Esc に続く文字を奪わない。各 precmd では vi モードを insert に戻す。
+- 記録の preexec フックは、履歴保存なし（`HISTFILE` が空・`SAVEHIST=0`・`fc -p`）、`HISTORY_IGNORE` に一致する行、空白で始まるエイリアスの行を除外する。`zshaddhistory` フックがある場合も既定で記録しない。`ZSH_TURBO_RECORD_WITH_ZSHADDHISTORY=1` は除外を判別できないことを承知した明示指定として扱う。初期化では既存の大きな `HISTSIZE`・`SAVEHIST` を縮めない。
 - init.zsh のコマンド実行時間は `local -i duration_ms` への算術代入 `(( duration_ms = (EPOCHREALTIME - start) * 1000 ))` で切り捨てる。float の文字列パース（`${elapsed%.*}` 等）は 1e-4 秒未満で指数表記（`3.69e-05`）になり、瞬時に終わる builtin に「3.7s」等の誤表示を生む。
 - init.zsh の aliases/functions 一覧は **非クオート代入の `${(F)${(k)aliases}}`** で実改行 join する。double quote 付きのネスト展開は zsh の展開規則（quoted joining が先行）で空白 join になり、`(j:\n:)` の `\n` はリテラル 2 文字のため、Rust 側 `split('\n')` と一致せず全エイリアス・関数が赤表示になる。
 - init.zsh から `suggest`/`highlight` を呼ぶ際は positional の前に必ず `--` を置く。`allow_hyphen_values` は未登録の `-la` 等しか救済せず、BUFFER が `-h`/`--help` と完全一致すると clap の help が stdout へ漏れて候補・ハイライトに混入する。suggest には `--history-file "$HISTFILE"` も明示する（HISTFILE は export されないシェル変数のため子プロセスから見えない）。
