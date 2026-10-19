@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const START: &str = "# >>> zsh-turbo font >>>";
 const END: &str = "# <<< zsh-turbo font <<<";
+const MESLO_FAMILY: &str = "MesloLGS NF";
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 static JAPANESE: OnceLock<bool> = OnceLock::new();
 
@@ -18,7 +19,7 @@ fn tr<'a>(en: &'a str, ja: &'a str) -> &'a str {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TerminalKind {
     Ghostty,
     Cmux,
@@ -27,12 +28,25 @@ enum TerminalKind {
 }
 
 impl TerminalKind {
+    /// 端末の選択肢に並べる順 (番号は 1 から)
+    const ALL: [Self; 4] = [Self::Ghostty, Self::Cmux, Self::MacTerminal, Self::ITerm];
+
     fn name(self) -> &'static str {
         match self {
             Self::Ghostty => "Ghostty",
             Self::Cmux => "cmux",
             Self::MacTerminal => "Terminal.app",
             Self::ITerm => "iTerm2",
+        }
+    }
+
+    /// `TERM_PROGRAM` の値から、選択肢の既定にする端末を決める。分からなければ Ghostty
+    fn detect(term_program: &str) -> Self {
+        match term_program.to_ascii_lowercase().as_str() {
+            "cmux" => Self::Cmux,
+            "apple_terminal" => Self::MacTerminal,
+            "iterm.app" => Self::ITerm,
+            _ => Self::Ghostty,
         }
     }
 }
@@ -48,26 +62,43 @@ pub fn run() -> io::Result<()> {
         ));
     }
     println!("{}", tr("Terminal font setup", "端末フォント設定"));
-    let detected = match std::env::var("TERM_PROGRAM")
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "ghostty" => 1,
-        "cmux" => 2,
-        "apple_terminal" => 3,
-        "iterm.app" => 4,
-        _ => 1,
-    };
-    println!("1) Ghostty  2) cmux  3) Terminal.app  4) iTerm2");
-    let terminal = match choose_number(tr("Terminal", "端末"), detected, 4)? {
-        1 => TerminalKind::Ghostty,
-        2 => TerminalKind::Cmux,
-        3 => TerminalKind::MacTerminal,
-        _ => TerminalKind::ITerm,
-    };
-
+    let terminal = choose_terminal()?;
     let fonts = installed_fonts();
+    let family = choose_family(&fonts)?;
+    match terminal {
+        TerminalKind::MacTerminal | TerminalKind::ITerm => {
+            show_manual_instructions(terminal, family.as_deref());
+            Ok(())
+        }
+        TerminalKind::Ghostty | TerminalKind::Cmux => {
+            configure_terminal(terminal, family.as_deref())
+        }
+    }
+}
+
+/// 端末を選ぶ。既定は `TERM_PROGRAM` から推定した端末
+fn choose_terminal() -> io::Result<TerminalKind> {
+    let detected = TerminalKind::detect(&std::env::var("TERM_PROGRAM").unwrap_or_default());
+    println!("{}", terminal_menu());
+    let default = TerminalKind::ALL
+        .iter()
+        .position(|&kind| kind == detected)
+        .map_or(1, |i| i + 1);
+    let number = choose_number(tr("Terminal", "端末"), default, TerminalKind::ALL.len())?;
+    Ok(TerminalKind::ALL[number - 1])
+}
+
+fn terminal_menu() -> String {
+    TerminalKind::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, kind)| format!("{}) {}", i + 1, kind.name()))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// フォントを選ぶ。None は端末の既定値のまま変えない
+fn choose_family(fonts: &[String]) -> io::Result<Option<String>> {
     println!(
         "{}",
         tr(
@@ -75,79 +106,138 @@ pub fn run() -> io::Result<()> {
             "フォント: 1) 端末の既定値  2) MesloLGS NF  3) インストール済みのフォントを選択"
         )
     );
-    let family = match choose_number(tr("Font", "フォント"), 1, 3)? {
-        1 => None,
-        2 => Some("MesloLGS NF".to_string()),
-        _ => {
-            let query = ask(tr(
-                "Filter installed fonts (blank lists first 30)",
-                "フォント名で絞り込み（空欄で先頭 30 件）",
-            ))?;
-            let matches: Vec<&str> = fonts
-                .iter()
-                .filter(|font| {
-                    font.to_ascii_lowercase()
-                        .contains(&query.to_ascii_lowercase())
-                })
-                .map(String::as_str)
-                .take(30)
-                .collect();
-            for (i, name) in matches.iter().enumerate() {
-                println!("{}) {name}", i + 1);
-            }
-            let selected = ask(tr(
-                "Number or exact font family",
-                "番号または正確なフォント名",
-            ))?;
-            let family = selected
-                .parse::<usize>()
-                .ok()
-                .and_then(|n| matches.get(n.saturating_sub(1)).copied())
-                .unwrap_or(&selected)
-                .trim();
-            validate_family(family)?;
-            Some(family.to_string())
-        }
-    };
+    match choose_number(tr("Font", "フォント"), 1, 3)? {
+        1 => Ok(None),
+        2 => Ok(Some(MESLO_FAMILY.to_string())),
+        _ => choose_installed_family(fonts).map(Some),
+    }
+}
 
-    if matches!(terminal, TerminalKind::MacTerminal | TerminalKind::ITerm) {
-        let family = family
-            .as_deref()
-            .unwrap_or(tr("your preferred font", "使用したいフォント"));
-        if terminal == TerminalKind::MacTerminal {
-            println!(
-                "{} {family}",
-                tr(
-                    "Terminal → Settings → Profiles → Text → Font → Change: select",
-                    "ターミナル → 設定 → プロファイル → テキスト → フォント → 変更 で選択:"
-                )
-            );
-        } else {
-            println!(
-                "{} {family}",
-                tr(
-                    "iTerm2 → Settings → Profiles → Text → Font: select",
-                    "iTerm2 → Settings → Profiles → Text → Font で選択:"
-                )
-            );
-            println!(
-                "{}",
-                tr(
-                    "If Use Non-ASCII Font is enabled, set its font as well.",
-                    "Use Non-ASCII Font が有効なら、そちらのフォントも設定してください。"
-                )
-            );
-        }
+/// インストール済みのフォントを名前で絞り込み、番号か正確なフォント名で選ぶ
+fn choose_installed_family(fonts: &[String]) -> io::Result<String> {
+    let query = ask(tr(
+        "Filter installed fonts (blank lists first 30)",
+        "フォント名で絞り込み（空欄で先頭 30 件）",
+    ))?;
+    let matches: Vec<&str> = fonts
+        .iter()
+        .filter(|font| {
+            font.to_ascii_lowercase()
+                .contains(&query.to_ascii_lowercase())
+        })
+        .map(String::as_str)
+        .take(30)
+        .collect();
+    for (i, name) in matches.iter().enumerate() {
+        println!("{}) {name}", i + 1);
+    }
+    let selected = ask(tr(
+        "Number or exact font family",
+        "番号または正確なフォント名",
+    ))?;
+    let family = selected
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| matches.get(n.saturating_sub(1)).copied())
+        .unwrap_or(&selected)
+        .trim();
+    validate_family(family)?;
+    Ok(family.to_string())
+}
+
+/// 設定ファイルを書き換えない Terminal.app・iTerm2 では、フォントを選ぶ手順を表示する
+fn show_manual_instructions(terminal: TerminalKind, family: Option<&str>) {
+    let family = family.unwrap_or(tr("your preferred font", "使用したいフォント"));
+    if terminal == TerminalKind::MacTerminal {
+        println!(
+            "{} {family}",
+            tr(
+                "Terminal → Settings → Profiles → Text → Font → Change: select",
+                "ターミナル → 設定 → プロファイル → テキスト → フォント → 変更 で選択:"
+            )
+        );
+    } else {
+        println!(
+            "{} {family}",
+            tr(
+                "iTerm2 → Settings → Profiles → Text → Font: select",
+                "iTerm2 → Settings → Profiles → Text → Font で選択:"
+            )
+        );
         println!(
             "{}",
             tr(
-                "Set Prompt → Font level in `zsh-turbo configure` to match the font's symbols.",
-                "記号に合わせて `zsh-turbo configure` の Prompt → Font level を設定してください。"
+                "If Use Non-ASCII Font is enabled, set its font as well.",
+                "Use Non-ASCII Font が有効なら、そちらのフォントも設定してください。"
+            )
+        );
+    }
+    println!(
+        "{}",
+        tr(
+            "Set Prompt → Font level in `zsh-turbo configure` to match the font's symbols.",
+            "記号に合わせて `zsh-turbo configure` の Prompt → Font level を設定してください。"
+        )
+    );
+}
+
+/// Ghostty・cmux の設定ファイルに、フォントとリガチャの管理ブロックを書き込む。
+/// 変更内容を表示して確認を取り、必要なら MesloLGS NF をインストールしてから保存する
+fn configure_terminal(terminal: TerminalKind, family: Option<&str>) -> io::Result<()> {
+    let ligatures = choose_ligatures(family)?;
+    let path = choose_config_path(terminal)?;
+    let resolved = resolve_path(&path)?;
+    let previous = match fs::read_to_string(&resolved) {
+        Ok(value) => value,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let updated = update_config(&previous, family, ligatures)?;
+    println!(
+        "\n{} {}: {}",
+        terminal.name(),
+        tr("configuration", "の設定"),
+        path.display()
+    );
+    println!("{}", managed_block(family, ligatures)?);
+    if updated == previous {
+        println!(
+            "{}",
+            tr(
+                "Already configured; no changes made.",
+                "設定済みのため変更はありません。"
             )
         );
         return Ok(());
     }
+    if !confirm(tr(
+        "Apply these settings? [y/N]",
+        "この設定を適用しますか？ [y/N]",
+    ))? {
+        println!("{}", tr("Cancelled.", "取り消しました。"));
+        return Ok(());
+    }
+    if family == Some(MESLO_FAMILY)
+        && confirm(tr(
+            "Install MesloLGS NF if needed? [y/N]",
+            "必要なら MesloLGS NF をインストールしますか？ [y/N]",
+        ))?
+    {
+        crate::font_install::install_meslo_nerd_font(false, "\n")?;
+    }
+    write_config(&resolved, &previous, &updated)?;
+    println!(
+        "{}",
+        tr(
+            "Saved. Reload Ghostty or restart cmux to apply the font.",
+            "保存しました。Ghostty は設定を再読み込み、cmux は再起動してください。"
+        )
+    );
+    Ok(())
+}
 
+/// リガチャの設定を選ぶ (1: 端末の既定値、2: calt と liga を有効化、3: 無効化)
+fn choose_ligatures(family: Option<&str>) -> io::Result<usize> {
     println!(
         "{}",
         tr(
@@ -156,7 +246,7 @@ pub fn run() -> io::Result<()> {
         )
     );
     let ligatures = choose_number(tr("Ligatures", "リガチャ"), 1, 3)?;
-    if family.as_deref() == Some("MesloLGS NF") && ligatures == 2 {
+    if family == Some(MESLO_FAMILY) && ligatures == 2 {
         println!(
             "{}",
             tr(
@@ -165,6 +255,11 @@ pub fn run() -> io::Result<()> {
             )
         );
     }
+    Ok(ligatures)
+}
+
+/// 書き込む設定ファイルを選ぶ。既定は一覧で最後の既存ファイル、なければ先頭
+fn choose_config_path(terminal: TerminalKind) -> io::Result<PathBuf> {
     let candidates = config_candidates(terminal)?;
     println!("{}", tr("Configuration files:", "設定ファイル:"));
     for (i, path) in candidates.iter().enumerate() {
@@ -184,7 +279,6 @@ pub fn run() -> io::Result<()> {
         .rposition(|path| path.exists())
         .map_or(1, |i| i + 1);
     let chosen = choose_number(tr("Write to", "書き込み先"), default_path, candidates.len())? - 1;
-    let path = &candidates[chosen];
     if terminal == TerminalKind::Ghostty && chosen < default_path.saturating_sub(1) {
         println!(
             "{}",
@@ -194,57 +288,7 @@ pub fn run() -> io::Result<()> {
             )
         );
     }
-    let resolved = resolve_path(path)?;
-    let previous = match fs::read_to_string(&resolved) {
-        Ok(value) => value,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
-    };
-    let updated = update_config(&previous, family.as_deref(), ligatures)?;
-    println!(
-        "\n{} {}: {}",
-        terminal.name(),
-        tr("configuration", "の設定"),
-        path.display()
-    );
-    println!("{}", managed_block(family.as_deref(), ligatures)?);
-    if updated == previous {
-        println!(
-            "{}",
-            tr(
-                "Already configured; no changes made.",
-                "設定済みのため変更はありません。"
-            )
-        );
-        return Ok(());
-    }
-    if ask(tr(
-        "Apply these settings? [y/N]",
-        "この設定を適用しますか？ [y/N]",
-    ))?
-    .eq_ignore_ascii_case("y")
-    {
-        if family.as_deref() == Some("MesloLGS NF")
-            && ask(tr(
-                "Install MesloLGS NF if needed? [y/N]",
-                "必要なら MesloLGS NF をインストールしますか？ [y/N]",
-            ))?
-            .eq_ignore_ascii_case("y")
-        {
-            crate::font_install::install_meslo_nerd_font(false, "\n")?;
-        }
-        write_config(&resolved, &previous, &updated)?;
-        println!(
-            "{}",
-            tr(
-                "Saved. Reload Ghostty or restart cmux to apply the font.",
-                "保存しました。Ghostty は設定を再読み込み、cmux は再起動してください。"
-            )
-        );
-    } else {
-        println!("{}", tr("Cancelled.", "取り消しました。"));
-    }
-    Ok(())
+    Ok(candidates[chosen].clone())
 }
 
 fn ask(label: &str) -> io::Result<String> {
@@ -258,6 +302,11 @@ fn ask(label: &str) -> io::Result<String> {
         ));
     }
     Ok(input.trim().to_string())
+}
+
+/// `[y/N]` の問い。`y` (大文字も可) だけを肯定とみなす
+fn confirm(label: &str) -> io::Result<bool> {
+    Ok(ask(label)?.eq_ignore_ascii_case("y"))
 }
 
 fn choose_number(label: &str, default: usize, max: usize) -> io::Result<usize> {
@@ -489,6 +538,33 @@ fn write_config_with_sequence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn term_programから既定の端末を決める() {
+        for (term_program, expected) in [
+            ("ghostty", TerminalKind::Ghostty),
+            ("cmux", TerminalKind::Cmux),
+            ("Apple_Terminal", TerminalKind::MacTerminal),
+            ("iTerm.app", TerminalKind::ITerm),
+            ("ITERM.APP", TerminalKind::ITerm),
+            ("", TerminalKind::Ghostty),
+            ("vscode", TerminalKind::Ghostty),
+        ] {
+            assert_eq!(
+                TerminalKind::detect(term_program),
+                expected,
+                "{term_program}"
+            );
+        }
+    }
+
+    #[test]
+    fn 端末の選択肢を番号順に並べる() {
+        assert_eq!(
+            terminal_menu(),
+            "1) Ghostty  2) cmux  3) Terminal.app  4) iTerm2"
+        );
+    }
 
     #[test]
     fn 一時ファイルの予約に失敗しても既存ファイルを残す() {
