@@ -23,15 +23,10 @@ impl App {
             .copied()
     }
 
-    pub(super) fn rainbow_select(&mut self, next: bool) {
+    pub(super) fn rainbow_select(&mut self, direction: Direction) {
         let len = self.rainbow_names().len();
         if len > 0 {
-            let current = self.rainbow_index.min(len - 1);
-            self.rainbow_index = if next {
-                (current + 1) % len
-            } else {
-                (current + len - 1) % len
-            };
+            self.rainbow_index = cycle_index(self.rainbow_index.min(len - 1), len, direction);
         }
     }
 
@@ -130,67 +125,56 @@ impl App {
     }
 }
 
-pub(super) fn fields(app: &App) -> Vec<ListItem<'static>> {
-    let mut items = vec![field_item(
+/// ブロックの選択の行
+pub(super) fn block_row(app: &App, focused: bool) -> ListItem<'static> {
+    field_item(
         app.lang
             .text("Rainbow block (Left/Right)", "Rainbow のブロック（←/→）"),
         app.rainbow_selected().unwrap_or(
             app.lang
                 .text("No left blocks", "左側のブロックがありません"),
         ),
-        app.style_focus == 5,
+        focused,
         false,
-    )];
-    let Some(name) = app.rainbow_selected() else {
-        return items;
+    )
+}
+
+/// 選択中のブロックの文字色・背景色の行。見本はブロックの今の配色で示す。
+pub(super) fn block_color_row(app: &App, foreground: bool, focused: bool) -> ListItem<'static> {
+    let name = app.rainbow_selected().unwrap_or_default();
+    let label = if foreground {
+        app.lang.text("Block foreground", "ブロックの文字色")
+    } else {
+        app.lang.text("Block background", "ブロックの背景色")
     };
-    let sample = app.rainbow_sample(name, None);
-    for (foreground, label, focus) in [
-        (
-            true,
-            app.lang.text("Block foreground", "ブロックの文字色"),
-            6,
+    let value = app.rainbow_color_value(name, foreground);
+    let customized = app
+        .config
+        .style
+        .rainbow_overrides
+        .get(name)
+        .and_then(|c| {
+            if foreground {
+                c.fg.as_ref()
+            } else {
+                c.bg.as_ref()
+            }
+        })
+        .is_some_and(|value| !value.trim().is_empty());
+    let source = if customized {
+        app.lang.text("custom", "個別")
+    } else {
+        app.lang.text("palette", "セット")
+    };
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            format!("  {label}: {value} ({source})  "),
+            field_style(focused, false),
         ),
-        (
-            false,
-            app.lang.text("Block background", "ブロックの背景色"),
-            7,
+        Span::styled(
+            app.lang.text(" Sample ", " 見本 "),
+            app.rainbow_sample(name, None),
         ),
-    ] {
-        let value = app.rainbow_color_value(name, foreground);
-        let customized = app
-            .config
-            .style
-            .rainbow_overrides
-            .get(name)
-            .and_then(|c| {
-                if foreground {
-                    c.fg.as_ref()
-                } else {
-                    c.bg.as_ref()
-                }
-            })
-            .is_some_and(|value| !value.trim().is_empty());
-        let source = if customized {
-            app.lang.text("custom", "個別")
-        } else {
-            app.lang.text("palette", "セット")
-        };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("  {label}: {value} ({source})  "),
-                field_style(app.style_focus == focus, false),
-            ),
-            Span::styled(app.lang.text(" Sample ", " 見本 "), sample),
-            Span::raw(app.lang.text(" Enter:palette", " Enter:色選択")),
-        ])));
-    }
-    items.push(field_item(
-        app.lang
-            .text("Reset block colors", "このブロックの個別色を解除"),
-        "Enter",
-        app.style_focus == 8,
-        false,
-    ));
-    items
+        Span::raw(app.lang.text(" Enter:palette", " Enter:色選択")),
+    ]))
 }

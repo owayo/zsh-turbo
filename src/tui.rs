@@ -5,7 +5,7 @@ use crate::style::{self, Color as AppColor};
 use crate::prompt::{RAINBOW_PALETTES, rainbow_colors, rainbow_palette};
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs};
@@ -14,9 +14,23 @@ use std::time::Duration;
 mod block_colors;
 mod colors;
 mod completions;
+mod custom_tab;
+mod git_tab;
 mod lang;
-use colors::{ColorPicker, color_field_item};
+mod prompt_tab;
+mod segments_tab;
+mod shell_tab;
+mod style_tab;
+mod suggest_tab;
+use colors::{ColorPicker, color_field_item, color_row};
+use custom_tab::CustomItem;
+use git_tab::GitItem;
 use lang::Lang;
+use prompt_tab::PromptItem;
+use segments_tab::{SegColumn, available_segments};
+use shell_tab::ShellItem;
+use style_tab::StyleItem;
+use suggest_tab::SuggestItem;
 
 pub(crate) fn interface_is_japanese() -> bool {
     Lang::from_preference(config::load_config().ui.language) == Lang::Ja
@@ -70,30 +84,88 @@ mod behavior_tests;
 // 定数
 // ---------------------------------------------------------------------------
 
-const TAB_TITLES: &[&str] = &[
-    "Prompt",
-    "Segments",
-    "Git",
-    "Suggest",
-    "Style",
-    "Custom",
-    "Shell",
-    "Completions",
-];
-
-const PROMPT_STYLES: &[&str] = &["lean", "classic", "rainbow", "pure"];
-const FONT_LEVELS: &[&str] = &["nerd", "powerline", "unicode", "ascii"];
-const SUGGEST_STRATEGIES: &[&str] = &["prefix", "substring", "fuzzy"];
-const SUGGEST_KEY_ACTIONS: &[SuggestKeyAction] = &[
-    SuggestKeyAction::Default,
-    SuggestKeyAction::Full,
-    SuggestKeyAction::Step,
-    SuggestKeyAction::Word,
-];
-const SHELL_INTEGRATIONS: &[&str] = &["auto", "1", "0"];
-
 // セグメント名一覧は prompt::ALL_SEGMENT_NAMES を単一ソースとする
 const ALL_SEGMENTS: &[&str] = crate::prompt::ALL_SEGMENT_NAMES;
+
+// ---------------------------------------------------------------------------
+// タブと設定項目への操作
+// ---------------------------------------------------------------------------
+
+/// 設定画面のタブ。表示順は `ALL` の並びで決まる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Prompt,
+    Segments,
+    Git,
+    Suggest,
+    Style,
+    Custom,
+    Shell,
+    Completions,
+}
+
+impl Tab {
+    const ALL: [Self; 8] = [
+        Self::Prompt,
+        Self::Segments,
+        Self::Git,
+        Self::Suggest,
+        Self::Style,
+        Self::Custom,
+        Self::Shell,
+        Self::Completions,
+    ];
+
+    /// 表示順での位置
+    fn position(self) -> usize {
+        Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0)
+    }
+
+    fn next(self) -> Self {
+        cycle_next(self, &Self::ALL)
+    }
+
+    fn prev(self) -> Self {
+        cycle_prev(self, &Self::ALL)
+    }
+
+    fn title(self, lang: Lang) -> &'static str {
+        match self {
+            Self::Prompt => lang.text("Prompt", "プロンプト"),
+            Self::Segments => lang.text("Segments", "配置"),
+            Self::Git => "Git",
+            Self::Suggest => lang.text("Suggest", "入力候補"),
+            Self::Style => lang.text("Style", "配色"),
+            Self::Custom => lang.text("Custom", "カスタム"),
+            Self::Shell => lang.text("Shell", "シェル"),
+            Self::Completions => lang.text("Completions", "補完"),
+        }
+    }
+}
+
+/// 選択や値を動かす向き。↑と←は前、↓と→は次。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Previous,
+    Next,
+}
+
+/// 設定項目への操作。←→ は `Adjust`、Enter と空白は `Activate`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItemAction {
+    Adjust(Direction),
+    Activate,
+}
+
+impl ItemAction {
+    /// 選択肢を巡回する項目での向き。決定は「次へ」として扱う。
+    fn cycle_direction(self) -> Direction {
+        match self {
+            Self::Adjust(direction) => direction,
+            Self::Activate => Direction::Next,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 編集対象の追跡
@@ -217,17 +289,6 @@ impl CustomField {
 }
 
 // ---------------------------------------------------------------------------
-// セグメントタブの列
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SegColumn {
-    Left,
-    Right,
-    Available,
-}
-
-// ---------------------------------------------------------------------------
 // 終了確認
 // ---------------------------------------------------------------------------
 
@@ -244,18 +305,18 @@ enum QuitState {
 struct App {
     lang: Lang,
     config: Config,
-    tab: usize,
+    tab: Tab,
     dirty: bool,
 
-    // タブごとのフォーカス位置
-    prompt_focus: usize,
-    git_focus: usize,
-    suggest_focus: usize,
-    style_focus: usize,
+    // タブごとの選択中の項目
+    prompt_focus: PromptItem,
+    git_focus: GitItem,
+    suggest_focus: SuggestItem,
+    style_focus: StyleItem,
     rainbow_index: usize,
-    custom_focus: usize,
-    shell_focus: usize,
-    completion_focus: usize,
+    custom_focus: CustomItem,
+    shell_focus: ShellItem,
+    completion_focus: completions::DetailItem,
     completion_index: usize,
     completion_detail: bool,
     completion_delete_pending: bool,
@@ -305,16 +366,16 @@ impl App {
         Self {
             lang,
             config,
-            tab: 0,
+            tab: Tab::Prompt,
             dirty: false,
-            prompt_focus: 0,
-            git_focus: 0,
-            suggest_focus: 0,
-            style_focus: 0,
+            prompt_focus: PromptItem::Style,
+            git_focus: GitItem::Status,
+            suggest_focus: SuggestItem::Strategy,
+            style_focus: StyleItem::PrimaryColor,
             rainbow_index: 0,
-            custom_focus: 0,
-            shell_focus: 0,
-            completion_focus: 0,
+            custom_focus: CustomItem::Selector,
+            shell_focus: ShellItem::CompletionDirs,
+            completion_focus: completions::DetailItem::Back,
             completion_index: 0,
             completion_detail: false,
             completion_delete_pending: false,
@@ -339,258 +400,33 @@ impl App {
         }
     }
 
-    fn max_focus(&self) -> usize {
+    /// タブを切り替える。補完タブは一覧から始める。
+    fn switch_tab(&mut self, tab: Tab) {
+        self.tab = tab;
+        if tab == Tab::Completions {
+            self.completion_detail = false;
+        }
+    }
+
+    /// ↑↓ で選択を動かす。配置タブと補完タブは専用の動きをする。
+    fn move_focus(&mut self, direction: Direction) {
         match self.tab {
-            0 => 8,
-            2 => 2,
-            3 => 8,
-            4 => {
-                if self.rainbow_selected().is_some() {
-                    8
-                } else {
-                    5
-                }
-            }
-            5 if !self.config.prompt.custom.is_empty() => 6,
-            6 => 3,
-            7 if self.completion_detail && !self.config.completions.is_empty() => 7,
-            _ => 0,
-        }
-    }
-
-    fn current_focus(&self) -> usize {
-        match self.tab {
-            0 => self.prompt_focus,
-            2 => self.git_focus,
-            3 => self.suggest_focus,
-            4 => self.style_focus,
-            5 => self.custom_focus,
-            6 => self.shell_focus,
-            7 => self.completion_focus,
-            _ => 0,
-        }
-    }
-
-    fn set_focus(&mut self, v: usize) {
-        match self.tab {
-            0 => self.prompt_focus = v,
-            2 => self.git_focus = v,
-            3 => self.suggest_focus = v,
-            4 => self.style_focus = v,
-            5 => self.custom_focus = v,
-            6 => self.shell_focus = v,
-            7 => self.completion_focus = v,
-            _ => {}
-        }
-    }
-
-    fn focus_up(&mut self) {
-        if self.tab == 7 && !self.completion_detail {
-            self.completion_index = self.completion_index.saturating_sub(1);
-            return;
-        }
-        if self.tab == 1 {
-            self.seg_focus_up();
-            return;
-        }
-        let cur = self.current_focus();
-        if cur > 0 {
-            self.set_focus(cur - 1);
-        }
-    }
-
-    fn focus_down(&mut self) {
-        if self.tab == 7 && !self.completion_detail {
-            self.completion_index = self
-                .completion_index
-                .saturating_add(1)
-                .min(self.config.completions.len().saturating_sub(1));
-            return;
-        }
-        if self.tab == 1 {
-            self.seg_focus_down();
-            return;
-        }
-        let cur = self.current_focus();
-        if cur < self.max_focus() {
-            self.set_focus(cur + 1);
-        }
-    }
-
-    // セグメントタブのナビゲーション補助
-    fn seg_focus_up(&mut self) {
-        match self.seg_column {
-            SegColumn::Left => list_prev(&mut self.seg_left_state),
-            SegColumn::Right => list_prev(&mut self.seg_right_state),
-            SegColumn::Available => list_prev(&mut self.seg_avail_state),
-        }
-    }
-
-    fn seg_focus_down(&mut self) {
-        let len = match self.seg_column {
-            SegColumn::Left => self.config.prompt.left_segments.len(),
-            SegColumn::Right => self.config.prompt.right_segments.len(),
-            SegColumn::Available => available_segments(&self.config).len(),
-        };
-        match self.seg_column {
-            SegColumn::Left => list_next(&mut self.seg_left_state, len),
-            SegColumn::Right => list_next(&mut self.seg_right_state, len),
-            SegColumn::Available => list_next(&mut self.seg_avail_state, len),
-        }
-    }
-
-    fn seg_column_left(&mut self) {
-        self.seg_column = match self.seg_column {
-            SegColumn::Left => SegColumn::Left,
-            SegColumn::Right => SegColumn::Left,
-            SegColumn::Available => SegColumn::Right,
-        };
-        if matches!(self.seg_column, SegColumn::Left | SegColumn::Right) {
-            self.seg_last_side = self.seg_column;
-        }
-    }
-
-    fn seg_column_right(&mut self) {
-        self.seg_column = match self.seg_column {
-            SegColumn::Left => SegColumn::Right,
-            SegColumn::Right => SegColumn::Available,
-            SegColumn::Available => SegColumn::Available,
-        };
-        if matches!(self.seg_column, SegColumn::Left | SegColumn::Right) {
-            self.seg_last_side = self.seg_column;
-        }
-    }
-
-    fn seg_add(&mut self) {
-        if self.seg_column != SegColumn::Available {
-            return;
-        }
-        let avail = available_segments(&self.config);
-        if let Some(idx) = self.seg_avail_state.selected()
-            && idx < avail.len()
-        {
-            let seg = avail[idx].clone();
-            match self.seg_last_side {
-                SegColumn::Left | SegColumn::Available => {
-                    self.config.prompt.left_segments.push(seg);
-                    let len = self.config.prompt.left_segments.len();
-                    self.seg_left_state.select(Some(len - 1));
-                }
-                SegColumn::Right => {
-                    self.config.prompt.right_segments.push(seg);
-                    let len = self.config.prompt.right_segments.len();
-                    self.seg_right_state.select(Some(len - 1));
-                }
-            }
-            self.dirty = true;
-            // 利用可能リストのインデックスを修正
-            let new_avail = available_segments(&self.config);
-            if new_avail.is_empty() {
-                self.seg_avail_state.select(None);
-            } else if idx >= new_avail.len() {
-                self.seg_avail_state.select(Some(new_avail.len() - 1));
-            }
-        }
-    }
-
-    fn seg_add_to(&mut self, side: SegColumn) {
-        self.seg_last_side = side;
-        if self.seg_column == SegColumn::Available {
-            self.seg_add();
-            return;
-        }
-        let selected = match self.seg_column {
-            SegColumn::Left => self
-                .seg_left_state
-                .selected()
-                .and_then(|i| self.config.prompt.left_segments.get(i)),
-            SegColumn::Right => self
-                .seg_right_state
-                .selected()
-                .and_then(|i| self.config.prompt.right_segments.get(i)),
-            SegColumn::Available => None,
-        }
-        .cloned();
-        let Some(name) = selected else {
-            return;
-        };
-        let (segments, state) = match side {
-            SegColumn::Left => (
-                &mut self.config.prompt.left_segments,
-                &mut self.seg_left_state,
+            Tab::Prompt => move_item(&PromptItem::ALL, &mut self.prompt_focus, direction),
+            Tab::Segments => self.seg_focus_move(direction),
+            Tab::Git => move_item(&GitItem::ALL, &mut self.git_focus, direction),
+            Tab::Suggest => move_item(&SuggestItem::ALL, &mut self.suggest_focus, direction),
+            Tab::Style => move_item(
+                &style_tab::visible_items(self),
+                &mut self.style_focus,
+                direction,
             ),
-            SegColumn::Right => (
-                &mut self.config.prompt.right_segments,
-                &mut self.seg_right_state,
+            Tab::Custom => move_item(
+                &custom_tab::visible_items(self),
+                &mut self.custom_focus,
+                direction,
             ),
-            SegColumn::Available => return,
-        };
-        if !segments.contains(&name) {
-            segments.push(name);
-            state.select(Some(segments.len() - 1));
-            self.dirty = true;
-        }
-    }
-
-    fn seg_remove(&mut self) {
-        match self.seg_column {
-            SegColumn::Left => {
-                if let Some(idx) = self.seg_left_state.selected()
-                    && idx < self.config.prompt.left_segments.len()
-                {
-                    self.config.prompt.left_segments.remove(idx);
-                    self.dirty = true;
-                    fix_list_state(
-                        &mut self.seg_left_state,
-                        self.config.prompt.left_segments.len(),
-                    );
-                    let avail = available_segments(&self.config);
-                    if self.seg_avail_state.selected().is_none() && !avail.is_empty() {
-                        self.seg_avail_state.select(Some(0));
-                    }
-                }
-            }
-            SegColumn::Right => {
-                if let Some(idx) = self.seg_right_state.selected()
-                    && idx < self.config.prompt.right_segments.len()
-                {
-                    self.config.prompt.right_segments.remove(idx);
-                    self.dirty = true;
-                    fix_list_state(
-                        &mut self.seg_right_state,
-                        self.config.prompt.right_segments.len(),
-                    );
-                    let avail = available_segments(&self.config);
-                    if self.seg_avail_state.selected().is_none() && !avail.is_empty() {
-                        self.seg_avail_state.select(Some(0));
-                    }
-                }
-            }
-            SegColumn::Available => {}
-        }
-    }
-
-    fn seg_reorder(&mut self, up: bool) {
-        match self.seg_column {
-            SegColumn::Left => {
-                if reorder_vec(
-                    &mut self.config.prompt.left_segments,
-                    &mut self.seg_left_state,
-                    up,
-                ) {
-                    self.dirty = true;
-                }
-            }
-            SegColumn::Right => {
-                if reorder_vec(
-                    &mut self.config.prompt.right_segments,
-                    &mut self.seg_right_state,
-                    up,
-                ) {
-                    self.dirty = true;
-                }
-            }
-            SegColumn::Available => {}
+            Tab::Shell => move_item(&ShellItem::ALL, &mut self.shell_focus, direction),
+            Tab::Completions => completions::move_focus(self, direction),
         }
     }
 
@@ -686,79 +522,113 @@ impl App {
         }
     }
 
-    fn confirm_edit(&mut self) {
-        if let Some(target) = self.editing.clone() {
-            let val = self.edit_buffer.clone();
-            if let Err(message) = self.validate_edit(&target, &val) {
-                self.status_msg = Some(message.into());
-                return;
-            }
-            match target {
-                EditTarget::BlankLines => self.config.prompt.blank_lines = val.parse().unwrap(),
-                EditTarget::HomeSymbol => self.config.prompt.dir.home_symbol = val,
-                EditTarget::TruncationSymbol => self.config.prompt.dir.truncation_symbol = val,
-                EditTarget::TruncationLength => {
-                    self.config.prompt.dir.truncation_length = val.parse().unwrap()
-                }
-                EditTarget::MaxSuggestions => {
-                    self.config.suggest.max_suggestions = val.parse().unwrap()
-                }
-                EditTarget::IpInterface => self.config.prompt.ip_interface = val,
-                EditTarget::CompletionDirs => self.config.shell.completion_dirs = val,
-                EditTarget::Completion(i, field) => {
-                    field.set(&mut self.config.completions[i], &val);
-                    if field == completions::Field::Command {
-                        self.completion_draft = false;
-                    }
-                }
-                EditTarget::Custom(index, field) => {
-                    if field == CustomField::Name {
-                        let old_name = self.config.prompt.custom[index].name.clone();
-                        // 組込み名や重複名を含む既存設定を修正するときは別の定義の配置を奪わない。
-                        if !ALL_SEGMENTS.contains(&old_name.as_str())
-                            && !self
-                                .config
-                                .prompt
-                                .custom
-                                .iter()
-                                .enumerate()
-                                .any(|(i, c)| i != index && c.name == old_name)
-                        {
-                            if let Some(colors) =
-                                self.config.style.rainbow_overrides.remove(&old_name)
-                            {
-                                self.config
-                                    .style
-                                    .rainbow_overrides
-                                    .insert(val.clone(), colors);
-                            }
-                            for name in self
-                                .config
-                                .prompt
-                                .left_segments
-                                .iter_mut()
-                                .chain(&mut self.config.prompt.right_segments)
-                            {
-                                if *name == old_name {
-                                    *name = val.clone();
-                                }
-                            }
-                        }
-                    }
-                    *field.value(&mut self.config.prompt.custom[index]) = val;
-                    self.refresh_segment_selection();
-                }
-                EditTarget::HighlightColor => self.config.suggest.highlight_color = val,
-                EditTarget::PrimaryColor => self.config.style.primary_color = val,
-                EditTarget::SuccessColor => self.config.style.success_color = val,
-                EditTarget::ErrorColor => self.config.style.error_color = val,
-                EditTarget::MutedColor => self.config.style.muted_color = val,
-                EditTarget::RainbowFg(name) => self.set_rainbow_color(name, true, val),
-                EditTarget::RainbowBg(name) => self.set_rainbow_color(name, false, val),
-            }
-            self.editing = None;
-            self.dirty = true;
+    /// 決定で編集を始める項目。左右キーでは何もしない。
+    fn edit_on_activate(&mut self, action: ItemAction, target: EditTarget) {
+        match action {
+            ItemAction::Activate => self.activate_edit(target),
+            ItemAction::Adjust(_) => {}
         }
+    }
+
+    fn is_editing(&self, target: &EditTarget) -> bool {
+        self.editing.as_ref() == Some(target)
+    }
+
+    /// 項目に表示する値。編集中の項目は入力中の文字列に `|` を付けて見せる。
+    fn shown_value(&self, target: &EditTarget, value: &str) -> String {
+        if self.is_editing(target) {
+            format!("{}|", self.edit_buffer)
+        } else {
+            value.to_owned()
+        }
+    }
+
+    /// 真偽値の設定を反転し、未保存にする
+    fn toggle_setting(&mut self, flag: impl FnOnce(&mut Config) -> &mut bool) {
+        let flag = flag(&mut self.config);
+        *flag = !*flag;
+        self.dirty = true;
+    }
+
+    /// 文字列の設定を選択肢の中で前後に巡回させ、未保存にする。不明な値は先頭とみなす。
+    fn cycle_setting(
+        &mut self,
+        direction: Direction,
+        options: &[&str],
+        value: impl FnOnce(&mut Config) -> &mut String,
+    ) {
+        let value = value(&mut self.config);
+        *value = cycle_option(value.as_str(), options, direction).to_owned();
+        self.dirty = true;
+    }
+
+    /// 数の設定を 1 つ増減する。0 では減らさず未保存にもしない。上限では値を保ったまま未保存にする。
+    fn step_count(&mut self, direction: Direction, value: impl FnOnce(&mut Config) -> &mut usize) {
+        let value = value(&mut self.config);
+        match direction {
+            Direction::Previous if *value > 0 => *value -= 1,
+            Direction::Previous => return,
+            Direction::Next => *value = value.saturating_add(1),
+        }
+        self.dirty = true;
+    }
+
+    fn confirm_edit(&mut self) {
+        let Some(target) = self.editing.clone() else {
+            return;
+        };
+        let value = self.edit_buffer.clone();
+        if let Err(message) = self.validate_edit(&target, &value) {
+            // 検証に失敗したら設定へ反映せず、編集を続ける
+            self.status_msg = Some(message.into());
+            return;
+        }
+        self.apply_edit(target, value);
+        self.finish_edit();
+    }
+
+    /// 検証済みの編集値を設定へ反映する
+    fn apply_edit(&mut self, target: EditTarget, value: String) {
+        match target {
+            EditTarget::BlankLines => self.config.prompt.blank_lines = value.parse().unwrap(),
+            EditTarget::HomeSymbol => self.config.prompt.dir.home_symbol = value,
+            EditTarget::TruncationSymbol => self.config.prompt.dir.truncation_symbol = value,
+            EditTarget::TruncationLength => {
+                self.config.prompt.dir.truncation_length = value.parse().unwrap()
+            }
+            EditTarget::MaxSuggestions => {
+                self.config.suggest.max_suggestions = value.parse().unwrap()
+            }
+            EditTarget::IpInterface => self.config.prompt.ip_interface = value,
+            EditTarget::CompletionDirs => self.config.shell.completion_dirs = value,
+            EditTarget::Completion(index, field) => {
+                field.set(&mut self.config.completions[index], &value);
+                // CLI 名を確定した新規登録は、以後の取消しで消さない
+                if field == completions::Field::Command {
+                    self.completion_draft = false;
+                }
+            }
+            EditTarget::Custom(index, field) => {
+                if field == CustomField::Name {
+                    self.rename_custom(index, &value);
+                }
+                *field.value(&mut self.config.prompt.custom[index]) = value;
+                self.refresh_segment_selection();
+            }
+            EditTarget::HighlightColor => self.config.suggest.highlight_color = value,
+            EditTarget::PrimaryColor => self.config.style.primary_color = value,
+            EditTarget::SuccessColor => self.config.style.success_color = value,
+            EditTarget::ErrorColor => self.config.style.error_color = value,
+            EditTarget::MutedColor => self.config.style.muted_color = value,
+            EditTarget::RainbowFg(name) => self.set_rainbow_color(name, true, value),
+            EditTarget::RainbowBg(name) => self.set_rainbow_color(name, false, value),
+        }
+    }
+
+    /// 編集を閉じて未保存にする
+    fn finish_edit(&mut self) {
+        self.editing = None;
+        self.dirty = true;
     }
 
     fn validate_edit(&self, target: &EditTarget, value: &str) -> Result<(), &'static str> {
@@ -823,98 +693,6 @@ impl App {
         Ok(())
     }
 
-    fn custom_add(&mut self) {
-        let name = (1..)
-            .map(|i| format!("custom_{i}"))
-            .find(|name| {
-                !ALL_SEGMENTS.contains(&name.as_str())
-                    && !self.config.prompt.custom.iter().any(|c| c.name == *name)
-                    && !self.config.prompt.left_segments.contains(name)
-                    && !self.config.prompt.right_segments.contains(name)
-            })
-            .unwrap();
-        self.config.prompt.custom.push(CustomSegment {
-            name,
-            command: ":".into(),
-            icon: String::new(),
-            fg: "white".into(),
-            bg: "238".into(),
-            when: "always".into(),
-        });
-        self.custom_index = self.config.prompt.custom.len() - 1;
-        self.custom_focus = 1;
-        self.refresh_segment_selection();
-        self.dirty = true;
-        self.status_msg = Some(
-            self.lang
-                .text(
-                    "Created. Edit fields, then add it in Segments.",
-                    "作成しました。項目を編集し、「配置」で追加してください。",
-                )
-                .into(),
-        );
-    }
-
-    fn custom_remove(&mut self) {
-        if self.custom_index >= self.config.prompt.custom.len() {
-            return;
-        }
-        let removed = self.config.prompt.custom.remove(self.custom_index);
-        if !ALL_SEGMENTS.contains(&removed.name.as_str())
-            && !self
-                .config
-                .prompt
-                .custom
-                .iter()
-                .any(|c| c.name == removed.name)
-        {
-            self.config.style.rainbow_overrides.remove(&removed.name);
-            self.config
-                .prompt
-                .left_segments
-                .retain(|name| *name != removed.name);
-            self.config
-                .prompt
-                .right_segments
-                .retain(|name| *name != removed.name);
-        }
-        self.custom_index = self
-            .custom_index
-            .min(self.config.prompt.custom.len().saturating_sub(1));
-        if self.config.prompt.custom.is_empty() {
-            self.custom_focus = 0;
-        }
-        self.refresh_segment_selection();
-        self.dirty = true;
-    }
-
-    fn refresh_segment_selection(&mut self) {
-        fix_list_state(
-            &mut self.seg_left_state,
-            self.config.prompt.left_segments.len(),
-        );
-        fix_list_state(
-            &mut self.seg_right_state,
-            self.config.prompt.right_segments.len(),
-        );
-        let len = available_segments(&self.config).len();
-        fix_list_state(&mut self.seg_avail_state, len);
-        if len > 0 && self.seg_avail_state.selected().is_none() {
-            self.seg_avail_state.select(Some(0));
-        }
-    }
-
-    fn custom_select(&mut self, next: bool) {
-        let len = self.config.prompt.custom.len();
-        if len > 0 {
-            self.custom_index = if next {
-                (self.custom_index + 1) % len
-            } else {
-                (self.custom_index + len - 1) % len
-            };
-        }
-    }
-
     fn cancel_edit(&mut self) {
         if self.completion_draft
             && matches!(
@@ -935,20 +713,32 @@ impl App {
 // ヘルパー関数
 // ---------------------------------------------------------------------------
 
-fn available_segments(config: &Config) -> Vec<String> {
-    let mut names: Vec<String> = ALL_SEGMENTS
+/// 項目の並びの中で選択中の項目の位置。消えた項目を選んでいたときは末尾の項目とみなす。
+fn focus_position<T: PartialEq>(items: &[T], focus: &T) -> usize {
+    items
         .iter()
+        .position(|item| item == focus)
+        .unwrap_or(items.len().saturating_sub(1))
+}
+
+/// 操作の対象にする項目。消えた項目を選んでいたときは `focus_position` と同じく末尾の項目にする。
+fn focused_item<T: Copy + PartialEq>(items: &[T], focus: T) -> T {
+    items
+        .get(focus_position(items, &focus))
         .copied()
-        .chain(config.prompt.custom.iter().map(|c| c.name.as_str()))
-        .filter(|s| {
-            !config.prompt.left_segments.contains(&s.to_string())
-                && !config.prompt.right_segments.contains(&s.to_string())
-        })
-        .map(|s| s.to_string())
-        .collect();
-    let mut seen = std::collections::HashSet::new();
-    names.retain(|name| seen.insert(name.clone()));
-    names
+        .unwrap_or(focus)
+}
+
+/// 選択を前後へ 1 つ動かす。端では動かず、消えた項目からは末尾の項目を起点にする。
+fn move_item<T: Copy + PartialEq>(items: &[T], focus: &mut T, direction: Direction) {
+    let index = focus_position(items, focus);
+    let next = match direction {
+        Direction::Previous => index.checked_sub(1),
+        Direction::Next => index.checked_add(1),
+    };
+    if let Some(item) = next.and_then(|index| items.get(index)) {
+        *focus = *item;
+    }
 }
 
 fn list_prev(state: &mut ListState) {
@@ -997,14 +787,29 @@ fn reorder_vec(v: &mut [String], state: &mut ListState, up: bool) -> bool {
     false
 }
 
-fn cycle_next(current: &str, options: &[&str]) -> String {
-    let idx = options.iter().position(|&o| o == current).unwrap_or(0);
-    options[(idx + 1) % options.len()].to_string()
+/// 選択肢を向きに沿って 1 つ巡回させる。不明な値は先頭とみなす。
+fn cycle_option<T: Copy + PartialEq>(current: T, options: &[T], direction: Direction) -> T {
+    let index = options
+        .iter()
+        .position(|option| *option == current)
+        .unwrap_or(0);
+    options[cycle_index(index, options.len(), direction)]
 }
 
-fn cycle_prev(current: &str, options: &[&str]) -> String {
-    let idx = options.iter().position(|&o| o == current).unwrap_or(0);
-    options[(idx + options.len() - 1) % options.len()].to_string()
+fn cycle_next<T: Copy + PartialEq>(current: T, options: &[T]) -> T {
+    cycle_option(current, options, Direction::Next)
+}
+
+fn cycle_prev<T: Copy + PartialEq>(current: T, options: &[T]) -> T {
+    cycle_option(current, options, Direction::Previous)
+}
+
+/// 0 から len 未満の位置を向きに沿って 1 つ動かし、端では反対側へ回る
+fn cycle_index(index: usize, len: usize, direction: Direction) -> usize {
+    match direction {
+        Direction::Previous => (index + len - 1) % len,
+        Direction::Next => (index + 1) % len,
+    }
 }
 
 fn to_ratatui_color(c: AppColor) -> Color {
@@ -1241,6 +1046,23 @@ fn wrap_preview(text: Text<'static>, width: u16) -> Text<'static> {
     Text::from(lines)
 }
 
+/// プレビューの種類
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewKind {
+    /// 設定を反映したプロンプト
+    Prompt,
+    /// 空行数を選んでいる間は、プロンプトを 2 つ並べて間隔を見せる
+    Spacing,
+}
+
+fn preview_kind(app: &App) -> PreviewKind {
+    if app.tab == Tab::Prompt && app.prompt_focus == PromptItem::BlankLines {
+        PreviewKind::Spacing
+    } else {
+        PreviewKind::Prompt
+    }
+}
+
 fn ui(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let width = area.width.saturating_sub(2);
@@ -1248,25 +1070,24 @@ fn ui(frame: &mut Frame, app: &mut App) {
         .editing
         .as_ref()
         .map(|target| (target, app.edit_buffer.as_str()));
-    let spacing_preview = app.tab == 0 && app.prompt_focus == 8;
-    let preview_text = if spacing_preview {
-        render_spacing_preview(&app.config, width, edit)
-    } else {
-        render_preview(&app.config, width, edit)
+    let preview_kind = preview_kind(app);
+    let preview_text = match preview_kind {
+        PreviewKind::Prompt => render_preview(&app.config, width, edit),
+        PreviewKind::Spacing => render_spacing_preview(&app.config, width, edit),
     };
     let preview_text = wrap_preview(preview_text, width);
+    // プレビューの下に残す高さ
+    let reserved = match (app.color_picker.is_some(), preview_kind) {
+        (true, _) => 6,
+        (false, PreviewKind::Spacing) => 8,
+        (false, PreviewKind::Prompt) => 10,
+    };
     let preview_height = (preview_text
         .lines
         .len()
         .saturating_add(2)
         .min(u16::MAX as usize) as u16)
-        .min(area.height.saturating_sub(if app.color_picker.is_some() {
-            6
-        } else if spacing_preview {
-            8
-        } else {
-            10
-        }));
+        .min(area.height.saturating_sub(reserved));
     let preview = Paragraph::new(preview_text).block(
         Block::default()
             .borders(Borders::ALL)
@@ -1293,9 +1114,8 @@ fn ui(frame: &mut Frame, app: &mut App) {
     frame.render_widget(preview, chunks[0]);
 
     // -- タブ --
-    let titles = app.lang.tabs();
-    let tabs = Tabs::new(titles.iter().copied())
-        .select(app.tab)
+    let tabs = Tabs::new(Tab::ALL.map(|tab| tab.title(app.lang)))
+        .select(app.tab.position())
         .highlight_style(
             Style::default()
                 .fg(Color::Cyan)
@@ -1306,17 +1126,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
 
     // -- コンテンツ --
     let content_area = chunks[2];
-    match app.tab {
-        0 => render_prompt_tab(frame, app, content_area),
-        1 => render_segments_tab(frame, app, content_area),
-        2 => render_git_tab(frame, app, content_area),
-        3 => render_suggest_tab(frame, app, content_area),
-        4 => render_style_tab(frame, app, content_area),
-        5 => render_custom_tab(frame, app, content_area),
-        6 => render_shell_tab(frame, app, content_area),
-        7 => completions::render(frame, app, content_area),
-        _ => {}
-    }
+    render_tab_content(frame, app, content_area);
 
     // -- ヘルプバー --
     let dirty_indicator = if app.dirty {
@@ -1325,56 +1135,6 @@ fn ui(frame: &mut Frame, app: &mut App) {
         ""
     };
     let status = app.status_msg.as_deref().unwrap_or("");
-
-    let help_text = if app.quit_state == QuitState::Confirming {
-        app.lang.text(
-            "Unsaved changes! Press Esc again to quit, or any other key to cancel.",
-            "未保存の変更があります。Esc:破棄して終了  その他のキー:戻る",
-        )
-    } else if app.custom_delete_pending {
-        app.lang.text(
-            "⌫ again: remove definition and placements  Any other key: cancel",
-            "再度 ⌫:定義と配置を削除  その他のキー:戻る",
-        )
-    } else if app.completion_delete_pending {
-        app.lang.text(
-            "⌫/d again: remove selected CLI  Any other key: cancel",
-            "再度 ⌫/d:選択中の CLI を削除  その他のキー:取消",
-        )
-    } else if app.editing.is_some() {
-        app.lang.text(
-            "Enter:confirm  Esc:cancel  Arrows/Home/End:cursor  Alt+Enter:newline",
-            "Enter:確定  Esc:取消  矢印/Home/End:移動  Alt+Enter:改行",
-        )
-    } else if app.tab == 7 {
-        if app.completion_detail {
-            app.lang.text(
-                "↑/↓:field  Enter:edit  n:add  ⌫/d:delete  s:save  Esc:list",
-                "↑/↓:項目  Enter:編集  n:追加  ⌫/d:削除  s:保存  Esc:一覧",
-            )
-        } else {
-            app.lang.text(
-                "↑/↓:select  Enter:settings  n:add  ⌫/d:delete  s:save  Esc:quit",
-                "↑/↓:選択  Enter:設定  n:追加  ⌫/d:削除  s:保存  Esc:終了",
-            )
-        }
-    } else if app.tab == 1 {
-        app.lang.text(
-            "Tab:switch  hjkl:nav  L/R:add to side  ⌫:remove  u/d:order  S:save  Esc:quit",
-            "Tab:切替  hjkl:移動  L/R:追加  ⌫:削除  u/d:順序  S:保存  Esc:終了",
-        )
-    } else if app.tab == 5 {
-        app.lang.text(
-            "Tab:switch  jk:field  hl:select  n:new  ⌫:delete  Enter:edit  S:save  Esc:quit",
-            "Tab:切替  jk:項目  hl:選択  n:作成  ⌫:削除  Enter:編集  S:保存 Esc:終了",
-        )
-    } else {
-        app.lang.text(
-            "Tab:switch  jk:nav  hl:change  Enter:edit/toggle  S:save  Esc:quit",
-            "Tab:切替  jk:移動  hl:変更  Enter:編集/切替  S:保存  Esc:終了",
-        )
-    };
-
     let status_line = Line::from(vec![
         Span::styled(dirty_indicator, Style::default().fg(Color::Yellow).bold()),
         Span::raw("  "),
@@ -1385,7 +1145,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
         chunks[3],
     );
     frame.render_widget(
-        Paragraph::new(help_text)
+        Paragraph::new(help_text(app))
             .wrap(ratatui::widgets::Wrap { trim: true })
             .style(Style::default().fg(Color::DarkGray)),
         chunks[4],
@@ -1395,7 +1155,75 @@ fn ui(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn render_editor(frame: &mut Frame, app: &App, target: &EditTarget, area: ratatui::layout::Rect) {
+/// 選択中のタブの内容を描画する
+fn render_tab_content(frame: &mut Frame, app: &mut App, area: Rect) {
+    match app.tab {
+        Tab::Prompt => prompt_tab::render(frame, app, area),
+        Tab::Segments => segments_tab::render(frame, app, area),
+        Tab::Git => git_tab::render(frame, app, area),
+        Tab::Suggest => suggest_tab::render(frame, app, area),
+        Tab::Style => style_tab::render(frame, app, area),
+        Tab::Custom => custom_tab::render(frame, app, area),
+        Tab::Shell => shell_tab::render(frame, app, area),
+        Tab::Completions => completions::render(frame, app, area),
+    }
+}
+
+/// ヘルプバーの文言。確認や編集の案内を優先し、それ以外はタブごとに出し分ける。
+fn help_text(app: &App) -> &'static str {
+    let lang = app.lang;
+    if app.quit_state == QuitState::Confirming {
+        lang.text(
+            "Unsaved changes! Press Esc again to quit, or any other key to cancel.",
+            "未保存の変更があります。Esc:破棄して終了  その他のキー:戻る",
+        )
+    } else if app.custom_delete_pending {
+        lang.text(
+            "⌫ again: remove definition and placements  Any other key: cancel",
+            "再度 ⌫:定義と配置を削除  その他のキー:戻る",
+        )
+    } else if app.completion_delete_pending {
+        lang.text(
+            "⌫/d again: remove selected CLI  Any other key: cancel",
+            "再度 ⌫/d:選択中の CLI を削除  その他のキー:取消",
+        )
+    } else if app.editing.is_some() {
+        lang.text(
+            "Enter:confirm  Esc:cancel  Arrows/Home/End:cursor  Alt+Enter:newline",
+            "Enter:確定  Esc:取消  矢印/Home/End:移動  Alt+Enter:改行",
+        )
+    } else {
+        tab_help_text(app)
+    }
+}
+
+fn tab_help_text(app: &App) -> &'static str {
+    let lang = app.lang;
+    match app.tab {
+        Tab::Completions if app.completion_detail => lang.text(
+            "↑/↓:field  Enter:edit  n:add  ⌫/d:delete  s:save  Esc:list",
+            "↑/↓:項目  Enter:編集  n:追加  ⌫/d:削除  s:保存  Esc:一覧",
+        ),
+        Tab::Completions => lang.text(
+            "↑/↓:select  Enter:settings  n:add  ⌫/d:delete  s:save  Esc:quit",
+            "↑/↓:選択  Enter:設定  n:追加  ⌫/d:削除  s:保存  Esc:終了",
+        ),
+        Tab::Segments => lang.text(
+            "Tab:switch  hjkl:nav  L/R:add to side  ⌫:remove  u/d:order  S:save  Esc:quit",
+            "Tab:切替  hjkl:移動  L/R:追加  ⌫:削除  u/d:順序  S:保存  Esc:終了",
+        ),
+        Tab::Custom => lang.text(
+            "Tab:switch  jk:field  hl:select  n:new  ⌫:delete  Enter:edit  S:save  Esc:quit",
+            "Tab:切替  jk:項目  hl:選択  n:作成  ⌫:削除  Enter:編集  S:保存 Esc:終了",
+        ),
+        Tab::Prompt | Tab::Git | Tab::Suggest | Tab::Style | Tab::Shell => lang.text(
+            "Tab:switch  jk:nav  hl:change  Enter:edit/toggle  S:save  Esc:quit",
+            "Tab:切替  jk:移動  hl:変更  Enter:編集/切替  S:保存  Esc:終了",
+        ),
+    }
+}
+
+fn render_editor(frame: &mut Frame, app: &App, target: &EditTarget, area: Rect) {
     let cursor = app.edit_cursor.min(app.edit_buffer.len());
     let before = &app.edit_buffer[..cursor];
     let row = before.chars().filter(|c| *c == '\n').count();
@@ -1423,18 +1251,6 @@ fn render_editor(frame: &mut Frame, app: &App, target: &EditTarget, area: ratatu
     );
 }
 
-fn render_fields(
-    frame: &mut Frame,
-    items: Vec<ListItem<'static>>,
-    title: &str,
-    focus: usize,
-    area: ratatui::layout::Rect,
-) {
-    let mut state = ListState::default().with_selected(Some(focus));
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
-    frame.render_stateful_widget(list, area, &mut state);
-}
-
 fn field_style(focused: bool, editing: bool) -> Style {
     if editing {
         Style::default()
@@ -1448,476 +1264,25 @@ fn field_style(focused: bool, editing: bool) -> Style {
     }
 }
 
-fn render_prompt_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let items: Vec<ListItem> = vec![
-        field_item(
-            app.lang.text("Prompt Style", "スタイル"),
-            &app.config.prompt.prompt_style,
-            app.prompt_focus == 0,
-            false,
-        ),
-        field_item(
-            app.lang.text("Font Level", "フォント種別"),
-            &app.config.prompt.font_level,
-            app.prompt_focus == 1,
-            false,
-        ),
-        field_item(
-            app.lang
-                .text("Transient Prompt", "過去のプロンプトを簡略化"),
-            bool_str(app.config.prompt.transient, app.lang),
-            app.prompt_focus == 2,
-            false,
-        ),
-        {
-            let is_editing = app.editing.as_ref() == Some(&EditTarget::HomeSymbol);
-            let val = if is_editing {
-                format!("{}|", app.edit_buffer)
-            } else {
-                app.config.prompt.dir.home_symbol.clone()
-            };
-            field_item(
-                app.lang.text("Home Symbol", "ホームの記号"),
-                &val,
-                app.prompt_focus == 3,
-                is_editing,
-            )
-        },
-        field_item(
-            app.lang.text("Truncation Length", "表示する階層数"),
-            &app.config.prompt.dir.truncation_length.to_string(),
-            app.prompt_focus == 4,
-            false,
-        ),
-        field_item(
-            app.lang.text("Truncation Symbol", "省略記号"),
-            &app.config.prompt.dir.truncation_symbol,
-            app.prompt_focus == 5,
-            false,
-        ),
-        field_item(
-            app.lang.text(
-                "IP Interface (auto if empty)",
-                "IP インターフェース（空欄で自動）",
-            ),
-            &app.config.prompt.ip_interface,
-            app.prompt_focus == 6,
-            false,
-        ),
-        field_item(
-            app.lang.text("Command input", "コマンド入力位置"),
-            if app.config.prompt.newline {
-                app.lang.text("Next line", "次の行")
-            } else {
-                app.lang.text("Same line", "同じ行")
-            },
-            app.prompt_focus == 7,
-            false,
-        ),
-        field_item(
-            app.lang.text(
-                "Blank lines between prompts (0–10)",
-                "プロンプト間の空行（0–10）",
-            ),
-            &app.config
-                .prompt
-                .blank_lines
-                .min(config::MAX_PROMPT_BLANK_LINES)
-                .to_string(),
-            app.prompt_focus == 8,
-            false,
-        ),
-    ];
-    render_fields(
-        frame,
-        items,
-        app.lang.text(" Prompt Settings ", " プロンプト設定 "),
-        app.prompt_focus,
-        area,
-    );
-}
-
-fn render_git_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let items: Vec<ListItem> = vec![
-        field_item(
-            app.lang.text("Show Status", "変更状態を表示"),
-            bool_str(app.config.prompt.git.show_status, app.lang),
-            app.git_focus == 0,
-            false,
-        ),
-        field_item(
-            app.lang.text("Show Ahead/Behind", "先行・遅延を表示"),
-            bool_str(app.config.prompt.git.show_ahead_behind, app.lang),
-            app.git_focus == 1,
-            false,
-        ),
-        field_item(
-            app.lang.text("Show Stash", "スタッシュを表示"),
-            bool_str(app.config.prompt.git.show_stash, app.lang),
-            app.git_focus == 2,
-            false,
-        ),
-    ];
-
-    render_fields(
-        frame,
-        items,
-        app.lang.text(" Git Settings ", " Git 設定 "),
-        app.git_focus,
-        area,
-    );
-}
-
-fn render_suggest_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let mut items: Vec<ListItem> = vec![
-        field_item(
-            app.lang.text("Strategy", "候補の検索方法"),
-            &app.config.suggest.strategy,
-            app.suggest_focus == 0,
-            false,
-        ),
-        {
-            let is_editing = app.editing.as_ref() == Some(&EditTarget::HighlightColor);
-            let val = if is_editing {
-                format!("{}|", app.edit_buffer)
-            } else {
-                app.config.suggest.highlight_color.clone()
-            };
-            color_field_item(
-                app.lang,
-                app.lang.text("Highlight Color", "候補の色"),
-                &val,
-                app.suggest_focus == 1,
-                &EditTarget::HighlightColor,
-            )
-        },
-        field_item(
-            app.lang.text("Max Suggestions", "候補の最大数"),
-            &app.config.suggest.max_suggestions.to_string(),
-            app.suggest_focus == 2,
-            false,
-        ),
-    ];
-    for (index, label, action) in [
-        (3, "Tab", app.config.suggest.keys.tab),
-        (
-            4,
-            app.lang.text("Right Arrow", "右矢印"),
-            app.config.suggest.keys.right,
-        ),
-        (5, "Alt+F", app.config.suggest.keys.alt_f),
-        (
-            6,
-            app.lang.text("Ctrl+Right", "Ctrl+右矢印"),
-            app.config.suggest.keys.ctrl_right,
-        ),
-    ] {
-        items.push(field_item(
-            label,
-            suggest_key_action_label(action, app.lang),
-            app.suggest_focus == index,
-            false,
-        ));
-    }
-    items.push(field_item(
-        app.lang.text("Record Task Usage", "タスクの利用を記録"),
-        bool_str(app.config.suggest.record_task_usage, app.lang),
-        app.suggest_focus == 7,
-        false,
-    ));
-    items.push(field_item(
-        app.lang
-            .text("Record Directory History", "ディレクトリ別の履歴を記録"),
-        bool_str(app.config.suggest.record_directory_history, app.lang),
-        app.suggest_focus == 8,
-        false,
-    ));
-
-    render_fields(
-        frame,
-        items,
-        app.lang.text(" Suggest Settings ", " 入力候補の設定 "),
-        app.suggest_focus,
-        area,
-    );
-}
-
-fn suggest_key_action_label(action: SuggestKeyAction, lang: Lang) -> &'static str {
-    match action {
-        SuggestKeyAction::Default => lang.text("Normal key action", "通常のキー操作"),
-        SuggestKeyAction::Full => lang.text("Accept all", "全体を採用"),
-        SuggestKeyAction::Step => lang.text("Accept path segment", "階層・単語を採用"),
-        SuggestKeyAction::Word => lang.text("Accept word", "単語を採用"),
-    }
-}
-
-fn cycle_suggest_key(app: &mut App, forward: bool) {
-    let key = match app.suggest_focus {
-        3 => &mut app.config.suggest.keys.tab,
-        4 => &mut app.config.suggest.keys.right,
-        5 => &mut app.config.suggest.keys.alt_f,
-        6 => &mut app.config.suggest.keys.ctrl_right,
-        _ => return,
-    };
-    let index = SUGGEST_KEY_ACTIONS
-        .iter()
-        .position(|candidate| candidate == key)
-        .unwrap_or(0);
-    let next = if forward {
-        (index + 1) % SUGGEST_KEY_ACTIONS.len()
-    } else {
-        (index + SUGGEST_KEY_ACTIONS.len() - 1) % SUGGEST_KEY_ACTIONS.len()
-    };
-    *key = SUGGEST_KEY_ACTIONS[next];
-    app.dirty = true;
-}
-
-fn palette_label(name: &str, lang: Lang) -> &'static str {
-    match name {
-        "blue" => lang.text("Blue", "青系"),
-        "green" => lang.text("Green", "緑系"),
-        "blue_green" => lang.text("Blue / Green", "青緑系"),
-        "purple" => lang.text("Purple", "紫系"),
-        "cyan" => lang.text("Cyan", "シアン系"),
-        "pink" => lang.text("Pink", "ピンク系"),
-        "red" => lang.text("Red", "赤系"),
-        "orange" => lang.text("Orange", "オレンジ系"),
-        "ocean" => lang.text("Ocean", "オーシャン"),
-        "forest" => lang.text("Forest", "フォレスト"),
-        "sunset" => lang.text("Sunset", "サンセット"),
-        "pastel" => lang.text("Pastel", "パステル"),
-        "grayscale" => lang.text("Grayscale", "モノクロ"),
-        _ => lang.text("Default", "標準"),
-    }
-}
-
-fn render_style_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let targets = [
-        (
-            app.lang.text("Primary Color", "基本色"),
-            &app.config.style.primary_color,
-            EditTarget::PrimaryColor,
-        ),
-        (
-            app.lang.text("Success Color", "成功の色"),
-            &app.config.style.success_color,
-            EditTarget::SuccessColor,
-        ),
-        (
-            app.lang.text("Error Color", "エラーの色"),
-            &app.config.style.error_color,
-            EditTarget::ErrorColor,
-        ),
-        (
-            app.lang.text("Muted Color", "補助色"),
-            &app.config.style.muted_color,
-            EditTarget::MutedColor,
-        ),
-    ];
-
-    let mut items: Vec<ListItem> = targets
+/// 項目を並びの順に 1 行ずつ描画し、選択中の項目を強調する
+fn render_items<T: Copy + PartialEq>(
+    frame: &mut Frame,
+    items: &[T],
+    focus: T,
+    title: &str,
+    area: Rect,
+    mut row: impl FnMut(T, bool) -> ListItem<'static>,
+) {
+    let selected = focus_position(items, &focus);
+    let rows: Vec<_> = items
         .iter()
         .enumerate()
-        .map(|(i, (label, val, target))| {
-            let is_editing = app.editing.as_ref() == Some(target);
-            let display = if is_editing {
-                format!("{}|", app.edit_buffer)
-            } else {
-                val.to_string()
-            };
-            color_field_item(app.lang, label, &display, app.style_focus == i, target)
-        })
+        .map(|(index, item)| row(*item, index == selected))
         .collect();
-
-    items.push(field_item(
-        app.lang.text("Rainbow palette", "Rainbow の配色"),
-        palette_label(&app.config.style.rainbow_palette, app.lang),
-        app.style_focus == 4,
-        false,
-    ));
-
-    items.extend(block_colors::fields(app));
-
-    render_fields(
-        frame,
-        items,
-        app.lang.text(" Style Settings ", " 配色設定 "),
-        app.style_focus,
-        area,
-    );
-}
-
-fn render_custom_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let Some(custom) = app.config.prompt.custom.get(app.custom_index) else {
-        frame.render_widget(Paragraph::new(app.lang.text("No custom segments. Press n to create one.\nThen add it to Left/Right in the Segments tab.", "カスタムセグメントはありません。n キーで作成できます。\n作成後、「配置」タブで左側・右側に追加してください。")).block(Block::default().borders(Borders::ALL).title(app.lang.text(" Custom Segments ", " カスタムセグメント "))), area);
-        return;
-    };
-    let mut items = vec![field_item(
-        app.lang.text("Selected (Left/Right)", "選択（←/→）"),
-        &format!(
-            "{}/{}: {}",
-            app.custom_index + 1,
-            app.config.prompt.custom.len(),
-            custom.name
-        ),
-        app.custom_focus == 0,
-        false,
-    )];
-    let mut custom = custom.clone();
-    for (i, field) in CustomField::ALL.iter().enumerate() {
-        let target = EditTarget::Custom(app.custom_index, *field);
-        let value = field.value(&mut custom).replace('\n', " ↵ ");
-        items.push(if target.is_color() {
-            color_field_item(
-                app.lang,
-                field.label(app.lang),
-                &value,
-                app.custom_focus == i + 1,
-                &target,
-            )
-        } else {
-            field_item(
-                field.label(app.lang),
-                &value,
-                app.custom_focus == i + 1,
-                false,
-            )
-        });
-    }
-    render_fields(
-        frame,
-        items,
-        app.lang.text(
-            " Custom: edit here, place in Segments ",
-            " カスタム: 編集後に「配置」で追加 ",
-        ),
-        app.custom_focus,
-        area,
-    );
-}
-
-fn render_shell_tab(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let language = match app.config.ui.language {
-        UiLanguage::Auto => format!(
-            "Auto ({})",
-            if Lang::from_env() == Lang::Ja {
-                "日本語"
-            } else {
-                "English"
-            }
-        ),
-        UiLanguage::En => "English".into(),
-        UiLanguage::Ja => "日本語".into(),
-    };
-    let items = vec![
-        field_item(
-            app.lang.text(
-                "Completion Dirs (: separated)",
-                "補完ディレクトリ（: 区切り）",
-            ),
-            &app.config.shell.completion_dirs,
-            app.shell_focus == 0,
-            false,
-        ),
-        field_item(
-            app.lang.text("Terminal Integration", "端末との連携"),
-            &app.config.shell.term_shell_integration,
-            app.shell_focus == 1,
-            false,
-        ),
-        field_item(
-            app.lang.text("Interface Language", "表示言語"),
-            &language,
-            app.shell_focus == 2,
-            false,
-        ),
-        field_item(
-            app.lang.text("Terminal Font Setup", "端末フォント設定"),
-            "zsh-turbo font ↵",
-            app.shell_focus == 3,
-            false,
-        ),
-    ];
-    render_fields(
-        frame,
-        items,
-        app.lang.text(
-            " Shell (auto / 1:on / 0:off) ",
-            " シェル（auto:自動 / 1:有効 / 0:無効） ",
-        ),
-        app.shell_focus,
-        area,
-    );
-}
-
-fn render_segments_tab(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    let cols = Layout::horizontal([
-        Constraint::Percentage(33),
-        Constraint::Percentage(33),
-        Constraint::Percentage(34),
-    ])
-    .split(area);
-
-    // 左セグメント
-    let left_items: Vec<ListItem> = app
-        .config
-        .prompt
-        .left_segments
-        .iter()
-        .map(|s| ListItem::new(s.as_str().to_owned()))
-        .collect();
-    let left_block = Block::default()
-        .borders(Borders::ALL)
-        .title(app.lang.text(" Left Segments ", " 左側 "))
-        .border_style(if app.seg_column == SegColumn::Left {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default()
-        });
-    let left_list = List::new(left_items)
-        .block(left_block)
-        .highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
-    frame.render_stateful_widget(left_list, cols[0], &mut app.seg_left_state);
-
-    // 右セグメント
-    let right_items: Vec<ListItem> = app
-        .config
-        .prompt
-        .right_segments
-        .iter()
-        .map(|s| ListItem::new(s.as_str().to_owned()))
-        .collect();
-    let right_block = Block::default()
-        .borders(Borders::ALL)
-        .title(app.lang.text(" Right Segments ", " 右側 "))
-        .border_style(if app.seg_column == SegColumn::Right {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default()
-        });
-    let right_list = List::new(right_items)
-        .block(right_block)
-        .highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
-    frame.render_stateful_widget(right_list, cols[1], &mut app.seg_right_state);
-
-    // 利用可能なセグメント
-    let avail = available_segments(&app.config);
-    let avail_items: Vec<ListItem> = avail
-        .iter()
-        .map(|s| ListItem::new(s.as_str().to_owned()))
-        .collect();
-    let avail_block = Block::default()
-        .borders(Borders::ALL)
-        .title(app.lang.text(" Available ", " 追加候補 "))
-        .border_style(if app.seg_column == SegColumn::Available {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default()
-        });
-    let avail_list = List::new(avail_items)
-        .block(avail_block)
-        .highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
-    frame.render_stateful_widget(avail_list, cols[2], &mut app.seg_avail_state);
+    // 選択中の行が見える位置まで一覧をスクロールする
+    let mut state = ListState::default().with_selected(Some(selected));
+    let list = List::new(rows).block(Block::default().borders(Borders::ALL).title(title));
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 fn field_item<'a>(label: &str, value: &str, focused: bool, editing: bool) -> ListItem<'a> {
@@ -1952,6 +1317,7 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
     // キー押下時にステータスメッセージをクリア
     app.status_msg = None;
 
+    // 削除確認・終了確認・色の選択・テキスト編集の順に、表示中の確認や入力欄へキーを渡す
     if app.custom_delete_pending {
         app.custom_delete_pending = false;
         if matches!(key.code, KeyCode::Delete | KeyCode::Backspace) {
@@ -1971,7 +1337,6 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
 
-    // 終了確認
     if app.quit_state == QuitState::Confirming {
         if key.code == KeyCode::Esc {
             return true; // 確定終了
@@ -1980,106 +1345,78 @@ fn handle_event(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
 
-    // 色の選択
     if app.color_picker.is_some() {
         colors::handle_picker(app, key);
         return false;
     }
-    // テキスト編集モード
     if app.editing.is_some() {
         handle_edit_key(app, key);
         return false;
     }
+    handle_normal_key(app, key)
+}
 
+/// 確認や入力欄が無いときのキー。共通のキーを先に処理し、残りはタブ専用のキーとして扱う。
+fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
-        // 保存
-        KeyCode::Char('s') | KeyCode::Char('S') => {
-            app.save();
+        KeyCode::Char('s') | KeyCode::Char('S') => app.save(),
+        KeyCode::Tab | KeyCode::Char(']') => app.switch_tab(app.tab.next()),
+        KeyCode::BackTab | KeyCode::Char('[') => app.switch_tab(app.tab.prev()),
+        KeyCode::Up | KeyCode::Char('k') => app.move_focus(Direction::Previous),
+        KeyCode::Down | KeyCode::Char('j') => app.move_focus(Direction::Next),
+        KeyCode::Left | KeyCode::Char('h') => {
+            handle_item_action(app, ItemAction::Adjust(Direction::Previous))
         }
-        // タブ切り替え
-        KeyCode::Tab | KeyCode::Char(']') => {
-            app.tab = (app.tab + 1) % TAB_TITLES.len();
-            if app.tab == 7 {
-                app.completion_detail = false;
-            }
+        KeyCode::Right | KeyCode::Char('l') => {
+            handle_item_action(app, ItemAction::Adjust(Direction::Next))
         }
-        KeyCode::BackTab | KeyCode::Char('[') => {
-            app.tab = (app.tab + TAB_TITLES.len() - 1) % TAB_TITLES.len();
-            if app.tab == 7 {
-                app.completion_detail = false;
-            }
-        }
-        // ナビゲーション
-        KeyCode::Up | KeyCode::Char('k') => app.focus_up(),
-        KeyCode::Down | KeyCode::Char('j') => app.focus_down(),
-        KeyCode::Left | KeyCode::Char('h') => handle_left(app),
-        KeyCode::Right | KeyCode::Char('l') => handle_right(app),
-        // トグル / 決定
-        KeyCode::Char(' ') | KeyCode::Enter => handle_activate(app),
-        // セグメント固有の操作 (Segments タブ専用)
-        KeyCode::Char('L' | 'R') if app.tab == 1 => {
-            let side = if key.code == KeyCode::Char('L') {
-                SegColumn::Left
-            } else {
-                SegColumn::Right
-            };
-            app.seg_add_to(side);
-        }
-        KeyCode::Delete | KeyCode::Backspace if app.tab == 1 => {
-            app.seg_remove();
-        }
-        KeyCode::Char('u') if app.tab == 1 => {
-            app.seg_reorder(true);
-        }
-        KeyCode::Char('d') if app.tab == 1 => {
-            app.seg_reorder(false);
-        }
-        KeyCode::Char('n') if app.tab == 7 => completions::add(app),
-        KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('d')
-            if app.tab == 7 && !app.config.completions.is_empty() =>
-        {
-            app.completion_delete_pending = true;
-            app.status_msg = Some(format!(
-                "{}: {}",
-                app.config.completions[app.completion_index].command,
-                app.lang.text(
-                    "Press Backspace (⌫) or d again to remove this CLI.",
-                    "もう一度 ⌫ または d でこの CLI を削除します。"
-                )
-            ));
-        }
-        KeyCode::Char('r') if app.tab == 7 => completions::refresh(app, false),
-        KeyCode::Char('R') if app.tab == 7 => completions::refresh(app, true),
-        KeyCode::Char('n') if app.tab == 5 => app.custom_add(),
-        KeyCode::Delete | KeyCode::Backspace
-            if app.tab == 5 && !app.config.prompt.custom.is_empty() =>
-        {
-            app.custom_delete_pending = true;
-            app.status_msg = Some(format!(
-                "{}: {}",
-                app.config.prompt.custom[app.custom_index].name,
-                app.lang.text(
-                    "Delete definition and placements?",
-                    "定義と配置を削除しますか？"
-                )
-            ));
-        }
-        KeyCode::Esc => {
-            if app.tab == 7 && app.completion_detail {
-                app.completion_detail = false;
-                app.completion_focus = 0;
-                return false;
-            }
-            // 非編集モードでは Esc で終了
-            if app.dirty {
-                app.quit_state = QuitState::Confirming;
-            } else {
-                return true;
-            }
-        }
-        _ => {}
+        KeyCode::Char(' ') | KeyCode::Enter => handle_item_action(app, ItemAction::Activate),
+        KeyCode::Esc => return handle_escape(app),
+        code => handle_tab_key(app, code),
     }
     false
+}
+
+/// Esc。補完の詳細画面では一覧へ戻り、それ以外では終了する（未保存なら確認する）。
+fn handle_escape(app: &mut App) -> bool {
+    if app.tab == Tab::Completions && app.completion_detail {
+        completions::close_detail(app);
+        return false;
+    }
+    if app.dirty {
+        app.quit_state = QuitState::Confirming;
+        false
+    } else {
+        true
+    }
+}
+
+/// タブ専用のキー
+fn handle_tab_key(app: &mut App, code: KeyCode) {
+    match app.tab {
+        Tab::Segments => segments_tab::handle_key(app, code),
+        Tab::Custom => custom_tab::handle_key(app, code),
+        Tab::Completions => completions::handle_key(app, code),
+        Tab::Prompt | Tab::Git | Tab::Suggest | Tab::Style | Tab::Shell => {}
+    }
+}
+
+/// ←→ と決定を、選択中の項目へ渡す
+fn handle_item_action(app: &mut App, action: ItemAction) {
+    match app.tab {
+        Tab::Prompt => app.prompt_focus.handle(app, action),
+        Tab::Segments => segments_tab::handle(app, action),
+        Tab::Git => app.git_focus.handle(app, action),
+        Tab::Suggest => app.suggest_focus.handle(app, action),
+        Tab::Style => {
+            focused_item(&style_tab::visible_items(app), app.style_focus).handle(app, action)
+        }
+        Tab::Custom => {
+            focused_item(&custom_tab::visible_items(app), app.custom_focus).handle(app, action)
+        }
+        Tab::Shell => app.shell_focus.handle(app, action),
+        Tab::Completions => completions::handle(app, action),
+    }
 }
 
 /// テキスト編集中のキー入力。カーソルは UTF-8 のバイト位置で、常に文字境界に置く。
@@ -2136,287 +1473,6 @@ fn handle_edit_key(app: &mut App, key: KeyEvent) {
         _ => {}
     }
 }
-
-fn handle_left(app: &mut App) {
-    if app.tab == 7 {
-        completions::select(app, false);
-        return;
-    }
-    match app.tab {
-        0 => match app.prompt_focus {
-            0 => {
-                app.config.prompt.prompt_style =
-                    cycle_prev(&app.config.prompt.prompt_style, PROMPT_STYLES);
-                app.dirty = true;
-            }
-            1 => {
-                app.config.prompt.font_level =
-                    cycle_prev(&app.config.prompt.font_level, FONT_LEVELS);
-                app.dirty = true;
-            }
-            4 if app.config.prompt.dir.truncation_length > 0 => {
-                app.config.prompt.dir.truncation_length -= 1;
-                app.dirty = true;
-            }
-            7 => {
-                app.config.prompt.newline = !app.config.prompt.newline;
-                app.dirty = true;
-            }
-            8 => {
-                app.config.prompt.blank_lines = app
-                    .config
-                    .prompt
-                    .blank_lines
-                    .min(config::MAX_PROMPT_BLANK_LINES)
-                    .saturating_sub(1);
-                app.dirty = true;
-            }
-            _ => {}
-        },
-        1 => app.seg_column_left(),
-        3 => {
-            if app.suggest_focus == 0 {
-                app.config.suggest.strategy =
-                    cycle_prev(&app.config.suggest.strategy, SUGGEST_STRATEGIES);
-                app.dirty = true;
-            } else if app.suggest_focus == 2 && app.config.suggest.max_suggestions > 0 {
-                app.config.suggest.max_suggestions -= 1;
-                app.dirty = true;
-            } else if (3..=6).contains(&app.suggest_focus) {
-                cycle_suggest_key(app, false);
-            } else if app.suggest_focus == 7 {
-                app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
-                app.dirty = true;
-            } else if app.suggest_focus == 8 {
-                app.config.suggest.record_directory_history =
-                    !app.config.suggest.record_directory_history;
-                app.dirty = true;
-            }
-        }
-        4 if app.style_focus == 4 => {
-            app.config.style.rainbow_palette =
-                cycle_prev(&app.config.style.rainbow_palette, RAINBOW_PALETTES);
-            app.dirty = true;
-        }
-        4 if app.style_focus == 5 => app.rainbow_select(false),
-        5 => app.custom_select(false),
-        6 if app.shell_focus == 1 => {
-            app.config.shell.term_shell_integration =
-                cycle_prev(&app.config.shell.term_shell_integration, SHELL_INTEGRATIONS);
-            app.dirty = true;
-        }
-        6 if app.shell_focus == 2 => {
-            app.config.ui.language = app.config.ui.language.prev();
-            app.lang = Lang::from_preference(app.config.ui.language);
-            app.dirty = true;
-        }
-        _ => {}
-    }
-}
-
-fn handle_right(app: &mut App) {
-    if app.tab == 7 {
-        completions::select(app, true);
-        return;
-    }
-    match app.tab {
-        0 => match app.prompt_focus {
-            0 => {
-                app.config.prompt.prompt_style =
-                    cycle_next(&app.config.prompt.prompt_style, PROMPT_STYLES);
-                app.dirty = true;
-            }
-            1 => {
-                app.config.prompt.font_level =
-                    cycle_next(&app.config.prompt.font_level, FONT_LEVELS);
-                app.dirty = true;
-            }
-            4 => {
-                app.config.prompt.dir.truncation_length =
-                    app.config.prompt.dir.truncation_length.saturating_add(1);
-                app.dirty = true;
-            }
-            7 => {
-                app.config.prompt.newline = !app.config.prompt.newline;
-                app.dirty = true;
-            }
-            8 => {
-                app.config.prompt.blank_lines = app
-                    .config
-                    .prompt
-                    .blank_lines
-                    .saturating_add(1)
-                    .min(config::MAX_PROMPT_BLANK_LINES);
-                app.dirty = true;
-            }
-            _ => {}
-        },
-        1 => app.seg_column_right(),
-        3 => {
-            if app.suggest_focus == 0 {
-                app.config.suggest.strategy =
-                    cycle_next(&app.config.suggest.strategy, SUGGEST_STRATEGIES);
-                app.dirty = true;
-            } else if app.suggest_focus == 2 {
-                app.config.suggest.max_suggestions =
-                    app.config.suggest.max_suggestions.saturating_add(1);
-                app.dirty = true;
-            } else if (3..=6).contains(&app.suggest_focus) {
-                cycle_suggest_key(app, true);
-            } else if app.suggest_focus == 7 {
-                app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
-                app.dirty = true;
-            } else if app.suggest_focus == 8 {
-                app.config.suggest.record_directory_history =
-                    !app.config.suggest.record_directory_history;
-                app.dirty = true;
-            }
-        }
-        4 if app.style_focus == 4 => {
-            app.config.style.rainbow_palette =
-                cycle_next(&app.config.style.rainbow_palette, RAINBOW_PALETTES);
-            app.dirty = true;
-        }
-        4 if app.style_focus == 5 => app.rainbow_select(true),
-        5 => app.custom_select(true),
-        6 if app.shell_focus == 1 => {
-            app.config.shell.term_shell_integration =
-                cycle_next(&app.config.shell.term_shell_integration, SHELL_INTEGRATIONS);
-            app.dirty = true;
-        }
-        6 if app.shell_focus == 2 => {
-            app.config.ui.language = app.config.ui.language.next();
-            app.lang = Lang::from_preference(app.config.ui.language);
-            app.dirty = true;
-        }
-        _ => {}
-    }
-}
-
-fn handle_activate(app: &mut App) {
-    if app.tab == 7 {
-        completions::activate(app);
-        return;
-    }
-    match app.tab {
-        0 => match app.prompt_focus {
-            0 => {
-                app.config.prompt.prompt_style =
-                    cycle_next(&app.config.prompt.prompt_style, PROMPT_STYLES);
-                app.dirty = true;
-            }
-            1 => {
-                app.config.prompt.font_level =
-                    cycle_next(&app.config.prompt.font_level, FONT_LEVELS);
-                app.dirty = true;
-            }
-            2 => {
-                app.config.prompt.transient = !app.config.prompt.transient;
-                app.dirty = true;
-            }
-            3 => app.start_edit(EditTarget::HomeSymbol),
-            4 => app.start_edit(EditTarget::TruncationLength),
-            5 => app.start_edit(EditTarget::TruncationSymbol),
-            6 => app.start_edit(EditTarget::IpInterface),
-            7 => {
-                app.config.prompt.newline = !app.config.prompt.newline;
-                app.dirty = true;
-            }
-            8 => app.start_edit(EditTarget::BlankLines),
-            _ => {}
-        },
-        1 => app.seg_add(),
-        2 => match app.git_focus {
-            0 => {
-                app.config.prompt.git.show_status = !app.config.prompt.git.show_status;
-                app.dirty = true;
-            }
-            1 => {
-                app.config.prompt.git.show_ahead_behind = !app.config.prompt.git.show_ahead_behind;
-                app.dirty = true;
-            }
-            2 => {
-                app.config.prompt.git.show_stash = !app.config.prompt.git.show_stash;
-                app.dirty = true;
-            }
-            _ => {}
-        },
-        3 => match app.suggest_focus {
-            0 => {
-                app.config.suggest.strategy =
-                    cycle_next(&app.config.suggest.strategy, SUGGEST_STRATEGIES);
-                app.dirty = true;
-            }
-            1 => app.activate_edit(EditTarget::HighlightColor),
-            2 => app.start_edit(EditTarget::MaxSuggestions),
-            3..=6 => cycle_suggest_key(app, true),
-            7 => {
-                app.config.suggest.record_task_usage = !app.config.suggest.record_task_usage;
-                app.dirty = true;
-            }
-            8 => {
-                app.config.suggest.record_directory_history =
-                    !app.config.suggest.record_directory_history;
-                app.dirty = true;
-            }
-            _ => {}
-        },
-        4 if app.style_focus == 4 => handle_right(app),
-        4 if app.style_focus == 5 => app.rainbow_select(true),
-        4 if app.style_focus == 8 => app.rainbow_reset(),
-        4 => {
-            let target = match app.style_focus {
-                0 => Some(EditTarget::PrimaryColor),
-                1 => Some(EditTarget::SuccessColor),
-                2 => Some(EditTarget::ErrorColor),
-                3 => Some(EditTarget::MutedColor),
-                6 => app
-                    .rainbow_selected()
-                    .map(|name| EditTarget::RainbowFg(name.into())),
-                7 => app
-                    .rainbow_selected()
-                    .map(|name| EditTarget::RainbowBg(name.into())),
-                _ => None,
-            };
-            if let Some(t) = target {
-                app.activate_edit(t);
-            }
-        }
-        5 if app.custom_focus > 0 && !app.config.prompt.custom.is_empty() => {
-            app.activate_edit(EditTarget::Custom(
-                app.custom_index,
-                CustomField::ALL[app.custom_focus - 1],
-            ));
-        }
-        6 => {
-            if app.shell_focus == 0 {
-                app.start_edit(EditTarget::CompletionDirs);
-            } else if app.shell_focus == 3 {
-                if app.dirty {
-                    app.status_msg = Some(
-                        app.lang
-                            .text(
-                                "Save settings first (s).",
-                                "先に s で設定を保存してください。",
-                            )
-                            .into(),
-                    );
-                } else {
-                    app.launch_font_wizard = true;
-                }
-            } else {
-                handle_right(app);
-            }
-        }
-        _ => {}
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Suggest タブの数値増減（Left/Right キー経由）
-// ---------------------------------------------------------------------------
-
-// （handle_left / handle_right 内でインライン処理）
 
 // ---------------------------------------------------------------------------
 // メインループ
@@ -2743,46 +1799,98 @@ mod tests {
     fn app_new_はデフォルト設定で正しく初期化される() {
         let config = Config::default();
         let app = App::new(config, Lang::En);
-        assert_eq!(app.tab, 0);
+        assert_eq!(app.tab, Tab::Prompt);
         assert!(!app.dirty);
-        assert_eq!(app.prompt_focus, 0);
+        assert_eq!(app.prompt_focus, PromptItem::Style);
         assert_eq!(app.seg_column, SegColumn::Left);
         assert!(app.editing.is_none());
         assert_eq!(app.quit_state, QuitState::Normal);
     }
 
-    #[test]
-    fn app_max_focus_は各タブで正しい値を返す() {
-        let app = App::new(Config::default(), Lang::En);
-        assert_eq!(app.max_focus(), 8);
+    // --- 項目の並びと選択 ---
+
+    /// 並びの中で同じ項目が 2 回現れない
+    fn assert_distinct<T: PartialEq + std::fmt::Debug>(items: &[T]) {
+        for (index, item) in items.iter().enumerate() {
+            assert_eq!(
+                items.iter().position(|other| other == item),
+                Some(index),
+                "{item:?}"
+            );
+        }
     }
 
     #[test]
-    fn app_focus_up_down_は範囲内で移動する() {
+    fn タブと項目の並びに同じものが2回現れない() {
+        assert_distinct(&Tab::ALL);
+        assert_distinct(&PromptItem::ALL);
+        assert_distinct(&GitItem::ALL);
+        assert_distinct(&SuggestItem::ALL);
+        assert_distinct(&StyleItem::ALL);
+        assert_distinct(&ShellItem::ALL);
+        assert_distinct(&completions::DetailItem::ALL);
+        for (index, tab) in Tab::ALL.iter().enumerate() {
+            assert_eq!(tab.position(), index);
+        }
+        assert_eq!(Tab::Completions.next(), Tab::Prompt);
+        assert_eq!(Tab::Prompt.prev(), Tab::Completions);
+    }
+
+    #[test]
+    fn focus_position_は消えた項目を末尾の項目とみなす() {
+        let items = [1, 2, 3];
+        assert_eq!(focus_position(&items, &2), 1);
+        assert_eq!(focus_position(&items, &9), 2);
+        assert_eq!(focused_item(&items, 9), 3);
+        // 項目が無くても panic しない
+        assert_eq!(focus_position::<i32>(&[], &1), 0);
+        assert_eq!(focused_item(&[], 1), 1);
+    }
+
+    #[test]
+    fn move_item_は端で止まり消えた項目からは末尾を起点に動く() {
+        let items = [1, 2, 3];
+        let mut focus = 1;
+        move_item(&items, &mut focus, Direction::Previous);
+        assert_eq!(focus, 1);
+        move_item(&items, &mut focus, Direction::Next);
+        assert_eq!(focus, 2);
+        focus = 3;
+        move_item(&items, &mut focus, Direction::Next);
+        assert_eq!(focus, 3);
+        // 消えた項目からは下へ動かず選択を保ち、上へは末尾の 1 つ前へ動く
+        focus = 9;
+        move_item(&items, &mut focus, Direction::Next);
+        assert_eq!(focus, 9);
+        move_item(&items, &mut focus, Direction::Previous);
+        assert_eq!(focus, 2);
+    }
+
+    #[test]
+    fn app_move_focus_は範囲内で移動する() {
         let mut app = App::new(Config::default(), Lang::En);
-        assert_eq!(app.current_focus(), 0);
-        app.focus_down();
-        assert_eq!(app.current_focus(), 1);
-        app.focus_down();
-        assert_eq!(app.current_focus(), 2);
-        app.focus_up();
-        assert_eq!(app.current_focus(), 1);
+        app.move_focus(Direction::Next);
+        assert_eq!(app.prompt_focus, PromptItem::FontLevel);
+        app.move_focus(Direction::Next);
+        assert_eq!(app.prompt_focus, PromptItem::Transient);
+        app.move_focus(Direction::Previous);
+        assert_eq!(app.prompt_focus, PromptItem::FontLevel);
     }
 
     #[test]
-    fn app_focus_up_は0以下にならない() {
+    fn app_move_focus_は先頭より上へ動かない() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.focus_up();
-        assert_eq!(app.current_focus(), 0);
+        app.move_focus(Direction::Previous);
+        assert_eq!(app.prompt_focus, PromptItem::Style);
     }
 
     #[test]
-    fn app_focus_down_はmax_focusを超えない() {
+    fn app_move_focus_は末尾より下へ動かない() {
         let mut app = App::new(Config::default(), Lang::En);
         for _ in 0..20 {
-            app.focus_down();
+            app.move_focus(Direction::Next);
         }
-        assert_eq!(app.current_focus(), app.max_focus());
+        assert_eq!(app.prompt_focus, PromptItem::BlankLines);
     }
 
     #[test]
@@ -2847,19 +1955,19 @@ mod tests {
     #[test]
     fn handle_event_tabキーでタブ切り替え() {
         let mut app = App::new(Config::default(), Lang::En);
-        assert_eq!(app.tab, 0);
+        assert_eq!(app.tab, Tab::Prompt);
         let key = KeyEvent::from(KeyCode::Tab);
         handle_event(&mut app, key);
-        assert_eq!(app.tab, 1);
+        assert_eq!(app.tab, Tab::Segments);
     }
 
     #[test]
     fn handle_event_tabキーは末尾から先頭へ巡回() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = TAB_TITLES.len() - 1;
+        app.tab = Tab::Completions;
         let key = KeyEvent::from(KeyCode::Tab);
         handle_event(&mut app, key);
-        assert_eq!(app.tab, 0);
+        assert_eq!(app.tab, Tab::Prompt);
     }
 
     #[test]
@@ -2867,10 +1975,10 @@ mod tests {
         let mut app = App::new(Config::default(), Lang::En);
         let down = KeyEvent::from(KeyCode::Char('j'));
         handle_event(&mut app, down);
-        assert_eq!(app.current_focus(), 1);
+        assert_eq!(app.prompt_focus, PromptItem::FontLevel);
         let up = KeyEvent::from(KeyCode::Char('k'));
         handle_event(&mut app, up);
-        assert_eq!(app.current_focus(), 0);
+        assert_eq!(app.prompt_focus, PromptItem::Style);
     }
 
     #[test]
@@ -2920,7 +2028,7 @@ mod tests {
     #[test]
     fn seg_column_leftは左端で変化しない() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Left;
         app.seg_column_left();
         assert_eq!(app.seg_column, SegColumn::Left);
@@ -2929,7 +2037,7 @@ mod tests {
     #[test]
     fn seg_column_rightは右端で変化しない() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Available;
         app.seg_column_right();
         assert_eq!(app.seg_column, SegColumn::Available);
@@ -2938,7 +2046,7 @@ mod tests {
     #[test]
     fn seg_column_の左右移動() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Left;
         app.seg_column_right();
         assert_eq!(app.seg_column, SegColumn::Right);
@@ -2955,7 +2063,7 @@ mod tests {
     #[test]
     fn seg_add_はavailableカラムからのみ追加できる() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Left;
         let before = app.config.prompt.left_segments.len();
         app.seg_add();
@@ -2965,7 +2073,7 @@ mod tests {
     #[test]
     fn seg_add_はavailableから左に追加する() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Available;
         app.seg_last_side = SegColumn::Left;
         let before = app.config.prompt.left_segments.len();
@@ -2977,7 +2085,7 @@ mod tests {
     #[test]
     fn seg_remove_は左カラムから削除できる() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Left;
         let before = app.config.prompt.left_segments.len();
         assert!(before > 0);
@@ -2989,7 +2097,7 @@ mod tests {
     #[test]
     fn seg_remove_はavailableカラムでは何もしない() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Available;
         let left_before = app.config.prompt.left_segments.len();
         let right_before = app.config.prompt.right_segments.len();
@@ -3001,7 +2109,7 @@ mod tests {
     #[test]
     fn seg_reorder_は実際に移動したときだけdirtyにする() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Right;
         app.seg_right_state.select(Some(1));
 
@@ -3017,7 +2125,7 @@ mod tests {
     #[test]
     fn seg_reorder_は境界で変化しない場合dirtyにしない() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Left;
         app.seg_left_state.select(Some(0));
 
@@ -3090,7 +2198,7 @@ mod tests {
     #[test]
     fn seg_remove_はリストを空にし切っても安全() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Left;
         let n = app.config.prompt.left_segments.len();
         // 全要素 + 1 回 (空リストでの no-op) 削除してもパニックしない
@@ -3104,7 +2212,7 @@ mod tests {
     #[test]
     fn seg_add_はavailableが空なら何もしない() {
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 1;
+        app.tab = Tab::Segments;
         app.seg_column = SegColumn::Available;
         // Available を空にするまで追加し続ける
         while !available_segments(&app.config).is_empty() {
@@ -3119,18 +2227,19 @@ mod tests {
     }
 
     #[test]
-    fn handle_right_数値が最大値でもオーバーフローしない() {
+    fn 右キーで数値が最大値でもオーバーフローしない() {
+        let right = ItemAction::Adjust(Direction::Next);
         let mut app = App::new(Config::default(), Lang::En);
-        app.tab = 0;
-        app.prompt_focus = 4;
+        app.tab = Tab::Prompt;
+        app.prompt_focus = PromptItem::TruncationLength;
         app.config.prompt.dir.truncation_length = usize::MAX;
-        handle_right(&mut app);
+        handle_item_action(&mut app, right);
         assert_eq!(app.config.prompt.dir.truncation_length, usize::MAX);
 
-        app.tab = 3;
-        app.suggest_focus = 2;
+        app.tab = Tab::Suggest;
+        app.suggest_focus = SuggestItem::MaxSuggestions;
         app.config.suggest.max_suggestions = usize::MAX;
-        handle_right(&mut app);
+        handle_item_action(&mut app, right);
         assert_eq!(app.config.suggest.max_suggestions, usize::MAX);
     }
 }

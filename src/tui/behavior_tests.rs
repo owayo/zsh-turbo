@@ -492,23 +492,31 @@ fn 配色タブで選択中のブロック項目が消えても戻せば同じ�
 }
 
 #[test]
-fn 配色タブで選択中のブロック項目が消えると強調表示が消え上で3回戻る() {
-    // 現状の挙動を固定する。消えた項目の位置を保ったまま移動するため、
-    // ↑ を 3 回押すまでどの行も強調表示されない。
+fn 配色タブで選択中のブロック項目が消えると表示中の末尾の項目を選んだものとして扱う() {
+    // 強調・移動・操作のどれも末尾の行（ブロックの選択）を起点にする。
+    // ↓ では元の項目を選んだままにするので、ブロックが戻れば元の行に戻る。
     let mut app = App::new(Config::default(), Lang::En);
     open_tab(&mut app, "Style");
     select_row(&mut app, "Reset block colors");
-    app.config.prompt.left_segments.clear();
-    assert_eq!(field_rows(&mut app).1, None);
-    press(&mut app, KeyCode::Down);
-    assert_eq!(field_rows(&mut app).1, None);
-    press(&mut app, KeyCode::Up);
-    press(&mut app, KeyCode::Up);
-    assert_eq!(field_rows(&mut app).1, None);
-    press(&mut app, KeyCode::Up);
+    let left = std::mem::take(&mut app.config.prompt.left_segments);
     assert_eq!(field_rows(&mut app).1, Some(5));
+    press(&mut app, KeyCode::Down);
+    assert_eq!(field_rows(&mut app).1, Some(5));
+    app.config.prompt.left_segments = left.clone();
+    assert!(
+        focused_row(&mut app)
+            .unwrap()
+            .starts_with("Reset block colors:")
+    );
+    app.config.prompt.left_segments.clear();
     press(&mut app, KeyCode::Up);
     assert_eq!(field_rows(&mut app).1, Some(4));
+    app.config.prompt.left_segments = left;
+    assert!(
+        focused_row(&mut app)
+            .unwrap()
+            .starts_with("Rainbow palette:")
+    );
 }
 
 #[test]

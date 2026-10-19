@@ -75,22 +75,6 @@ impl Lang {
             Self::Ja => ja,
         }
     }
-
-    pub(super) fn tabs(self) -> &'static [&'static str] {
-        match self {
-            Self::En => super::TAB_TITLES,
-            Self::Ja => &[
-                "プロンプト",
-                "配置",
-                "Git",
-                "入力候補",
-                "配色",
-                "カスタム",
-                "シェル",
-                "補完",
-            ],
-        }
-    }
 }
 
 fn is_c_locale(value: &str) -> bool {

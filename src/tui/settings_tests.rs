@@ -6,14 +6,29 @@ fn press(app: &mut App, code: KeyCode) {
     assert!(!handle_event(app, KeyEvent::from(code)));
 }
 
-fn focus(app: &mut App, tab: usize, field: usize) {
+/// 現在のタブで選択中の行の、上から数えた位置
+fn focus_row(app: &App) -> usize {
+    match app.tab {
+        Tab::Prompt => focus_position(&PromptItem::ALL, &app.prompt_focus),
+        Tab::Segments => 0,
+        Tab::Git => focus_position(&GitItem::ALL, &app.git_focus),
+        Tab::Suggest => focus_position(&SuggestItem::ALL, &app.suggest_focus),
+        Tab::Style => focus_position(&style_tab::visible_items(app), &app.style_focus),
+        Tab::Custom => focus_position(&custom_tab::visible_items(app), &app.custom_focus),
+        Tab::Shell => focus_position(&ShellItem::ALL, &app.shell_focus),
+        Tab::Completions => focus_position(completions::visible_items(app), &app.completion_focus),
+    }
+}
+
+/// タブを切り替え、上から row 番目の行まで ↑↓ で移る
+fn focus(app: &mut App, tab: Tab, row: usize) {
     while app.tab != tab {
         press(app, KeyCode::Tab);
     }
-    while app.current_focus() > field {
+    while focus_row(app) > row {
         press(app, KeyCode::Up);
     }
-    while app.current_focus() < field {
+    while focus_row(app) < row {
         press(app, KeyCode::Down);
     }
 }
@@ -32,8 +47,8 @@ fn replace_input(app: &mut App, text: &str) {
     }
 }
 
-fn edit(app: &mut App, tab: usize, field: usize, text: &str) {
-    focus(app, tab, field);
+fn edit(app: &mut App, tab: Tab, row: usize, text: &str) {
+    focus(app, tab, row);
     press(app, KeyCode::Enter);
     assert!(app.editing.is_some());
     if app.color_picker.is_some() {
@@ -71,54 +86,54 @@ fn 全設定をキー操作で変更してtomlへ保存できる() {
         },
         Lang::En,
     );
-    focus(&mut app, 5, 0);
+    focus(&mut app, Tab::Custom, 0);
     press(&mut app, KeyCode::Char('n'));
     let before = serde_json::to_value(&app.config).unwrap();
-    for (tab, field) in [
-        (0, 0),
-        (0, 1),
-        (0, 2),
-        (0, 7),
-        (4, 4),
-        (2, 0),
-        (2, 1),
-        (2, 2),
-        (3, 0),
-        (3, 3),
-        (3, 4),
-        (3, 5),
-        (3, 6),
-        (3, 7),
-        (3, 8),
-        (6, 1),
-        (6, 2),
+    for (tab, row) in [
+        (Tab::Prompt, 0),
+        (Tab::Prompt, 1),
+        (Tab::Prompt, 2),
+        (Tab::Prompt, 7),
+        (Tab::Style, 4),
+        (Tab::Git, 0),
+        (Tab::Git, 1),
+        (Tab::Git, 2),
+        (Tab::Suggest, 0),
+        (Tab::Suggest, 3),
+        (Tab::Suggest, 4),
+        (Tab::Suggest, 5),
+        (Tab::Suggest, 6),
+        (Tab::Suggest, 7),
+        (Tab::Suggest, 8),
+        (Tab::Shell, 1),
+        (Tab::Shell, 2),
     ] {
-        focus(&mut app, tab, field);
+        focus(&mut app, tab, row);
         press(&mut app, KeyCode::Enter);
     }
-    for (tab, field, text) in [
-        (0, 3, "家"),
-        (0, 4, "0"),
-        (0, 8, "1"),
-        (0, 5, "..."),
-        (0, 6, "en7"),
-        (3, 1, "fg=12,bold"),
-        (3, 2, "42"),
-        (4, 0, "cyan"),
-        (4, 1, "#123456"),
-        (4, 2, "yellow"),
-        (4, 3, "240"),
-        (5, 1, "日本語"),
-        (5, 2, "printf 'a'\nprintf 'b'"),
-        (5, 3, "★"),
-        (5, 4, "black"),
-        (5, 5, "24"),
-        (5, 6, "file:Cargo.toml"),
-        (6, 0, "/tmp/one:/tmp/two with spaces"),
+    for (tab, row, text) in [
+        (Tab::Prompt, 3, "家"),
+        (Tab::Prompt, 4, "0"),
+        (Tab::Prompt, 8, "1"),
+        (Tab::Prompt, 5, "..."),
+        (Tab::Prompt, 6, "en7"),
+        (Tab::Suggest, 1, "fg=12,bold"),
+        (Tab::Suggest, 2, "42"),
+        (Tab::Style, 0, "cyan"),
+        (Tab::Style, 1, "#123456"),
+        (Tab::Style, 2, "yellow"),
+        (Tab::Style, 3, "240"),
+        (Tab::Custom, 1, "日本語"),
+        (Tab::Custom, 2, "printf 'a'\nprintf 'b'"),
+        (Tab::Custom, 3, "★"),
+        (Tab::Custom, 4, "black"),
+        (Tab::Custom, 5, "24"),
+        (Tab::Custom, 6, "file:Cargo.toml"),
+        (Tab::Shell, 0, "/tmp/one:/tmp/two with spaces"),
     ] {
-        edit(&mut app, tab, field, text);
+        edit(&mut app, tab, row, text);
     }
-    focus(&mut app, 1, 0);
+    focus(&mut app, Tab::Segments, 0);
     press(&mut app, KeyCode::Char('d'));
     press(&mut app, KeyCode::Right);
     press(&mut app, KeyCode::Delete);
@@ -128,7 +143,7 @@ fn 全設定をキー操作で変更してtomlへ保存できる() {
     }
     press(&mut app, KeyCode::Enter);
     assert!(app.config.prompt.right_segments.contains(&"日本語".into()));
-    focus(&mut app, 7, 0);
+    focus(&mut app, Tab::Completions, 0);
     press(&mut app, KeyCode::Char('n'));
     replace_input(&mut app, "example");
     press(&mut app, KeyCode::Enter);
@@ -146,12 +161,12 @@ fn 全設定をキー操作で変更してtomlへ保存できる() {
 #[test]
 fn カスタム名の変更と削除で配置を同期し取消しでは維持する() {
     let mut app = App::new(Config::default(), Lang::En);
-    focus(&mut app, 5, 0);
+    focus(&mut app, Tab::Custom, 0);
     press(&mut app, KeyCode::Char('n'));
     let name = app.config.prompt.custom[0].name.clone();
     app.config.prompt.left_segments.push(name.clone());
     app.config.prompt.right_segments.push(name.clone());
-    edit(&mut app, 5, 1, "renamed");
+    edit(&mut app, Tab::Custom, 1, "renamed");
     assert!(!app.config.prompt.left_segments.contains(&name));
     assert!(app.config.prompt.left_segments.contains(&"renamed".into()));
     assert!(app.config.prompt.right_segments.contains(&"renamed".into()));
@@ -163,7 +178,7 @@ fn カスタム名の変更と削除で配置を同期し取消しでは維持�
     assert!(app.config.prompt.custom.is_empty());
     assert!(!app.config.prompt.left_segments.contains(&"renamed".into()));
     assert!(!app.config.prompt.right_segments.contains(&"renamed".into()));
-    assert_eq!(app.custom_focus, 0);
+    assert_eq!(app.custom_focus, CustomItem::Selector);
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Left);
     press(&mut app, KeyCode::Delete);
@@ -172,9 +187,9 @@ fn カスタム名の変更と削除で配置を同期し取消しでは維持�
 #[test]
 fn 候補を左右へ追加でき配置済み項目も反対側へコピーできる() {
     let mut app = App::new(Config::default(), Lang::En);
-    focus(&mut app, 5, 0);
+    focus(&mut app, Tab::Custom, 0);
     press(&mut app, KeyCode::Char('n'));
-    focus(&mut app, 1, 0);
+    focus(&mut app, Tab::Segments, 0);
     press(&mut app, KeyCode::Right);
     press(&mut app, KeyCode::Right);
     while available_segments(&app.config)[app.seg_avail_state.selected().unwrap()] != "custom_1" {
@@ -205,11 +220,11 @@ fn 候補を左右へ追加でき配置済み項目も反対側へコピーで�
 #[test]
 fn カスタム名の衝突と不正な条件を拒否して編集を継続する() {
     let mut app = App::new(Config::default(), Lang::En);
-    focus(&mut app, 5, 0);
+    focus(&mut app, Tab::Custom, 0);
     press(&mut app, KeyCode::Char('n'));
     press(&mut app, KeyCode::Char('n'));
     for bad in ["", " ", "dir", "custom_1"] {
-        focus(&mut app, 5, 1);
+        focus(&mut app, Tab::Custom, 1);
         press(&mut app, KeyCode::Enter);
         replace_input(&mut app, bad);
         press(&mut app, KeyCode::Enter);
@@ -218,7 +233,7 @@ fn カスタム名の衝突と不正な条件を拒否して編集を継続す�
         assert_eq!(app.config.prompt.custom[1].name, "custom_2");
         press(&mut app, KeyCode::Esc);
     }
-    focus(&mut app, 5, 6);
+    focus(&mut app, Tab::Custom, 6);
     press(&mut app, KeyCode::Enter);
     replace_input(&mut app, "env:");
     press(&mut app, KeyCode::Enter);
@@ -235,9 +250,9 @@ fn カスタム名の衝突と不正な条件を拒否して編集を継続す�
 #[test]
 fn 数値は不正値を拒否しゼロと最大値を直接入力できる() {
     let mut app = App::new(Config::default(), Lang::En);
-    for (tab, field) in [(0, 4), (3, 2)] {
+    for (tab, row) in [(Tab::Prompt, 4), (Tab::Suggest, 2)] {
         for bad in ["", "-1", "1.5", "abc", "9999999999999999999999999999999"] {
-            focus(&mut app, tab, field);
+            focus(&mut app, tab, row);
             press(&mut app, KeyCode::Enter);
             replace_input(&mut app, bad);
             press(&mut app, KeyCode::Enter);
@@ -245,9 +260,9 @@ fn 数値は不正値を拒否しゼロと最大値を直接入力できる() {
             assert!(app.status_msg.is_some());
             press(&mut app, KeyCode::Esc);
         }
-        edit(&mut app, tab, field, "0");
+        edit(&mut app, tab, row, "0");
         press(&mut app, KeyCode::Left);
-        edit(&mut app, tab, field, &usize::MAX.to_string());
+        edit(&mut app, tab, row, &usize::MAX.to_string());
         press(&mut app, KeyCode::Right);
     }
     assert_eq!(app.config.prompt.dir.truncation_length, usize::MAX);
@@ -257,7 +272,7 @@ fn 数値は不正値を拒否しゼロと最大値を直接入力できる() {
 #[test]
 fn 日本語をカーソル移動して編集でき取消しで既存値を保持する() {
     let mut app = App::new(Config::default(), Lang::En);
-    edit(&mut app, 0, 5, "日本語");
+    edit(&mut app, Tab::Prompt, 5, "日本語");
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Left);
     press(&mut app, KeyCode::Backspace);
@@ -276,16 +291,16 @@ fn 日本語をカーソル移動して編集でき取消しで既存値を保�
 fn 小さい端末でも選択行と長い編集値の末尾を表示する() {
     let mut app = App::new(Config::default(), Lang::En);
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
-    focus(&mut app, 0, 6);
+    focus(&mut app, Tab::Prompt, 6);
     terminal.draw(|frame| ui(frame, &mut app)).unwrap();
     let rendered = format!("{:?}", terminal.backend().buffer());
     assert!(rendered.contains("IP Interface"));
-    focus(&mut app, 5, 0);
+    focus(&mut app, Tab::Custom, 0);
     press(&mut app, KeyCode::Char('n'));
-    focus(&mut app, 5, 6);
+    focus(&mut app, Tab::Custom, 6);
     terminal.draw(|frame| ui(frame, &mut app)).unwrap();
     assert!(format!("{:?}", terminal.backend().buffer()).contains("When"));
-    focus(&mut app, 5, 2);
+    focus(&mut app, Tab::Custom, 2);
     press(&mut app, KeyCode::Enter);
     replace_input(&mut app, &format!("{}END", "長いコマンド".repeat(40)));
     terminal.draw(|frame| ui(frame, &mut app)).unwrap();
@@ -322,7 +337,7 @@ fn 全配色をキー操作で選択してプレビューと保存に反映で�
     let mut app = App::new(Config::default(), Lang::Ja);
     app.config.prompt.prompt_style = "rainbow".into();
     app.config.prompt.left_segments = vec!["os_icon".into(), "dir".into(), "git".into()];
-    focus(&mut app, 4, 4);
+    focus(&mut app, Tab::Style, 4);
     for name in RAINBOW_PALETTES
         .iter()
         .cycle()
@@ -361,7 +376,7 @@ fn 入力行の位置を切り替えるとプレビューの記号と右側も�
     app.config.prompt.font_level = "ascii".into();
     app.config.prompt.left_segments = vec!["dir".into()];
     app.config.prompt.right_segments = vec!["time".into()];
-    focus(&mut app, 0, 7);
+    focus(&mut app, Tab::Prompt, 7);
     let initial = render_preview(&app.config, 80, None);
     assert_eq!(initial.lines.len(), 2);
     assert!(initial.lines[1].to_string().contains('>'));
@@ -422,11 +437,11 @@ fn ブロックの色を選択して保存しセット変更後も維持と解�
     config.prompt.prompt_style = "rainbow".into();
     config.prompt.left_segments = vec!["os_icon".into(), "dir".into(), "git".into()];
     let mut app = App::new(config, Lang::Ja);
-    focus(&mut app, 4, 5);
+    focus(&mut app, Tab::Style, 5);
     press(&mut app, KeyCode::Right);
     assert_eq!(app.rainbow_selected(), Some("dir"));
     assert!(!app.dirty);
-    focus(&mut app, 4, 6);
+    focus(&mut app, Tab::Style, 6);
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Home);
     press(&mut app, KeyCode::Esc);
@@ -435,7 +450,7 @@ fn ブロックの色を選択して保存しセット変更後も維持と解�
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Home);
     press(&mut app, KeyCode::Enter);
-    edit(&mut app, 4, 7, "#f0c674");
+    edit(&mut app, Tab::Style, 7, "#f0c674");
     let pair = (AppColor::Ansi256(0), AppColor::Rgb(240, 198, 116));
     assert_eq!(rainbow_colors(&app.config.style, "dir", 1), pair);
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
@@ -443,7 +458,7 @@ fn ブロックの色を選択して保存しセット変更後も維持と解�
     let sample = app.rainbow_sample("dir", Some((false, "88")));
     assert_eq!(sample.fg, Some(Color::Indexed(0)));
     assert_eq!(sample.bg, Some(Color::Indexed(88)));
-    focus(&mut app, 4, 4);
+    focus(&mut app, Tab::Style, 4);
     press(&mut app, KeyCode::Right);
     assert_eq!(rainbow_colors(&app.config.style, "dir", 1), pair);
     app.config.prompt.left_segments.swap(0, 1);
@@ -452,14 +467,14 @@ fn ブロックの色を選択して保存しセット変更後も維持と解�
     let loaded: Config = toml::from_str(&saved).unwrap();
     assert_eq!(rainbow_colors(&loaded.style, "dir", 0), pair);
     app.rainbow_index = 0;
-    edit(&mut app, 4, 6, "");
+    edit(&mut app, Tab::Style, 6, "");
     assert!(app.config.style.rainbow_overrides["dir"].fg.is_none());
     assert_eq!(
         app.config.style.rainbow_overrides["dir"].bg.as_deref(),
         Some("#f0c674")
     );
     app.set_rainbow_color("git".into(), false, "88".into());
-    focus(&mut app, 4, 8);
+    focus(&mut app, Tab::Style, 8);
     press(&mut app, KeyCode::Enter);
     assert!(!app.config.style.rainbow_overrides.contains_key("dir"));
     assert!(app.config.style.rainbow_overrides.contains_key("git"));
@@ -471,8 +486,8 @@ fn カスタムの改名と削除に個別配色が追従する() {
     app.custom_add();
     let name = app.config.prompt.custom[0].name.clone();
     app.config.prompt.left_segments = vec![name.clone()];
-    edit(&mut app, 4, 7, "88");
-    edit(&mut app, 5, 1, "renamed");
+    edit(&mut app, Tab::Style, 7, "88");
+    edit(&mut app, Tab::Custom, 1, "renamed");
     assert!(!app.config.style.rainbow_overrides.contains_key(&name));
     assert_eq!(
         app.config.style.rainbow_overrides["renamed"].bg.as_deref(),
@@ -489,12 +504,15 @@ fn ブロックを減らした後や空の配置でも色選択が壊れない()
     app.rainbow_index = usize::MAX;
     app.config.prompt.left_segments = vec!["missing".into(), "dir".into(), "dir".into()];
     assert_eq!(app.rainbow_selected(), Some("dir"));
-    app.rainbow_select(true);
+    app.rainbow_select(Direction::Next);
     assert_eq!(app.rainbow_selected(), Some("dir"));
     app.config.prompt.left_segments.clear();
-    app.tab = 4;
-    assert_eq!(app.max_focus(), 5);
-    app.style_focus = 5;
+    app.tab = Tab::Style;
+    assert_eq!(
+        style_tab::visible_items(&app).last(),
+        Some(&StyleItem::Block)
+    );
+    app.style_focus = StyleItem::Block;
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Left);
     assert!(app.rainbow_selected().is_none());
@@ -508,13 +526,13 @@ fn 空行数を左右キーと直接入力で変更しプレビューと保存�
     let mut app = App::new(Config::default(), Lang::Ja);
     app.config.prompt.left_segments = vec!["dir".into()];
     app.config.prompt.right_segments.clear();
-    focus(&mut app, 0, 8);
+    focus(&mut app, Tab::Prompt, 8);
     press(&mut app, KeyCode::Right);
     assert_eq!(app.config.prompt.blank_lines, 1);
     press(&mut app, KeyCode::Left);
     press(&mut app, KeyCode::Left);
     assert_eq!(app.config.prompt.blank_lines, 0);
-    edit(&mut app, 0, 8, "2");
+    edit(&mut app, Tab::Prompt, 8, "2");
     for newline in [false, true] {
         app.config.prompt.newline = newline;
         let preview = render_spacing_preview(&app.config, 80, None);
@@ -562,7 +580,7 @@ fn 空行数を左右キーと直接入力で変更しプレビューと保存�
 #[test]
 fn 空行数の範囲外を拒否し極端な設定でも加算と描画が壊れない() {
     let mut app = App::new(Config::default(), Lang::En);
-    focus(&mut app, 0, 8);
+    focus(&mut app, Tab::Prompt, 8);
     for value in ["-1", "11", "1.5", "invalid", ""] {
         press(&mut app, KeyCode::Enter);
         replace_input(&mut app, value);
@@ -598,29 +616,34 @@ fn 補完登録を編集し切替と削除ができる() {
         },
         Lang::Ja,
     );
-    focus(&mut app, 7, 0);
+    focus(&mut app, Tab::Completions, 0);
     press(&mut app, KeyCode::Char('n'));
     replace_input(&mut app, "example");
     press(&mut app, KeyCode::Enter);
-    focus(&mut app, 7, 3);
+    focus(&mut app, Tab::Completions, 3);
     press(&mut app, KeyCode::Enter);
-    edit(&mut app, 7, 4, r#"["example", "completion", "zsh"]"#);
-    edit(&mut app, 7, 5, r#"["~/bin/actual"]"#);
-    focus(&mut app, 7, 2);
+    edit(
+        &mut app,
+        Tab::Completions,
+        4,
+        r#"["example", "completion", "zsh"]"#,
+    );
+    edit(&mut app, Tab::Completions, 5, r#"["~/bin/actual"]"#);
+    focus(&mut app, Tab::Completions, 2);
     press(&mut app, KeyCode::Enter);
     assert!(!app.config.completions[0].enabled);
     let data = toml::to_string(&app.config).unwrap();
     let saved: Config = toml::from_str(&data).unwrap();
     assert_eq!(saved.completions, app.config.completions);
-    focus(&mut app, 7, 3);
+    focus(&mut app, Tab::Completions, 3);
     press(&mut app, KeyCode::Enter);
-    edit(&mut app, 7, 4, "~/completions/_example");
+    edit(&mut app, Tab::Completions, 4, "~/completions/_example");
     assert_eq!(app.config.completions[0].file, "~/completions/_example");
     press(&mut app, KeyCode::Backspace);
     assert_eq!(app.config.completions.len(), 1);
     press(&mut app, KeyCode::Backspace);
     assert!(app.config.completions.is_empty());
-    assert_eq!(app.current_focus(), 0);
+    assert_eq!(focus_row(&app), 0);
 }
 
 #[test]
@@ -681,7 +704,7 @@ fn 補完一覧から詳細を開き削除確認と新規取消しができる()
         },
         Lang::Ja,
     );
-    focus(&mut app, 7, 0);
+    focus(&mut app, Tab::Completions, 0);
     press(&mut app, KeyCode::Char('n'));
     press(&mut app, KeyCode::Esc);
     assert!(app.config.completions.is_empty());
@@ -725,17 +748,17 @@ fn 補完一覧から詳細を開き削除確認と新規取消しができる()
 #[test]
 fn gitの初期登録は既存zsh補完として表示し切替できる() {
     let mut app = App::new(Config::default(), Lang::Ja);
-    focus(&mut app, 7, 0);
+    focus(&mut app, Tab::Completions, 0);
     press(&mut app, KeyCode::Enter);
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|frame| ui(frame, &mut app)).unwrap();
     let rendered = format!("{:?}", terminal.backend().buffer());
     assert!(rendered.contains("git"));
     assert!(rendered.contains("既存の zsh 補完"));
-    focus(&mut app, 7, 4);
+    focus(&mut app, Tab::Completions, 4);
     press(&mut app, KeyCode::Enter);
     assert!(app.editing.is_none());
-    focus(&mut app, 7, 3);
+    focus(&mut app, Tab::Completions, 3);
     press(&mut app, KeyCode::Enter);
     assert_eq!(
         app.config.completions[0].source,
@@ -753,7 +776,7 @@ fn gitの初期登録は既存zsh補完として表示し切替できる() {
 #[test]
 fn 表示言語を切り替えると即時反映し保存できる() {
     let mut app = App::new(Config::default(), Lang::En);
-    focus(&mut app, 6, 2);
+    focus(&mut app, Tab::Shell, 2);
     press(&mut app, KeyCode::Right);
     assert_eq!(app.config.ui.language, UiLanguage::En);
     assert_eq!(app.lang, Lang::En);
@@ -767,12 +790,12 @@ fn 表示言語を切り替えると即時反映し保存できる() {
 #[test]
 fn 補完キャッシュの通常再生成と強制再生成を選択できる() {
     let mut app = App::new(Config::default(), Lang::Ja);
-    focus(&mut app, 7, 0);
+    focus(&mut app, Tab::Completions, 0);
     press(&mut app, KeyCode::Char('n'));
     replace_input(&mut app, "example");
     press(&mut app, KeyCode::Enter);
     for row in [6, 7] {
-        focus(&mut app, 7, row);
+        focus(&mut app, Tab::Completions, row);
         press(&mut app, KeyCode::Enter);
         assert!(app.status_msg.as_deref().unwrap().contains("先に s"));
     }
@@ -803,9 +826,9 @@ fn タスクの利用記録を左右キーとenterで切り替えて表示する
     let mut app = App::new(Config::default(), Lang::En);
     let keys = serde_json::to_value(&app.config.suggest.keys).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-    focus(&mut app, 3, 6);
+    focus(&mut app, Tab::Suggest, 6);
     press(&mut app, KeyCode::Down);
-    assert_eq!(app.suggest_focus, 7);
+    assert_eq!(app.suggest_focus, SuggestItem::RecordTaskUsage);
     terminal.draw(|frame| ui(frame, &mut app)).unwrap();
     assert!(format!("{:?}", terminal.backend().buffer()).contains("Record Task Usage: ON"));
     for key in [KeyCode::Enter, KeyCode::Left, KeyCode::Right] {
@@ -841,12 +864,12 @@ fn 補完の詳細画面で左右キーは登録を巡回し一覧画面では�
         },
         Lang::En,
     );
-    app.tab = 7;
+    app.tab = Tab::Completions;
     press(&mut app, KeyCode::Right);
     assert_eq!(app.completion_index, 0);
     assert!(!app.dirty);
     app.completion_detail = true;
-    app.completion_focus = 0;
+    app.completion_focus = completions::DetailItem::Back;
     // 先頭から左で末尾へ、末尾から右で先頭へ戻る
     press(&mut app, KeyCode::Left);
     assert_eq!(app.completion_index, 2);
@@ -863,7 +886,7 @@ fn 補完の詳細画面で左右キーは登録を巡回し一覧画面では�
         },
         Lang::En,
     );
-    empty.tab = 7;
+    empty.tab = Tab::Completions;
     empty.completion_detail = true;
     press(&mut empty, KeyCode::Left);
     press(&mut empty, KeyCode::Right);

@@ -96,6 +96,228 @@ pub(super) fn validate(
     }
 }
 
+/// 詳細画面の行。表示順は `ALL` の並びで決まる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DetailItem {
+    /// 一覧へ戻る（←/→ で登録を切り替える）
+    Back,
+    Command,
+    Enabled,
+    Source,
+    Input,
+    Watch,
+    Refresh,
+    ForceRefresh,
+}
+
+impl DetailItem {
+    pub(super) const ALL: [Self; 8] = [
+        Self::Back,
+        Self::Command,
+        Self::Enabled,
+        Self::Source,
+        Self::Input,
+        Self::Watch,
+        Self::Refresh,
+        Self::ForceRefresh,
+    ];
+
+    fn handle(self, app: &mut App, action: ItemAction) {
+        let index = app.completion_index;
+        match self {
+            Self::Back => match action {
+                ItemAction::Adjust(direction) => select_registration(app, direction),
+                ItemAction::Activate => app.completion_detail = false,
+            },
+            Self::Command => {
+                app.edit_on_activate(action, EditTarget::Completion(index, Field::Command))
+            }
+            // 有効と補完元は左右でも決定と同じく切り替え、補完元は向きに関わらず次へ進める
+            Self::Enabled => {
+                if let Some(entry) = app.config.completions.get_mut(index) {
+                    entry.enabled = !entry.enabled;
+                    app.dirty = true;
+                }
+            }
+            Self::Source => {
+                if let Some(entry) = app.config.completions.get_mut(index) {
+                    entry.source = next_source(&entry.source);
+                    app.dirty = true;
+                }
+            }
+            // 入力欄は生成コマンドか補完ファイルを使うときだけ編集する
+            Self::Input => {
+                if app
+                    .config
+                    .completions
+                    .get(index)
+                    .is_some_and(|entry| matches!(entry.source, Source::Generator | Source::File))
+                {
+                    app.edit_on_activate(action, EditTarget::Completion(index, Field::Input));
+                }
+            }
+            Self::Watch => {
+                app.edit_on_activate(action, EditTarget::Completion(index, Field::Watch))
+            }
+            Self::Refresh => match action {
+                ItemAction::Activate => refresh(app, false),
+                ItemAction::Adjust(_) => {}
+            },
+            Self::ForceRefresh => match action {
+                ItemAction::Activate => refresh(app, true),
+                ItemAction::Adjust(_) => {}
+            },
+        }
+    }
+
+    fn row(self, app: &App, entry: &Registration, focused: bool) -> ListItem<'static> {
+        let lang = app.lang;
+        let (label, value) = match self {
+            Self::Back => (
+                lang.text("Back to registered CLIs", "登録済み CLI 一覧に戻る"),
+                format!(
+                    "{} / {}  {} — {}",
+                    app.completion_index + 1,
+                    app.config.completions.len(),
+                    entry.command,
+                    status_label(entry, lang)
+                ),
+            ),
+            Self::Command => (Field::Command.label(lang), entry.command.clone()),
+            Self::Enabled => (
+                lang.text("Enabled", "有効"),
+                bool_str(entry.enabled, lang).into(),
+            ),
+            Self::Source => (
+                lang.text("Source", "補完元"),
+                match entry.source {
+                    Source::Help => lang.text("Help (automatic)", "ヘルプ（自動生成）"),
+                    Source::Generator => lang.text("Native generator", "生成コマンド"),
+                    Source::File => lang.text("Completion file", "補完ファイル"),
+                    Source::Native => lang.text("Existing zsh completion", "既存の zsh 補完"),
+                }
+                .into(),
+            ),
+            Self::Input => (
+                Field::Input.label(lang),
+                match entry.source {
+                    Source::Help => "--help".into(),
+                    Source::Native => lang
+                        .text("Uses existing fpath", "既存の fpath を使用")
+                        .into(),
+                    Source::Generator | Source::File => Field::Input.value(entry),
+                },
+            ),
+            Self::Watch => (Field::Watch.label(lang), Field::Watch.value(entry)),
+            Self::Refresh => (
+                lang.text("Rebuild changed caches (r)", "変更を確認して再生成（r）"),
+                lang.text("Enter: all saved CLIs", "Enter: 保存済みの全 CLI")
+                    .into(),
+            ),
+            Self::ForceRefresh => (
+                lang.text(
+                    "Force rebuild caches (Shift+R)",
+                    "キャッシュを強制再生成（Shift+R）",
+                ),
+                lang.text("Enter: all saved CLIs", "Enter: 保存済みの全 CLI")
+                    .into(),
+            ),
+        };
+        field_item(label, &value, focused, false)
+    }
+}
+
+/// 詳細画面で選べる行。登録が無いときは戻る行だけにする。
+pub(super) fn visible_items(app: &App) -> &'static [DetailItem] {
+    if app.completion_detail && !app.config.completions.is_empty() {
+        &DetailItem::ALL
+    } else {
+        &[DetailItem::Back]
+    }
+}
+
+/// 補完キャッシュの状態の表示名
+fn status_label(entry: &Registration, lang: Lang) -> String {
+    let status = completion::status(entry);
+    match status.as_str() {
+        "ready" => lang.text("Ready", "利用可能").into(),
+        "pending" => lang.text("Pending", "未生成").into(),
+        "native" => lang.text("Provided by zsh", "zsh が提供").into(),
+        _ => status,
+    }
+}
+
+fn next_source(source: &Source) -> Source {
+    match source {
+        Source::Help => Source::Generator,
+        Source::Generator => Source::File,
+        Source::File => Source::Native,
+        Source::Native => Source::Help,
+    }
+}
+
+/// 詳細画面で表示する登録を前後に切り替える。端では反対側へ回る。
+fn select_registration(app: &mut App, direction: Direction) {
+    let len = app.config.completions.len();
+    if len > 0 {
+        app.completion_index = cycle_index(app.completion_index, len, direction);
+    }
+}
+
+/// 一覧では登録を選び、詳細画面では行を選ぶ
+pub(super) fn move_focus(app: &mut App, direction: Direction) {
+    if app.completion_detail {
+        move_item(visible_items(app), &mut app.completion_focus, direction);
+        return;
+    }
+    app.completion_index = match direction {
+        Direction::Previous => app.completion_index.saturating_sub(1),
+        Direction::Next => app
+            .completion_index
+            .saturating_add(1)
+            .min(app.config.completions.len().saturating_sub(1)),
+    };
+}
+
+/// 左右キーと決定。一覧では決定で詳細画面を開くだけにする。
+pub(super) fn handle(app: &mut App, action: ItemAction) {
+    if app.completion_detail {
+        focused_item(visible_items(app), app.completion_focus).handle(app, action);
+    } else if action == ItemAction::Activate && !app.config.completions.is_empty() {
+        app.completion_detail = true;
+        app.completion_focus = DetailItem::Command;
+    }
+}
+
+/// 詳細画面を閉じて一覧へ戻る
+pub(super) fn close_detail(app: &mut App) {
+    app.completion_detail = false;
+    app.completion_focus = DetailItem::Back;
+}
+
+/// 補完タブ専用のキー
+pub(super) fn handle_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('n') => add(app),
+        KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('d')
+            if !app.config.completions.is_empty() =>
+        {
+            app.completion_delete_pending = true;
+            app.status_msg = Some(format!(
+                "{}: {}",
+                app.config.completions[app.completion_index].command,
+                app.lang.text(
+                    "Press Backspace (⌫) or d again to remove this CLI.",
+                    "もう一度 ⌫ または d でこの CLI を削除します。"
+                )
+            ));
+        }
+        KeyCode::Char('r') => refresh(app, false),
+        KeyCode::Char('R') => refresh(app, true),
+        _ => {}
+    }
+}
+
 pub(super) fn add(app: &mut App) {
     app.completion_draft_prior_dirty = app.dirty;
     let command = (1..)
@@ -109,7 +331,7 @@ pub(super) fn add(app: &mut App) {
     app.completion_index = app.config.completions.len() - 1;
     app.completion_detail = true;
     app.completion_draft = true;
-    app.completion_focus = 1;
+    app.completion_focus = DetailItem::Command;
     app.dirty = true;
     app.start_edit(EditTarget::Completion(app.completion_index, Field::Command));
 }
@@ -122,76 +344,9 @@ pub(super) fn remove(app: &mut App) {
     app.completion_index = app
         .completion_index
         .min(app.config.completions.len().saturating_sub(1));
-    app.completion_focus = 0;
+    app.completion_focus = DetailItem::Back;
     app.completion_detail = false;
     app.dirty = true;
-}
-
-pub(super) fn select(app: &mut App, forward: bool) {
-    if !app.completion_detail {
-        return;
-    }
-    let len = app.config.completions.len();
-    if len == 0 {
-        return;
-    }
-    if app.completion_focus == 0 {
-        app.completion_index = if forward {
-            (app.completion_index + 1) % len
-        } else {
-            (app.completion_index + len - 1) % len
-        };
-    } else if matches!(app.completion_focus, 2 | 3) {
-        activate(app);
-    }
-}
-
-pub(super) fn activate(app: &mut App) {
-    if !app.completion_detail {
-        if !app.config.completions.is_empty() {
-            app.completion_detail = true;
-            app.completion_focus = 1;
-        }
-        return;
-    }
-    if app.completion_focus == 0 {
-        app.completion_detail = false;
-        return;
-    }
-    if matches!(app.completion_focus, 6 | 7) {
-        refresh(app, app.completion_focus == 7);
-        return;
-    }
-    let Some(entry) = app.config.completions.get_mut(app.completion_index) else {
-        add(app);
-        return;
-    };
-    let field = match app.completion_focus {
-        0 => {
-            select(app, true);
-            return;
-        }
-        1 => Field::Command,
-        2 => {
-            entry.enabled = !entry.enabled;
-            app.dirty = true;
-            return;
-        }
-        3 => {
-            entry.source = match entry.source {
-                Source::Help => Source::Generator,
-                Source::Generator => Source::File,
-                Source::File => Source::Native,
-                Source::Native => Source::Help,
-            };
-            app.dirty = true;
-            return;
-        }
-        4 if matches!(entry.source, Source::Generator | Source::File) => Field::Input,
-        5 => Field::Watch,
-        _ => return,
-    };
-    app.start_edit(EditTarget::Completion(app.completion_index, field));
 }
 
 pub(super) fn refresh(app: &mut App, force: bool) {
@@ -275,76 +430,13 @@ pub(super) fn render(frame: &mut Frame, app: &App, area: Rect) {
     }
     let parts = Layout::vertical([Constraint::Min(0), Constraint::Length(4)]).split(area);
     if let Some(entry) = app.config.completions.get(app.completion_index) {
-        let source = match entry.source {
-            Source::Help => app.lang.text("Help (automatic)", "ヘルプ（自動生成）"),
-            Source::Generator => app.lang.text("Native generator", "生成コマンド"),
-            Source::File => app.lang.text("Completion file", "補完ファイル"),
-            Source::Native => app.lang.text("Existing zsh completion", "既存の zsh 補完"),
-        };
-        let state = completion::status(entry);
-        let state = match state.as_str() {
-            "ready" => app.lang.text("Ready", "利用可能"),
-            "pending" => app.lang.text("Pending", "未生成"),
-            "native" => app.lang.text("Provided by zsh", "zsh が提供"),
-            _ => &state,
-        };
-        let selection = format!(
-            "{} / {}  {} — {}",
-            app.completion_index + 1,
-            app.config.completions.len(),
-            entry.command,
-            state
-        );
-        let input = match entry.source {
-            Source::Help => "--help".into(),
-            Source::Native => app
-                .lang
-                .text("Uses existing fpath", "既存の fpath を使用")
-                .into(),
-            _ => Field::Input.value(entry),
-        };
-        let rows = [
-            (
-                app.lang
-                    .text("Back to registered CLIs", "登録済み CLI 一覧に戻る"),
-                selection,
-            ),
-            (Field::Command.label(app.lang), entry.command.clone()),
-            (
-                app.lang.text("Enabled", "有効"),
-                bool_str(entry.enabled, app.lang).into(),
-            ),
-            (app.lang.text("Source", "補完元"), source.into()),
-            (Field::Input.label(app.lang), input),
-            (Field::Watch.label(app.lang), Field::Watch.value(entry)),
-            (
-                app.lang
-                    .text("Rebuild changed caches (r)", "変更を確認して再生成（r）"),
-                app.lang
-                    .text("Enter: all saved CLIs", "Enter: 保存済みの全 CLI")
-                    .into(),
-            ),
-            (
-                app.lang.text(
-                    "Force rebuild caches (Shift+R)",
-                    "キャッシュを強制再生成（Shift+R）",
-                ),
-                app.lang
-                    .text("Enter: all saved CLIs", "Enter: 保存済みの全 CLI")
-                    .into(),
-            ),
-        ];
-        let items = rows
-            .iter()
-            .enumerate()
-            .map(|(i, (name, value))| field_item(name, value, app.completion_focus == i, false))
-            .collect();
-        render_fields(
+        render_items(
             frame,
-            items,
-            app.lang.text(" CLI completions ", " CLI 補完 "),
+            &DetailItem::ALL,
             app.completion_focus,
+            app.lang.text(" CLI completions ", " CLI 補完 "),
             parts[0],
+            |item, focused| item.row(app, entry, focused),
         );
     } else {
         frame.render_widget(
@@ -397,13 +489,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .skip(start)
         .take(visible)
         .map(|(i, entry)| {
-            let status = completion::status(entry);
-            let status = match status.as_str() {
-                "ready" => app.lang.text("Ready", "利用可能"),
-                "pending" => app.lang.text("Pending", "未生成"),
-                "native" => app.lang.text("Provided by zsh", "zsh が提供"),
-                _ => &status,
-            };
+            let status = status_label(entry, app.lang);
             let source = match entry.source {
                 Source::Help => app.lang.text("help", "ヘルプ"),
                 Source::Generator => app.lang.text("generator", "生成コマンド"),

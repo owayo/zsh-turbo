@@ -39,10 +39,10 @@ fn 全タブの見出しと項目が選択言語で表示される() {
     ] {
         let mut app = App::new(Config::default(), lang);
         let before = toml::to_string(&app.config).unwrap();
-        for (tab, label) in labels.into_iter().enumerate() {
+        for (tab, label) in Tab::ALL.into_iter().zip(labels) {
             app.tab = tab;
             let rendered = screen(&mut app, 100, 24);
-            assert!(rendered.contains(label), "{lang:?}/{tab}: {rendered}");
+            assert!(rendered.contains(label), "{lang:?}/{tab:?}: {rendered}");
             if lang == Lang::En {
                 assert!(
                     !rendered
@@ -71,7 +71,7 @@ fn 日本語の検証メッセージと編集画面と確認が表示される()
     app.cancel_edit();
     app.custom_add();
     assert!(app.status_msg.as_deref().unwrap().contains("作成しました"));
-    app.tab = 5;
+    app.tab = Tab::Custom;
     handle_event(&mut app, KeyCode::Delete.into());
     let rendered = screen(&mut app, 100, 24);
     assert!(rendered.contains("定義と配置を削除しますか？"));
@@ -85,7 +85,7 @@ fn 色選択とカスタム項目も言語が統一される() {
     for lang in [Lang::En, Lang::Ja] {
         let mut app = App::new(Config::default(), lang);
         app.custom_add();
-        app.tab = 5;
+        app.tab = Tab::Custom;
         let rendered = screen(&mut app, 100, 24);
         assert!(rendered.contains(lang.text("Foreground", "文字色")));
         assert!(rendered.contains(lang.text("When", "表示条件")));

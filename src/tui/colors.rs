@@ -124,6 +124,23 @@ pub(super) fn color_field_item(
     ]))
 }
 
+/// 色の項目の行。編集中は入力中の値を見せる。
+pub(super) fn color_row(
+    app: &App,
+    label: &str,
+    value: &str,
+    focused: bool,
+    target: EditTarget,
+) -> ListItem<'static> {
+    color_field_item(
+        app.lang,
+        label,
+        &app.shown_value(&target, value),
+        focused,
+        &target,
+    )
+}
+
 pub(super) fn handle_picker(app: &mut App, key: KeyEvent) {
     if key
         .modifiers
@@ -279,20 +296,26 @@ mod tests {
 
     #[test]
     fn 全色項目にパレットから色を設定できる() {
-        for (tab, field, path) in [
-            (4, 0, "/style/primary_color"),
-            (4, 1, "/style/success_color"),
-            (4, 2, "/style/error_color"),
-            (4, 3, "/style/muted_color"),
-            (3, 1, "/suggest/highlight_color"),
-            (5, 4, "/prompt/custom/0/fg"),
-            (5, 5, "/prompt/custom/0/bg"),
+        // 行の位置は、先頭の行から ↓ を押す回数
+        for (tab, row, path) in [
+            (Tab::Style, 0, "/style/primary_color"),
+            (Tab::Style, 1, "/style/success_color"),
+            (Tab::Style, 2, "/style/error_color"),
+            (Tab::Style, 3, "/style/muted_color"),
+            (Tab::Suggest, 1, "/suggest/highlight_color"),
+            (Tab::Custom, 4, "/prompt/custom/0/fg"),
+            (Tab::Custom, 5, "/prompt/custom/0/bg"),
         ] {
             let mut app = App::new(Config::default(), Lang::En);
             app.custom_add();
             app.dirty = false;
             app.tab = tab;
-            app.set_focus(field);
+            for _ in 0..10 {
+                press(&mut app, KeyCode::Up);
+            }
+            for _ in 0..row {
+                press(&mut app, KeyCode::Down);
+            }
             press(&mut app, KeyCode::Enter);
             assert!(app.color_picker.is_some(), "{path}");
             press(&mut app, KeyCode::End);
@@ -304,7 +327,7 @@ mod tests {
             let json = serde_json::to_value(loaded).unwrap();
             assert_eq!(
                 json.pointer(path).unwrap().as_str().unwrap(),
-                if tab == 3 { "fg=255" } else { "255" }
+                if tab == Tab::Suggest { "fg=255" } else { "255" }
             );
             assert!(app.dirty);
         }
