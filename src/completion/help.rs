@@ -203,55 +203,13 @@ pub(super) fn parse(text: &str) -> Help {
         }
         let (syntax, description) = split_columns(line);
         if syntax.starts_with('-') {
-            // `--[no-]color` の角括弧は、値ではなくフラグ名の省略表記。
-            let value_syntax = syntax.replace("[no-]", "");
-            let mut flags = Vec::new();
-            for token in syntax.split(|c: char| c.is_whitespace() || c == ',' || c == '|') {
-                let expanded = if let Some((head, tail)) = token.split_once("[no-]") {
-                    vec![format!("{head}{tail}"), format!("{head}no-{tail}")]
-                } else {
-                    vec![token.to_owned()]
-                };
-                for token in expanded {
-                    let flag = token.split(['=', '[', '<']).next().unwrap_or("");
-                    if flag.starts_with('-')
-                        && flag != "--"
-                        && flag.len() > 1
-                        && flag
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
-                        && !flags.iter().any(|existing| existing == flag)
-                    {
-                        flags.push(flag.to_string());
-                    }
+            // フラグを読み取れない行 (`--` だけなど) は、コマンドの行としても扱わない
+            if let Some(option) = parse_option(syntax, description) {
+                if !description.is_empty() {
+                    wrapped = Some((column_of(description), Wrapped::Option));
                 }
+                result.options.push(option);
             }
-            if flags.is_empty() {
-                continue;
-            }
-            let value = value_syntax
-                .find(['<', '['])
-                .and_then(|i| {
-                    let end = value_syntax[i..].find(['>', ']'])? + i;
-                    Some(value_syntax[i + 1..end].trim_end_matches("...").to_string())
-                })
-                .or_else(|| {
-                    value_syntax
-                        .split([' ', '='])
-                        .find(|s| {
-                            !s.is_empty() && s.bytes().all(|c| c.is_ascii_uppercase() || c == b'_')
-                        })
-                        .map(str::to_string)
-                });
-            if !description.is_empty() {
-                wrapped = Some((column_of(description), Wrapped::Option));
-            }
-            result.options.push(OptionSpec {
-                flags,
-                value,
-                optional: value_syntax.contains('['),
-                description: description.into(),
-            });
         } else if commands_section {
             let expected = *command_indent.get_or_insert(indent);
             if indent != expected {
@@ -291,6 +249,61 @@ pub(super) fn parse(text: &str) -> Help {
         }
     }
     result
+}
+
+/// オプションの行を、構文の列 (`-o, --output <FILE>` など) と説明の列から読む。
+/// フラグを 1 つも読み取れなければ None
+fn parse_option(syntax: &str, description: &str) -> Option<OptionSpec> {
+    // `--[no-]color` の角括弧は、値ではなくフラグ名の省略表記。
+    let value_syntax = syntax.replace("[no-]", "");
+    let mut flags = Vec::new();
+    for token in syntax.split(|c: char| c.is_whitespace() || c == ',' || c == '|') {
+        let expanded = if let Some((head, tail)) = token.split_once("[no-]") {
+            vec![format!("{head}{tail}"), format!("{head}no-{tail}")]
+        } else {
+            vec![token.to_owned()]
+        };
+        for token in expanded {
+            let flag = token.split(['=', '[', '<']).next().unwrap_or("");
+            if is_flag_name(flag) && !flags.iter().any(|existing| existing == flag) {
+                flags.push(flag.to_string());
+            }
+        }
+    }
+    if flags.is_empty() {
+        return None;
+    }
+    Some(OptionSpec {
+        flags,
+        value: option_value(&value_syntax),
+        optional: value_syntax.contains('['),
+        description: description.into(),
+    })
+}
+
+fn is_flag_name(flag: &str) -> bool {
+    flag.starts_with('-')
+        && flag != "--"
+        && flag.len() > 1
+        && flag
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
+}
+
+/// 値の名前を、`<FILE>`・`[=N]` のような括弧の中か、大文字だけの語 (`MODE`) から読む
+fn option_value(value_syntax: &str) -> Option<String> {
+    value_syntax
+        .find(['<', '['])
+        .and_then(|i| {
+            let end = value_syntax[i..].find(['>', ']'])? + i;
+            Some(value_syntax[i + 1..end].trim_end_matches("...").to_string())
+        })
+        .or_else(|| {
+            value_syntax
+                .split([' ', '='])
+                .find(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_uppercase() || c == b'_'))
+                .map(str::to_string)
+        })
 }
 
 pub(super) fn generate(command: &str, binary: &std::path::Path) -> io::Result<String> {
@@ -568,6 +581,65 @@ mod tests {
         let script = render("demo", &nodes);
         assert!(script.contains("(--color --no-color)--color[Colorize output]"));
         assert!(!script.contains("(--)--="));
+    }
+
+    #[test]
+    fn オプションの行からフラグと値と説明を読む() {
+        let option = |syntax: &str, description: &str| parse_option(syntax, description).unwrap();
+
+        let color = option("--[no-]color", "Colorize output");
+        assert_eq!(color.flags, ["--color", "--no-color"]);
+        assert_eq!(color.value, None);
+        assert!(!color.optional);
+        assert_eq!(color.description, "Colorize output");
+
+        let output = option("-o, --output <FILE>", "Write to FILE");
+        assert_eq!(output.flags, ["-o", "--output"]);
+        assert_eq!(output.value.as_deref(), Some("FILE"));
+        assert!(!output.optional);
+        assert_eq!(output.description, "Write to FILE");
+
+        // 省略できる値は括弧の中をそのまま値の名前にする
+        let level = option("--level[=N]", "");
+        assert_eq!(level.flags, ["--level"]);
+        assert_eq!(level.value.as_deref(), Some("=N"));
+        assert!(level.optional);
+        assert_eq!(level.description, "");
+
+        let verbose = option("-v|--verbose", "Verbose output");
+        assert_eq!(verbose.flags, ["-v", "--verbose"]);
+        assert_eq!(verbose.value, None);
+        assert!(!verbose.optional);
+
+        assert_eq!(option("--mode MODE", "").value.as_deref(), Some("MODE"));
+        assert_eq!(option("--file=PATH", "").value.as_deref(), Some("PATH"));
+        assert_eq!(
+            option("--include <GLOB...>", "").value.as_deref(),
+            Some("GLOB")
+        );
+        assert_eq!(option("-h, -h, --help", "").flags, ["-h", "--help"]);
+    }
+
+    #[test]
+    fn フラグを読み取れないオプションの行はnoneを返す() {
+        for syntax in ["--", "-", "-<n>", "-é", "- name"] {
+            assert!(parse_option(syntax, "Description").is_none(), "{syntax}");
+        }
+    }
+
+    #[test]
+    fn フラグを読み取れない行は折り返しを切りコマンドとしても読まない() {
+        let options =
+            parse("Options:\n  --ok  First\n        continued\n  --  Invalid\n        ignored\n");
+        assert_eq!(options.options.len(), 1);
+        assert_eq!(options.options[0].description, "First continued");
+        // `--` の行でコマンドの字下げを決めない
+        let commands = parse("Commands:\n  --  Separator\n    run  Run a script\n");
+        assert_eq!(
+            commands.commands,
+            [("run".to_owned(), "Run a script".to_owned())]
+        );
+        assert!(commands.options.is_empty());
     }
 
     #[test]
