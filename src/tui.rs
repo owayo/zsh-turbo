@@ -62,6 +62,10 @@ mod settings_tests;
 #[path = "tui/language_tests.rs"]
 mod language_tests;
 
+#[cfg(test)]
+#[path = "tui/behavior_tests.rs"]
+mod behavior_tests;
+
 // ---------------------------------------------------------------------------
 // 定数
 // ---------------------------------------------------------------------------
