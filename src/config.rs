@@ -469,9 +469,20 @@ fn save_config_to(config: &Config, dest: &Path) -> std::io::Result<()> {
     // シリアライズ失敗時に空文字列で既存設定を上書きしないよう、エラーは呼び出し元へ返す。
     let content = toml::to_string_pretty(config)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    // dotfiles の管理などで symlink にした設定ファイルは、リンクを残してリンク先を置き換える。
+    let resolved;
+    let dest = if std::fs::symlink_metadata(dest).is_ok_and(|m| m.file_type().is_symlink()) {
+        resolved = std::fs::canonicalize(dest)?;
+        resolved.as_path()
+    } else {
+        dest
+    };
+    // 既存ファイルの権限 (0600 など) を引き継ぐ。
+    let permissions = std::fs::metadata(dest).ok().map(|m| m.permissions());
     let (tmp, mut file) = create_config_temp(dest)?;
-    if let Err(error) = file
-        .write_all(content.as_bytes())
+    if let Err(error) = permissions
+        .map_or(Ok(()), |permissions| file.set_permissions(permissions))
+        .and_then(|()| file.write_all(content.as_bytes()))
         .and_then(|()| file.sync_all())
     {
         let _ = std::fs::remove_file(&tmp);
@@ -938,6 +949,51 @@ prompt_style = "classic"
             "存在しないディレクトリへの書き込みはエラー"
         );
         assert!(!dest.exists(), "保存先ファイルが作られていない");
+        assert_no_config_temp_files(tmp.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_config_to_はsymlinkを置き換えずリンク先を更新する() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dotfiles = tmp.path().join("dotfiles");
+        let config_dir = tmp.path().join("zsh-turbo");
+        std::fs::create_dir_all(&dotfiles).unwrap();
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let target = dotfiles.join("config.toml");
+        save_config_to(&Config::default(), &target).unwrap();
+        let link = config_dir.join("config.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let mut updated = Config::default();
+        updated.prompt.dir.home_symbol = "home-from-link".into();
+        save_config_to(&updated, &link).unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let loaded: Config = toml::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+        assert_eq!(loaded.prompt.dir.home_symbol, "home-from-link");
+        assert_no_config_temp_files(&dotfiles);
+        assert_no_config_temp_files(&config_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_config_to_は既存ファイルの権限を引き継ぐ() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("config.toml");
+        save_config_to(&Config::default(), &dest).unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        save_config_to(&Config::default(), &dest).unwrap();
+
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
         assert_no_config_temp_files(tmp.path());
     }
 }

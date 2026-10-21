@@ -496,3 +496,70 @@ print -rn -- "$PROMPT"$'\0'
         }
     }
 }
+
+const MESLO_FILES: [&str; 4] = [
+    "MesloLGS NF Regular.ttf",
+    "MesloLGS NF Bold.ttf",
+    "MesloLGS NF Italic.ttf",
+    "MesloLGS NF Bold Italic.ttf",
+];
+
+/// フォントの配置先を一時ディレクトリへ向け、PATH から curl を外して `install-font` を実行する。
+fn install_font_without_curl(tmp: &std::path::Path) -> (std::path::PathBuf, std::process::Output) {
+    let home = tmp.join("home");
+    let data = tmp.join("data");
+    let empty_path = tmp.join("empty-path");
+    std::fs::create_dir_all(&empty_path).unwrap();
+    let fonts = if cfg!(target_os = "macos") {
+        home.join("Library").join("Fonts")
+    } else {
+        data.join("fonts")
+    };
+    let output = Command::new(env!("CARGO_BIN_EXE_zsh-turbo"))
+        .arg("install-font")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data)
+        .env("XDG_CONFIG_HOME", tmp.join("config"))
+        .env("PATH", &empty_path)
+        .output()
+        .unwrap();
+    (fonts, output)
+}
+
+#[test]
+fn フォントが揃っていればcurlが無くてもインストールは成功する() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fonts = if cfg!(target_os = "macos") {
+        tmp.path().join("home").join("Library").join("Fonts")
+    } else {
+        tmp.path().join("data").join("fonts")
+    };
+    std::fs::create_dir_all(&fonts).unwrap();
+    for file in MESLO_FILES {
+        std::fs::write(fonts.join(file), "font").unwrap();
+    }
+
+    let (fonts, output) = install_font_without_curl(tmp.path());
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Installed 0 files (skipped 4)"), "{stdout}");
+    assert!(fonts.join("MesloLGS NF License.txt").exists());
+}
+
+#[test]
+fn curlが無くフォントを取得できないときはライセンスだけを残さない() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let (fonts, output) = install_font_without_curl(tmp.path());
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("curl is required"),
+        "{output:?}"
+    );
+    assert!(!fonts.join("MesloLGS NF License.txt").exists());
+    for file in MESLO_FILES {
+        assert!(!fonts.join(file).exists());
+    }
+}

@@ -25,7 +25,24 @@ pub(crate) fn run_cmd_inner(
     stderr_fallback: bool,
     timeout: Duration,
 ) -> Option<String> {
-    run_cmd_core(cmd, args, &[], stderr_fallback, timeout, true)
+    run_cmd_core(cmd, args, &[], None, stderr_fallback, timeout, true)
+}
+
+/// プロジェクトの設定を読まない場所。ヘルプや補完の生成は入力しただけ・バックグラウンドで動くため、
+/// 信頼できないリポジトリの `.yarnrc.yml` の `yarnPath` などを起動しないよう、カレントディレクトリで実行しない
+pub(crate) const NEUTRAL_DIR: &str = "/";
+
+/// 成功したときの stdout だけを返す。補完の生成コマンド向けに、プロジェクトの設定を読まない場所で実行する
+pub(crate) fn run_generator(cmd: &str, args: &[&str], timeout: Duration) -> Option<String> {
+    run_cmd_core(
+        cmd,
+        args,
+        &[],
+        Some(Path::new(NEUTRAL_DIR)),
+        false,
+        timeout,
+        true,
+    )
 }
 
 /// 終了コードに関わらず出力を返す。`npm --help` のように、使い方を表示して 1 で終わるコマンド向け。
@@ -35,18 +52,30 @@ pub(crate) fn run_cmd_any_status(
     env: &[(&str, &str)],
     timeout: Duration,
 ) -> Option<String> {
-    run_cmd_core(cmd, args, env, true, timeout, false)
+    run_cmd_core(
+        cmd,
+        args,
+        env,
+        Some(Path::new(NEUTRAL_DIR)),
+        true,
+        timeout,
+        false,
+    )
 }
 
 fn run_cmd_core(
     cmd: &str,
     args: &[&str],
     env: &[(&str, &str)],
+    dir: Option<&Path>,
     stderr_fallback: bool,
     timeout: Duration,
     require_success: bool,
 ) -> Option<String> {
     let mut command = Command::new(crate::executable::resolve(cmd).ok()?);
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
     command
         .args(args)
         .envs(env.iter().copied())
@@ -189,6 +218,9 @@ pub fn has_marker_file(dir: &Path, markers: &[&str]) -> bool {
 
 pub fn extract_version(text: &str) -> String {
     let text = text.trim();
+    // Java の GA 版 (`openjdk version "25"`) のようにドットの無い版数もあるため、
+    // ドット付きが無ければ最初の数字の語を使い、出力全文をそのまま表示しない。
+    let mut without_dot = None;
     for word in text.split_whitespace() {
         let Some(start) = word.find(|c: char| c.is_ascii_digit()) else {
             continue;
@@ -196,11 +228,15 @@ pub fn extract_version(text: &str) -> String {
         let version = word[start..].trim_end_matches(|c: char| {
             !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '_'
         });
-        if version.contains('.') && version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        if !version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if version.contains('.') {
             return format!("v{version}");
         }
+        without_dot.get_or_insert(version);
     }
-    text.to_string()
+    without_dot.map_or_else(|| text.to_string(), |version| format!("v{version}"))
 }
 
 pub fn find_up(dir: &Path, filename: &str) -> Option<std::path::PathBuf> {
@@ -333,6 +369,19 @@ mod tests {
     #[test]
     fn extract_version_no_version_returns_original() {
         assert_eq!(extract_version("hello world"), "hello world");
+    }
+
+    #[test]
+    fn extract_version_ドットの無いjavaのga版は版数だけを返す() {
+        let banner = "openjdk version \"25\" 2025-09-16\n\
+                      OpenJDK Runtime Environment Temurin-25+36 (build 25+36)\n\
+                      OpenJDK 64-Bit Server VM Temurin-25+36 (build 25+36, mixed mode, sharing)";
+        assert_eq!(extract_version(banner), "v25");
+    }
+
+    #[test]
+    fn extract_version_ドット付きの版数をドットの無い数字より優先する() {
+        assert_eq!(extract_version("tool 64 build 1.2.3"), "v1.2.3");
     }
 
     #[test]

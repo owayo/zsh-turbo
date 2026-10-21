@@ -41,6 +41,13 @@ fn install_meslo_nerd_font_to(
 ) -> io::Result<InstallResult> {
     std::fs::create_dir_all(&dest_dir)?;
     ensure_writable(&dest_dir)?;
+    // curl は取得するフォントがあるときだけ求める。ライセンスだけを残して失敗しないよう、先に確かめる。
+    if MESLO_VARIANTS
+        .iter()
+        .any(|variant| force || !dest_dir.join(variant).exists())
+    {
+        ensure_curl()?;
+    }
     save_font_license(&dest_dir)?;
 
     print_line(
@@ -54,8 +61,6 @@ fn install_meslo_nerd_font_to(
         ),
         line_ending,
     );
-
-    ensure_curl()?;
 
     let mut installed = 0;
     let mut skipped = 0;

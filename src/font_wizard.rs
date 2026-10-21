@@ -135,14 +135,22 @@ fn choose_installed_family(fonts: &[String]) -> io::Result<String> {
         "Number or exact font family",
         "番号または正確なフォント名",
     ))?;
-    let family = selected
-        .parse::<usize>()
-        .ok()
-        .and_then(|n| matches.get(n.saturating_sub(1)).copied())
-        .unwrap_or(&selected)
-        .trim();
+    let family = pick_family(&matches, &selected)?;
     validate_family(family)?;
     Ok(family.to_string())
+}
+
+/// 一覧の番号かフォント名の入力から、使うフォント名を決める。一覧に無い番号 (`0` を含む) は
+/// 別のフォントやフォント名 `2` として扱わず、誤りとして返す。
+fn pick_family<'a>(matches: &[&'a str], input: &'a str) -> io::Result<&'a str> {
+    let input = input.trim();
+    match input.parse::<usize>() {
+        Ok(number) => number
+            .checked_sub(1)
+            .and_then(|index| matches.get(index).copied())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid font number")),
+        Err(_) => Ok(input),
+    }
 }
 
 /// 設定ファイルを書き換えない Terminal.app・iTerm2 では、フォントを選ぶ手順を表示する
@@ -556,6 +564,22 @@ mod tests {
                 "{term_program}"
             );
         }
+    }
+
+    #[test]
+    fn フォントは一覧の番号か名前で選び一覧に無い番号は誤りにする() {
+        let matches = ["Menlo", "MesloLGS NF"];
+        assert_eq!(pick_family(&matches, "1").unwrap(), "Menlo");
+        assert_eq!(pick_family(&matches, " 2 ").unwrap(), "MesloLGS NF");
+        assert_eq!(pick_family(&matches, "Monaco").unwrap(), "Monaco");
+        for input in ["0", "3", "30"] {
+            assert_eq!(
+                pick_family(&matches, input).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput,
+                "{input}"
+            );
+        }
+        assert!(pick_family(&[], "1").is_err());
     }
 
     #[test]

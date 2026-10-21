@@ -1,5 +1,6 @@
 # 補完時はキャッシュの inode だけを確認し、変更時だけ定義を読み直す。
-zmodload zsh/stat 2>/dev/null
+# `zstat` だけを読み込む。`zmodload zsh/stat` は組み込みの `stat` も定義し、外部の stat を隠す
+zmodload -F zsh/stat b:zstat 2>/dev/null
 typeset -gA _ZSH_TURBO_COMPLETION_FALLBACK _ZSH_TURBO_COMPLETION_VERSION
 typeset -gA _ZSH_TURBO_COMPLETION_DELEGATE _ZSH_TURBO_COMPLETION_FUNCTIONS
 function _zsh_turbo_registered_completion() {

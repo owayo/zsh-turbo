@@ -255,12 +255,11 @@ fn refresh_locked(
                     .split_first()
                     .ok_or_else(|| io::Error::other("generator is empty"))?;
                 let args: Vec<_> = args.iter().map(String::as_str).collect();
-                crate::prompt::helpers::run_cmd_inner(
+                crate::prompt::helpers::run_generator(
                     resolve(program)?
                         .to_str()
                         .ok_or_else(|| io::Error::other("executable path is not UTF-8"))?,
                     &args,
-                    false,
                     Duration::from_secs(10),
                 )
                 .filter(|s| s.contains("compdef") || s.contains("#compdef"))

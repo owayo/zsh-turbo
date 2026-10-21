@@ -212,9 +212,12 @@ fn segment_dir(config: &Config, icons: &Icons) -> Segment {
     }
 }
 
+const GIT_STATUS_ARGS: &[&str] = &["--no-optional-locks", "status", "--porcelain", "-b"];
+
 fn segment_git(config: &Config, icons: &Icons) -> Option<Segment> {
     // `git status` 1 回でブランチ・追跡情報・ファイル状態をまとめて取得する。
-    let status = run_cmd("git", &["status", "--porcelain", "-b"])?;
+    // タイムアウトで強制終了しても `.git/index.lock` が残らないよう、index の任意の更新をさせない。
+    let status = run_cmd("git", GIT_STATUS_ARGS)?;
     let mut lines = status.lines();
 
     // ブランチ行の形式: "## branch...origin/branch [ahead N, behind M]"
@@ -1264,6 +1267,44 @@ mod tests {
     use super::*;
 
     // ── ALL_SEGMENT_NAMES のテスト ───────────────────────────────
+
+    #[test]
+    fn git_statusはindexを書き換えずタイムアウトで強制終了されてもロックを残さない() {
+        // 通常の `git status` は、mtime の変わった追跡ファイルの stat 情報を index に書き戻すため
+        // `.git/index.lock` を取る。プロンプトの呼び出しは、強制終了でロックが残らないよう取らせない。
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "a").unwrap();
+        git(&["add", "a.txt"]);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000))
+            .unwrap();
+        let index = dir.path().join(".git").join("index");
+        let before = std::fs::read(&index).unwrap();
+
+        git(GIT_STATUS_ARGS);
+
+        assert_eq!(std::fs::read(&index).unwrap(), before);
+        assert!(!dir.path().join(".git").join("index.lock").exists());
+    }
 
     #[test]
     fn all_segment_names_に重複がない() {
