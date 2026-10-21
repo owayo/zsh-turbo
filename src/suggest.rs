@@ -119,21 +119,25 @@ fn continues_to_next_line_bytes(line: &[u8]) -> bool {
 
 /// 履歴の 1 行からコマンドを取り出す。zsh は `\` (と空白) で終わるコマンドに空白を 1 つ
 /// 足して書くため、その空白だけを外して `touch file\ ` の末尾の空白を残す。
+/// 外すのは ASCII の空白だけにする。CR などの制御文字は残して候補の除外に任せ、
+/// 全角空白も zsh と同じくコマンドの一部として扱う。
 fn history_command(line: &str) -> &str {
-    let command = parse_history_line(line).trim_start();
+    let command = parse_history_line(line).trim_start_matches(' ');
     let body = command.trim_end_matches(' ');
     if body.len() < command.len() && body.ends_with('\\') {
         &command[..command.len() - 1]
     } else {
-        command.trim_end()
+        body
     }
 }
 
 /// 履歴テキストを新しい順に走査し、複数行エントリ (継続行) を除いた
 /// 単独行の履歴コマンドだけを返す。複数行エントリは改行を含み、
 /// 1 行プロトコル (zsh 側の `read -r`) で運べないため候補にしない。
+/// zsh の readhistline と同じく LF だけで分ける (`lines()` は行末の CR も削り、
+/// `\`+CR の行を継続行と取り違える)。
 fn history_candidates_rev(text: &str) -> impl Iterator<Item = &str> {
-    let mut lines = text.lines().rev().peekable();
+    let mut lines = text.split_terminator('\n').rev().peekable();
     std::iter::from_fn(move || {
         while let Some(line) = lines.next() {
             // ファイル順で 1 つ前の物理行が `\` 終端なら、この行は継続部分
@@ -1022,6 +1026,32 @@ mod tests {
         assert_eq!(history_command(": 1:0;touch file\\  "), "touch file\\ ");
         assert_eq!(history_command(": 1:0;echo foo\\ "), "echo foo\\");
         assert_eq!(history_command(": 1:0;  ls -la  "), "ls -la");
+    }
+
+    #[test]
+    fn crの直前のバックスラッシュは行継続とみなさず次のエントリを失わない() {
+        // zsh 5.9 が `print -sr -- $'echo slash-cr\\\r'` などを `fc -W` で書いた内容
+        let text = ": 1:0;echo slash-cr\\\r\n: 2:0;echo next-entry\n: 3:0;echo crlf\r\n";
+        assert_eq!(
+            search_text("echo n", text, &Strategy::Prefix).as_deref(),
+            Some("echo next-entry")
+        );
+    }
+
+    #[test]
+    fn crを含むエントリは制御文字を含む履歴として候補にしない() {
+        let text = ": 1:0;echo crlf\r\n: 2:0;ls\n";
+        assert_eq!(search_text("echo c", text, &Strategy::Prefix), None);
+        assert_eq!(history_command(": 1:0;echo crlf\r"), "echo crlf\r");
+    }
+
+    #[test]
+    fn 全角空白はコマンドの一部として外さない() {
+        // zsh が外すのは書き足した ASCII の空白だけで、`\` と全角空白で終わる行は継続しない
+        assert_eq!(
+            history_command(": 1:0;echo dir\\\u{3000}"),
+            "echo dir\\\u{3000}"
+        );
     }
 
     #[test]

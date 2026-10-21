@@ -1,8 +1,8 @@
-use crate::shell_words::is_blank;
-use std::collections::HashSet;
+use crate::executable::is_executable_file;
+use crate::shell_words::{is_blank, numeric_glob_len};
+use std::collections::{HashMap, HashSet};
 use std::env;
-use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 /// ハイライトスパン: 開始位置、終了位置、スタイル文字列
@@ -13,9 +13,17 @@ pub struct Span {
     pub style: String,
 }
 
-/// 組み込みコマンド・予約語の O(1) 検索用 HashSet（事前計算）。
-static BUILTIN_SET: LazyLock<HashSet<&'static str>> =
-    LazyLock::new(|| BUILTINS.iter().copied().collect());
+/// zsh から受け取るコマンド名の一覧 (いずれも改行区切り)。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ShellNames<'a> {
+    pub aliases: &'a str,
+    pub functions: &'a str,
+    /// zsh の `${(k)builtins}` (読み込んだモジュールの組み込みを含む)。空なら既定の一覧を使う
+    /// (組み込みを渡さない旧版の init.zsh から呼ばれた場合)。
+    pub builtins: &'a str,
+}
+
+/// 予約語の O(1) 検索用 HashSet（事前計算）。
 static RESERVED_SET: LazyLock<HashSet<&'static str>> =
     LazyLock::new(|| RESERVED_WORDS.iter().copied().collect());
 
@@ -88,22 +96,29 @@ impl CommandPosition {
 }
 
 /// シェルコマンドラインのトークンを分類し、ハイライトスパンを返す。
-pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Span> {
+pub fn highlight_buffer(buffer: &str, names: ShellNames) -> Vec<Span> {
     if buffer.is_empty() {
         return Vec::new();
     }
 
-    let alias_set: HashSet<&str> = aliases.split('\n').filter(|s| !s.is_empty()).collect();
-    let func_set: HashSet<&str> = functions.split('\n').filter(|s| !s.is_empty()).collect();
-
-    let path_cmds = build_path_cache();
+    let mut classifier = Classifier::new(names, path_dirs());
     let mut spans = Vec::new();
     let mut pos = 0;
     let mut position = CommandPosition::initial();
+    // `( … )` サブシェルの深さ。0 より大きい間は `)` で語を区切る
+    let mut subshell_depth = 0usize;
+    // `[[ … ]]` の中か。中の `&&`/`||` は条件の演算子でコマンド区切りではない
+    let mut in_condition = false;
 
     let chars: Vec<char> = buffer.chars().collect();
 
     while pos < chars.len() {
+        // `\` + 改行は行継続。zsh は両方を取り除くため、区切りにも語にもしない
+        if chars[pos] == '\\' && chars.get(pos + 1) == Some(&'\n') {
+            pos += 2;
+            continue;
+        }
+
         // 改行はシェル構文上のコマンド区切りとして扱う。
         if chars[pos] == '\n' {
             pos += 1;
@@ -149,24 +164,15 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
 
         // リダイレクト: >, >>, <, 2>, &>, 2>&, 0<&
         if chars[pos].is_ascii_digit() {
-            let mut fd_end = pos;
-            while fd_end < chars.len() && chars[fd_end].is_ascii_digit() {
-                fd_end += 1;
-            }
-            if fd_end < chars.len() && matches!(chars[fd_end], '>' | '<') {
+            // zsh で記述子になるのは 1 桁だけ。`12>file` の `12` はコマンド名や引数になる。
+            let fd_end = pos + 1;
+            if fd_end < chars.len()
+                && matches!(chars[fd_end], '>' | '<')
+                && !(chars[fd_end] == '<'
+                    && numeric_glob_len(chars[fd_end..].iter().copied()).is_some())
+            {
                 let op_start = pos;
-                let is_out = chars[fd_end] == '>';
-                pos = fd_end + 1;
-                // `N>>` の 2 文字目、または `N>&`/`N<&` の fd 複製演算子。
-                // bare な `>&`/`<&` 分岐と挙動を揃える。
-                if pos < chars.len() && (chars[pos] == '>' || chars[pos] == '&') {
-                    pos += 1;
-                }
-                // `N>|` (CLOBBER 上書き) の `|` は演算子の一部。パイプ扱いにすると
-                // リダイレクト先ファイル名がコマンド分類されてしまう。
-                if is_out && pos < chars.len() && chars[pos] == '|' {
-                    pos += 1;
-                }
+                pos = redirect_operator_end(&chars, fd_end);
                 spans.push(Span {
                     start: op_start,
                     end: pos,
@@ -186,6 +192,10 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
             if pos < chars.len() && chars[pos] == '>' {
                 pos += 1;
             }
+            // `&>|`・`&>!`・`&>>|`・`&>>!` (CLOBBER) の `|`/`!` も演算子の一部
+            if matches!(chars.get(pos), Some('|' | '!')) {
+                pos += 1;
+            }
             spans.push(Span {
                 start: op_start,
                 end: pos,
@@ -195,17 +205,11 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
             continue;
         }
 
-        if matches!(chars[pos], '>' | '<') {
+        if chars[pos] == '>'
+            || (chars[pos] == '<' && numeric_glob_len(chars[pos..].iter().copied()).is_none())
+        {
             let op_start = pos;
-            let is_out = chars[pos] == '>';
-            pos += 1;
-            if pos < chars.len() && (chars[pos] == '>' || chars[pos] == '&') {
-                pos += 1;
-            }
-            // `>|`/`>>|`/`>&|` (CLOBBER 上書き) の `|` は演算子の一部。
-            if is_out && pos < chars.len() && chars[pos] == '|' {
-                pos += 1;
-            }
+            pos = redirect_operator_end(&chars, pos);
             spans.push(Span {
                 start: op_start,
                 end: pos,
@@ -228,7 +232,63 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                 end: pos,
                 style: "fg=magenta".into(),
             });
+            // `[[ … ]]` の中の `&&`/`||` は条件の論理演算子で、次の語はコマンドではない
+            if !(in_condition && ch != ';') {
+                position.separator();
+            }
+            continue;
+        }
+
+        // コマンド位置の `(` はサブシェル、`((` は算術コマンド
+        if chars[pos] == '(' && position.expects_command() {
+            let op_start = pos;
+            if chars.get(pos + 1) == Some(&'(') {
+                pos += 2;
+                spans.push(Span {
+                    start: op_start,
+                    end: pos,
+                    style: "fg=yellow,bold".into(),
+                });
+                let mut depth = 0usize;
+                while pos < chars.len() {
+                    match chars[pos] {
+                        '(' => depth += 1,
+                        ')' if depth > 0 => depth -= 1,
+                        ')' if chars.get(pos + 1) == Some(&')') => {
+                            spans.push(Span {
+                                start: pos,
+                                end: pos + 2,
+                                style: "fg=yellow,bold".into(),
+                            });
+                            pos += 2;
+                            break;
+                        }
+                        _ => {}
+                    }
+                    pos += 1;
+                }
+                position.consume_command_name();
+                continue;
+            }
+            pos += 1;
+            spans.push(Span {
+                start: op_start,
+                end: pos,
+                style: "fg=yellow,bold".into(),
+            });
+            subshell_depth += 1;
             position.separator();
+            continue;
+        }
+        if chars[pos] == ')' && subshell_depth > 0 {
+            spans.push(Span {
+                start: pos,
+                end: pos + 1,
+                style: "fg=yellow,bold".into(),
+            });
+            pos += 1;
+            subshell_depth -= 1;
+            position.consume_command_name();
             continue;
         }
 
@@ -241,10 +301,56 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
         let mut logical = String::new();
         // クォート外の文字のみ (引数位置でのオプション/パス/glob 判定用)
         let mut bare = String::new();
+        // 配列代入 `name=( … )` の括弧の深さ。中の空白・改行・演算子は語の一部
+        let mut array_depth = 0usize;
+        // 語中のグロブの括弧 `(a|b)` の深さ。中の `|` はパイプではなく選択肢
+        let mut glob_depth = 0usize;
         while pos < chars.len()
-            && !is_blank(chars[pos])
-            && !matches!(chars[pos], '|' | '&' | ';' | '>' | '<')
+            && (array_depth > 0
+                || (!is_blank(chars[pos])
+                    && !matches!(chars[pos], '&' | ';' | '>')
+                    && !(chars[pos] == '<'
+                        && numeric_glob_len(chars[pos..].iter().copied()).is_none())
+                    && !(chars[pos] == '|' && glob_depth == 0)
+                    && !(chars[pos] == ')' && subshell_depth > 0 && glob_depth == 0)
+                    // 関数定義 `name()` の名前はここで切る
+                    && !(chars[pos] == '('
+                        && chars.get(pos + 1) == Some(&')')
+                        && position.expects_command()
+                        && !logical.is_empty()
+                        && !logical.ends_with('='))))
         {
+            if chars[pos] == '<'
+                && let Some(len) = numeric_glob_len(chars[pos..].iter().copied())
+            {
+                logical.extend(&chars[pos..pos + len]);
+                bare.extend(&chars[pos..pos + len]);
+                pos += len;
+                continue;
+            }
+            if chars[pos] == '(' {
+                let starts_array = array_depth == 0
+                    && position.expects_command()
+                    && logical.find('=') == Some(logical.len().saturating_sub(1))
+                    && is_assignment_word(&logical)
+                    && !chars[word_start..pos]
+                        .iter()
+                        .any(|&c| matches!(c, '\'' | '"' | '\\'));
+                if starts_array || array_depth > 0 {
+                    array_depth += 1;
+                } else {
+                    glob_depth += 1;
+                }
+            } else if chars[pos] == ')' && array_depth > 0 {
+                array_depth -= 1;
+            } else if chars[pos] == ')' && glob_depth > 0 {
+                glob_depth -= 1;
+            }
+            if chars[pos] == '\\' && chars.get(pos + 1) == Some(&'\n') {
+                // 語中の行継続は取り除いて前後を連結する (`ec\<改行>ho` は echo)
+                pos += 2;
+                continue;
+            }
             if chars[pos] == '\'' {
                 // シングルクォートセグメント
                 let seg_start = pos;
@@ -296,7 +402,51 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
             pos += 1;
         }
 
+        // 関数定義 `name()`/`name ()`: 名前は分類せず、`()` の後の本体をコマンド位置にする
+        if position.expects_command()
+            && !logical.is_empty()
+            && !logical.ends_with('=')
+            && quote_segs.is_empty()
+        {
+            let mut next = pos;
+            while next < chars.len() && matches!(chars[next], ' ' | '\t') {
+                next += 1;
+            }
+            if chars.get(next) == Some(&'(') && chars.get(next + 1) == Some(&')') {
+                spans.push(Span {
+                    start: next,
+                    end: next + 2,
+                    style: "fg=yellow,bold".into(),
+                });
+                pos = next + 2;
+                position.separator();
+                continue;
+            }
+        }
+
+        if in_condition && logical == "]]" && quote_segs.is_empty() && !bare.contains('\\') {
+            spans.push(Span {
+                start: word_start,
+                end: pos,
+                style: "fg=yellow,bold".into(),
+            });
+            in_condition = false;
+            position.consume_command_name();
+            continue;
+        }
+
         if position.expects_command() {
+            // `!!`・`!$`・`!vim` は対話 zsh (BANG_HIST) の履歴展開。展開後のコマンドは
+            // 分からないため分類せず、コマンド名として消費する
+            if chars[word_start] == '!'
+                && pos - word_start > 1
+                && !matches!(chars[word_start + 1], '=' | '(')
+            {
+                push_quote_segs(&mut spans, &quote_segs);
+                position.consume_command_name();
+                continue;
+            }
+
             if bare.is_empty() && !quote_segs.is_empty() {
                 // 全体がクォートの語 (`; 'ls' -la` 等) はコマンド名として消費される。
                 // 中身は分類せず文字列色のみ付け、後続をコマンド誤分類しない。
@@ -335,13 +485,16 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
 
             // コマンド位置: 単語を分類
             let quoted = !quote_segs.is_empty() || bare.contains('\\');
-            let style = classify_command(&logical, quoted, &alias_set, &func_set, &path_cmds);
+            let style = classifier.classify(&logical, quoted);
             spans.push(Span {
                 start: word_start,
                 end: pos,
                 style,
             });
             push_quote_segs(&mut spans, &quote_segs);
+            if !quoted && logical == "[[" {
+                in_condition = true;
+            }
             position.command_word(&logical, quoted);
         } else if bare.starts_with('-') {
             // オプション
@@ -364,7 +517,7 @@ pub fn highlight_buffer(buffer: &str, aliases: &str, functions: &str) -> Vec<Spa
                 style: style.into(),
             });
             push_quote_segs(&mut spans, &quote_segs);
-        } else if bare.contains('*') || bare.contains('?') || bare.contains('[') {
+        } else if bare.contains(['*', '?', '[', '<']) {
             // glob パターン (クォート内の `*` 等は対象外)
             spans.push(Span {
                 start: word_start,
@@ -426,6 +579,14 @@ fn is_assignment_word(word: &str) -> bool {
     let Some((name, _)) = word.split_once('=') else {
         return false;
     };
+    // `name+=value` は追記代入
+    let name = name.strip_suffix('+').unwrap_or(name);
+    // `name[添字]=value` は要素への代入
+    let name = match name.split_once('[') {
+        Some((base, _)) if name.ends_with(']') => base,
+        Some(_) => return false,
+        None => name,
+    };
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -438,7 +599,27 @@ fn is_zsh_special_parameter_char(c: char) -> bool {
     matches!(c, '?' | '!' | '$' | '#' | '-' | '*' | '@')
 }
 
-/// zsh/bash 組み込みコマンド
+/// `>`/`<` から始まるリダイレクト演算子の終端 (排他) を返す。
+/// `>>`・`>&`・`>>&` (標準出力とエラーの追記)・CLOBBER の `|`/`!`、`<&`・`<>` を 1 トークンにする。
+fn redirect_operator_end(chars: &[char], start: usize) -> usize {
+    let mut pos = start + 1;
+    if chars[start] == '>' {
+        if chars.get(pos) == Some(&'>') {
+            pos += 1;
+        }
+        if chars.get(pos) == Some(&'&') {
+            pos += 1;
+        }
+        if matches!(chars.get(pos), Some('|' | '!')) {
+            pos += 1;
+        }
+    } else if matches!(chars.get(pos), Some('&' | '>')) {
+        pos += 1;
+    }
+    pos
+}
+
+/// zsh が組み込みの一覧を渡さないとき (旧版の init.zsh) に使う既定の組み込みコマンド
 const BUILTINS: &[&str] = &[
     ".",
     ":",
@@ -449,15 +630,18 @@ const BUILTINS: &[&str] = &[
     "bindkey",
     "break",
     "builtin",
+    "bye",
     "cd",
     "chdir",
     "command",
-    "compctl",
     "compadd",
+    "compctl",
     "compdef",
     "continue",
     "declare",
     "dirs",
+    "disable",
+    "disown",
     "echo",
     "emulate",
     "enable",
@@ -487,11 +671,14 @@ const BUILTINS: &[&str] = &[
     "print",
     "printf",
     "pushd",
+    "pushln",
     "pwd",
+    "r",
     "read",
     "readonly",
     "rehash",
     "return",
+    "sched",
     "set",
     "setopt",
     "shift",
@@ -554,115 +741,117 @@ const RESERVED_WORDS: &[&str] = &[
     "time",
 ];
 
-fn classify_command(
-    word: &str,
-    quoted: bool,
-    aliases: &HashSet<&str>,
-    functions: &HashSet<&str>,
-    path_cmds: &HashSet<OsString>,
-) -> String {
-    // `\cmd` はエイリアス展開・予約語解釈を抑止する zsh の常用イディオム。
-    // 分類は `\` を剥いだ語で行うが、予約語・エイリアスには一致させない。
-    if let Some(lookup) = word.strip_prefix('\\') {
-        if BUILTIN_SET.contains(lookup)
-            || functions.contains(lookup)
-            || command_in_path(lookup, path_cmds)
-        {
+/// コマンド位置の語を分類する。打鍵ごとに起動されるため、PATH の一覧も全エントリの stat もせず、
+/// 分類が必要な名前だけを PATH の各ディレクトリで探し、結果 (見つからなかった場合も) を名前ごとに覚える。
+struct Classifier<'a> {
+    aliases: HashSet<&'a str>,
+    functions: HashSet<&'a str>,
+    builtins: HashSet<&'a str>,
+    path_dirs: Vec<PathBuf>,
+    path_found: HashMap<String, bool>,
+}
+
+impl<'a> Classifier<'a> {
+    fn new(names: ShellNames<'a>, path_dirs: Vec<PathBuf>) -> Self {
+        let lines = |list: &'a str| -> HashSet<&'a str> {
+            list.split('\n').filter(|name| !name.is_empty()).collect()
+        };
+        Self {
+            aliases: lines(names.aliases),
+            functions: lines(names.functions),
+            builtins: if names.builtins.is_empty() {
+                BUILTINS.iter().copied().collect()
+            } else {
+                lines(names.builtins)
+            },
+            path_dirs,
+            path_found: HashMap::new(),
+        }
+    }
+
+    fn classify(&mut self, word: &str, quoted: bool) -> String {
+        // `\cmd` はエイリアス展開・予約語解釈を抑止する zsh の常用イディオム。
+        // 分類は `\` を剥いだ語で行うが、予約語・エイリアスには一致させない。
+        if let Some(lookup) = word.strip_prefix('\\') {
+            if self.builtins.contains(lookup)
+                || self.functions.contains(lookup)
+                || self.in_path(lookup)
+            {
+                return "fg=green".into();
+            }
+            if lookup.contains('/') && path_exists(lookup) {
+                return "fg=green,underline".into();
+            }
+            return "fg=red,bold".into();
+        }
+
+        // sudo, env, command 等 → 次の単語もコマンドとして扱う
+        if is_prefix_command(word) {
+            return "fg=green,bold".into();
+        }
+
+        if !quoted && RESERVED_SET.contains(word) {
+            return "fg=yellow,bold".into();
+        }
+
+        if self.builtins.contains(word) {
             return "fg=green".into();
         }
-        if lookup.contains('/') && path_exists(lookup) {
+
+        if (!quoted && self.aliases.contains(word)) || self.functions.contains(word) {
+            return "fg=green".into();
+        }
+
+        if self.in_path(word) {
+            return "fg=green".into();
+        }
+
+        // 実行可能ファイルへのパスか確認 (`~/bin/x` のチルダ展開込み)
+        if word.contains('/') && path_exists(word) {
             return "fg=green,underline".into();
         }
-        return "fg=red,bold".into();
+
+        // 不明なコマンド
+        "fg=red,bold".into()
     }
 
-    // sudo, env, command 等 → 次の単語もコマンドとして扱う
-    if is_prefix_command(word) {
-        return "fg=green,bold".into();
-    }
-
-    if !quoted && RESERVED_SET.contains(word) {
-        return "fg=yellow,bold".into();
-    }
-
-    if BUILTIN_SET.contains(word) {
-        return "fg=green".into();
-    }
-
-    if (!quoted && aliases.contains(word)) || functions.contains(word) {
-        return "fg=green".into();
-    }
-
-    // キャッシュされた $PATH エントリから検索
-    if command_in_path(word, path_cmds) {
-        return "fg=green".into();
-    }
-
-    // 実行可能ファイルへのパスか確認 (`~/bin/x` のチルダ展開込み)
-    if word.contains('/') && path_exists(word) {
-        return "fg=green,underline".into();
-    }
-
-    // 不明なコマンド
-    "fg=red,bold".into()
-}
-
-/// $PATH 内のすべての実行可能ファイル名を HashSet に格納する。
-/// read_dir() 一括走査でコマンドごとの stat() を回避する。
-fn build_path_cache() -> HashSet<OsString> {
-    build_path_cache_from(&env::var("PATH").unwrap_or_default())
-}
-
-fn build_path_cache_from(path_env: &str) -> HashSet<OsString> {
-    let current_dir = env::current_dir().ok();
-    build_path_cache_from_in(path_env, current_dir.as_deref())
-}
-
-fn build_path_cache_from_in(path_env: &str, current_dir: Option<&Path>) -> HashSet<OsString> {
-    let mut cmds = HashSet::new();
-    for dir in path_env.split(':') {
-        // zsh の PATH では空要素がカレントディレクトリを表す。
-        let path = if dir.is_empty() {
-            let Some(current_dir) = current_dir else {
-                continue;
-            };
-            current_dir
-        } else {
-            Path::new(dir)
-        };
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                if is_executable_entry(&entry) {
-                    cmds.insert(entry.file_name());
-                }
-            }
+    /// PATH の外部コマンドか。zsh と同じく、実行できる通常ファイルがある最初のディレクトリで決まる
+    /// (手前の同名ディレクトリ・実行できないファイル・壊れた symlink は飛ばす)。
+    fn in_path(&mut self, cmd: &str) -> bool {
+        if cmd.is_empty() || cmd.contains('/') {
+            return false;
         }
+        if let Some(&found) = self.path_found.get(cmd) {
+            return found;
+        }
+        let found = self
+            .path_dirs
+            .iter()
+            .any(|dir| is_executable_file(&dir.join(cmd)));
+        self.path_found.insert(cmd.to_owned(), found);
+        found
     }
-    cmds
 }
 
-#[cfg(unix)]
-fn is_executable_entry(entry: &std::fs::DirEntry) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    // DirEntry::metadata() は symlink を辿らない (lstat 相当) ため、Homebrew 等の
-    // symlink されたコマンドが全て除外されてしまう。辿る fs::metadata を使う。
-    // dangling symlink は除外のままにする。
-    std::fs::metadata(entry.path())
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+/// $PATH の検索ディレクトリ。空要素は zsh と同じくカレントディレクトリを表す。
+fn path_dirs() -> Vec<PathBuf> {
+    let current_dir = env::current_dir().ok();
+    path_dirs_from_in(
+        &env::var_os("PATH").unwrap_or_default(),
+        current_dir.as_deref(),
+    )
 }
 
-#[cfg(not(unix))]
-fn is_executable_entry(entry: &std::fs::DirEntry) -> bool {
-    entry.path().is_file()
-}
-
-fn command_in_path(cmd: &str, path_cmds: &HashSet<OsString>) -> bool {
-    if cmd.is_empty() || cmd.contains('/') {
-        return false;
-    }
-    path_cmds.contains(OsString::from(cmd).as_os_str())
+fn path_dirs_from_in(path_env: &std::ffi::OsStr, current_dir: Option<&Path>) -> Vec<PathBuf> {
+    env::split_paths(path_env)
+        .filter_map(|dir| {
+            if dir.as_os_str().is_empty() {
+                current_dir.map(Path::to_path_buf)
+            } else {
+                Some(dir)
+            }
+        })
+        .collect()
 }
 
 fn path_exists(path: &str) -> bool {
@@ -690,7 +879,6 @@ pub fn format_spans(spans: &[Span]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
 
     // ---------------------------------------------------------------
     // スパン文字列化のテスト
@@ -732,28 +920,48 @@ mod tests {
     // PATH 内コマンド判定のテスト
     // ---------------------------------------------------------------
 
+    /// テスト補助: 実行可能ファイル `names` を置いた一時ディレクトリを返す
+    #[cfg(unix)]
+    fn dir_with_executables(names: &[&str]) -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        for name in names {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir
+    }
+
+    /// テスト補助: `dirs` を PATH として外部コマンドを探す
+    fn in_path(cmd: &str, dirs: &[PathBuf]) -> bool {
+        Classifier::new(ShellNames::default(), dirs.to_vec()).in_path(cmd)
+    }
+
     #[test]
     fn command_in_path_empty_cmd() {
-        let set = HashSet::new();
-        assert!(!command_in_path("", &set));
+        assert!(!in_path("", &[]));
     }
 
+    #[cfg(unix)]
     #[test]
     fn command_in_path_with_slash() {
-        let set = HashSet::from([OsString::from("foo")]);
-        assert!(!command_in_path("/usr/bin/foo", &set));
+        let dir = dir_with_executables(&["foo"]);
+        assert!(!in_path("/usr/bin/foo", &[dir.path().to_path_buf()]));
     }
 
+    #[cfg(unix)]
     #[test]
     fn command_in_path_found() {
-        let set = HashSet::from([OsString::from("rustc")]);
-        assert!(command_in_path("rustc", &set));
+        let dir = dir_with_executables(&["rustc"]);
+        assert!(in_path("rustc", &[dir.path().to_path_buf()]));
     }
 
+    #[cfg(unix)]
     #[test]
     fn command_in_path_not_found() {
-        let set = HashSet::from([OsString::from("rustc")]);
-        assert!(!command_in_path("nonexistent_xyz", &set));
+        let dir = dir_with_executables(&["rustc"]);
+        assert!(!in_path("nonexistent_xyz", &[dir.path().to_path_buf()]));
     }
 
     #[cfg(unix)]
@@ -761,32 +969,39 @@ mod tests {
     fn build_path_cache_from_実行可能ファイルだけを登録する() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = tempfile::tempdir().unwrap();
-        let executable = dir.path().join("zt-executable");
+        let dir = dir_with_executables(&["zt-executable"]);
         let plain = dir.path().join("zt-plain");
-        std::fs::write(&executable, "").unwrap();
         std::fs::write(&plain, "").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        let set = build_path_cache_from(dir.path().to_str().unwrap());
+        let dirs = path_dirs_from_in(dir.path().as_os_str(), None);
 
-        assert!(set.contains(OsString::from("zt-executable").as_os_str()));
-        assert!(!set.contains(OsString::from("zt-plain").as_os_str()));
+        assert!(in_path("zt-executable", &dirs));
+        assert!(!in_path("zt-plain", &dirs));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_in_path_一覧できないディレクトリでもstatで見つける() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // PATH を一覧せず、分類する名前だけを stat することを確かめる
+        let dir = dir_with_executables(&["zt-hidden"]);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o111)).unwrap();
+        let found = in_path("zt-hidden", &[dir.path().to_path_buf()]);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(found);
     }
 
     #[cfg(unix)]
     #[test]
     fn build_path_cache_from_空のpath要素はカレントディレクトリを探す() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let executable = dir.path().join("zt-local-command");
-        std::fs::write(&executable, "").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        let set = build_path_cache_from_in(":/path/that/does/not/exist", Some(dir.path()));
-        assert!(set.contains(OsString::from("zt-local-command").as_os_str()));
+        let dir = dir_with_executables(&["zt-local-command"]);
+        let dirs = path_dirs_from_in(
+            std::ffi::OsStr::new(":/path/that/does/not/exist"),
+            Some(dir.path()),
+        );
+        assert!(in_path("zt-local-command", &dirs));
     }
 
     // ---------------------------------------------------------------
@@ -795,7 +1010,14 @@ mod tests {
 
     /// テスト補助: トークンテキストとスタイルのペアを収集する。
     fn span_styles(buffer: &str, aliases: &str, functions: &str) -> Vec<(String, String)> {
-        let spans = highlight_buffer(buffer, aliases, functions);
+        let spans = highlight_buffer(
+            buffer,
+            ShellNames {
+                aliases,
+                functions,
+                ..ShellNames::default()
+            },
+        );
         spans
             .iter()
             .map(|s| {
@@ -807,7 +1029,7 @@ mod tests {
 
     #[test]
     fn highlight_empty_buffer() {
-        let spans = highlight_buffer("", "", "");
+        let spans = highlight_buffer("", ShellNames::default());
         assert!(spans.is_empty());
     }
 
@@ -823,7 +1045,13 @@ mod tests {
                     ("--flag".into(), "fg=cyan".into())
                 ]
             );
-            let spans = highlight_buffer(&buffer, "", &command);
+            let spans = highlight_buffer(
+                &buffer,
+                ShellNames {
+                    functions: &command,
+                    ..ShellNames::default()
+                },
+            );
             assert_eq!((spans[0].start, spans[0].end), (0, command.chars().count()));
             assert_eq!(spans[0].style, "fg=green");
         }
@@ -846,17 +1074,25 @@ mod tests {
     fn 語の途中のクォートやエスケープでもエイリアスと予約語を抑止する() {
         for word in ["onl'y'_alias", "only\\_alias", "only\"_\"alias"] {
             let buffer = format!("{word} argument");
-            let spans = highlight_buffer(&buffer, "only_alias", "");
+            let alias = ShellNames {
+                aliases: "only_alias",
+                ..ShellNames::default()
+            };
+            let spans = highlight_buffer(&buffer, alias);
             assert_eq!(spans[0].style, "fg=red,bold", "{word}");
             assert_eq!(spans[0].end, word.chars().count());
             assert!(spans.iter().all(|s| s.end <= word.chars().count()));
+            let alias_and_function = ShellNames {
+                functions: "only_alias",
+                ..alias
+            };
             assert_eq!(
-                highlight_buffer(&buffer, "only_alias", "only_alias")[0].style,
+                highlight_buffer(&buffer, alias_and_function)[0].style,
                 "fg=green"
             );
         }
         for word in ["i'f'", "i\\f", "t\"hen\""] {
-            let spans = highlight_buffer(&format!("{word} echo"), "", "");
+            let spans = highlight_buffer(&format!("{word} echo"), ShellNames::default());
             assert_eq!(spans[0].style, "fg=red,bold", "{word}");
             assert!(spans.iter().all(|s| s.end <= word.chars().count()));
         }
@@ -870,7 +1106,7 @@ mod tests {
     #[test]
     fn 代入名にクォートやエスケープがあればコマンドとして扱う() {
         for word in ["F'O'O=bar", "F\\OO=bar", "FOO\\=bar"] {
-            let spans = highlight_buffer(&format!("{word} echo"), "", "");
+            let spans = highlight_buffer(&format!("{word} echo"), ShellNames::default());
             assert_eq!(spans[0].style, "fg=red,bold", "{word}");
             assert!(spans.iter().all(|s| s.end <= word.chars().count()));
         }
@@ -1370,7 +1606,7 @@ mod tests {
     fn highlight_double_quote_backslash_at_end() {
         // 未閉じダブルクォートの末尾バックスラッシュ: スパンの end がバッファ長を超えないこと
         let buf = r#"echo "hello\"#;
-        let spans = highlight_buffer(buf, "", "");
+        let spans = highlight_buffer(buf, ShellNames::default());
         for s in &spans {
             assert!(
                 s.end <= buf.len(),
@@ -1389,7 +1625,7 @@ mod tests {
     fn highlight_double_quote_double_backslash_at_end() {
         // 末尾 \\ = エスケープされたバックスラッシュ
         let buf = r#"echo "test\\"#;
-        let spans = highlight_buffer(buf, "", "");
+        let spans = highlight_buffer(buf, ShellNames::default());
         for s in &spans {
             assert!(
                 s.end <= buf.len(),
@@ -1414,92 +1650,105 @@ mod tests {
     // コマンド分類: プレフィックスコマンド・各分類の直接テスト
     // ---------------------------------------------------------------
 
+    /// テスト補助: 名前の一覧と PATH を与えて 1 語を分類する
+    fn classify(word: &str, names: ShellNames, path_dirs: &[PathBuf]) -> String {
+        Classifier::new(names, path_dirs.to_vec()).classify(word, false)
+    }
+
     #[test]
     fn classify_sudo_はプレフィックスコマンド() {
-        let path_cmds = HashSet::new();
-        let aliases = HashSet::new();
-        let functions = HashSet::new();
         assert_eq!(
-            classify_command("sudo", false, &aliases, &functions, &path_cmds),
+            classify("sudo", ShellNames::default(), &[]),
             "fg=green,bold"
         );
     }
 
     #[test]
     fn classify_env_はプレフィックスコマンド() {
-        let path_cmds = HashSet::new();
-        let aliases = HashSet::new();
-        let functions = HashSet::new();
-        assert_eq!(
-            classify_command("env", false, &aliases, &functions, &path_cmds),
-            "fg=green,bold"
-        );
+        assert_eq!(classify("env", ShellNames::default(), &[]), "fg=green,bold");
     }
 
     #[test]
     fn classify_組み込みコマンドはgreen() {
-        let path_cmds = HashSet::new();
-        let aliases = HashSet::new();
-        let functions = HashSet::new();
-        assert_eq!(
-            classify_command("echo", false, &aliases, &functions, &path_cmds),
-            "fg=green"
-        );
+        assert_eq!(classify("echo", ShellNames::default(), &[]), "fg=green");
     }
 
     #[test]
     fn classify_予約語はyellow_bold() {
-        let path_cmds = HashSet::new();
-        let aliases = HashSet::new();
-        let functions = HashSet::new();
         assert_eq!(
-            classify_command("while", false, &aliases, &functions, &path_cmds),
+            classify("while", ShellNames::default(), &[]),
             "fg=yellow,bold"
         );
     }
 
     #[test]
     fn classify_エイリアスはgreen() {
-        let path_cmds = HashSet::new();
-        let aliases = HashSet::from(["ll"]);
-        let functions = HashSet::new();
-        assert_eq!(
-            classify_command("ll", false, &aliases, &functions, &path_cmds),
-            "fg=green"
-        );
+        let names = ShellNames {
+            aliases: "ll",
+            ..ShellNames::default()
+        };
+        assert_eq!(classify("ll", names, &[]), "fg=green");
     }
 
     #[test]
     fn classify_関数はgreen() {
-        let path_cmds = HashSet::new();
-        let aliases = HashSet::new();
-        let functions = HashSet::from(["myfunc"]);
-        assert_eq!(
-            classify_command("myfunc", false, &aliases, &functions, &path_cmds),
-            "fg=green"
-        );
+        let names = ShellNames {
+            functions: "myfunc",
+            ..ShellNames::default()
+        };
+        assert_eq!(classify("myfunc", names, &[]), "fg=green");
     }
 
+    #[cfg(unix)]
     #[test]
     fn classify_pathコマンドはgreen() {
-        let path_cmds = HashSet::from([OsString::from("rustc")]);
-        let aliases = HashSet::new();
-        let functions = HashSet::new();
+        let dir = dir_with_executables(&["rustc"]);
         assert_eq!(
-            classify_command("rustc", false, &aliases, &functions, &path_cmds),
+            classify("rustc", ShellNames::default(), &[dir.path().to_path_buf()]),
             "fg=green"
         );
     }
 
     #[test]
     fn classify_不明コマンドはred_bold() {
-        let path_cmds = HashSet::new();
-        let aliases = HashSet::new();
-        let functions = HashSet::new();
         assert_eq!(
-            classify_command("no_such_cmd_xyz", false, &aliases, &functions, &path_cmds),
+            classify("no_such_cmd_xyz", ShellNames::default(), &[]),
             "fg=red,bold"
         );
+    }
+
+    #[test]
+    fn classify_zshから渡された組み込みの一覧を既定の一覧より優先する() {
+        // zsh/datetime などのモジュールの組み込みは、zsh から受け取った一覧で分かる
+        let names = ShellNames {
+            builtins: "strftime\necho",
+            ..ShellNames::default()
+        };
+        assert_eq!(classify("strftime", names, &[]), "fg=green");
+        assert_eq!(classify("\\strftime", names, &[]), "fg=green");
+        // 一覧に無い名前 (disable で無効にした組み込みなど) は組み込みとして扱わない
+        assert_eq!(classify("disown", names, &[]), "fg=red,bold");
+        // 一覧を受け取らなければ既定の一覧を使う
+        assert_eq!(classify("disown", ShellNames::default(), &[]), "fg=green");
+        assert_eq!(
+            classify("strftime", ShellNames::default(), &[]),
+            "fg=red,bold"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_pathの探索結果を名前ごとに覚える() {
+        let dir = dir_with_executables(&["zt-cached"]);
+        let mut classifier = Classifier::new(ShellNames::default(), vec![dir.path().to_path_buf()]);
+        assert!(classifier.in_path("zt-cached"));
+        assert!(!classifier.in_path("zt-missing"));
+        // 覚えた結果を使い、ファイルの増減ではなく最初の判定を返す
+        std::fs::remove_file(dir.path().join("zt-cached")).unwrap();
+        std::fs::write(dir.path().join("zt-missing"), "").unwrap();
+        assert!(classifier.in_path("zt-cached"));
+        assert!(!classifier.in_path("zt-missing"));
+        assert_eq!(classifier.path_found.len(), 2);
     }
 
     // ---------------------------------------------------------------
@@ -1616,7 +1865,7 @@ mod tests {
 
     #[test]
     fn highlight_空白のみのバッファは空() {
-        let spans = highlight_buffer("   ", "", "");
+        let spans = highlight_buffer("   ", ShellNames::default());
         assert!(spans.is_empty());
     }
 
@@ -1724,7 +1973,7 @@ mod tests {
         // 日本語などのマルチバイト文字を含むコマンドラインでクラッシュしない。
         // 引数にUnicodeを含めても通常通りハイライトが返る。
         let buf = "echo こんにちは";
-        let spans = highlight_buffer(buf, "", "");
+        let spans = highlight_buffer(buf, ShellNames::default());
         assert!(
             !spans.is_empty(),
             "マルチバイト文字でハイライトが空になっている"
@@ -1737,7 +1986,7 @@ mod tests {
         // Rust 側で chars() ベースに進めているため、Span::start/end も文字単位でなければならない。
         // ここではマルチバイト文字を含むパイプ演算子の位置が文字数と一致することを確認する。
         let buf = "あい | い";
-        let spans = highlight_buffer(buf, "", "");
+        let spans = highlight_buffer(buf, ShellNames::default());
         let total_chars: usize = buf.chars().count();
         for s in &spans {
             assert!(
@@ -1773,7 +2022,7 @@ mod tests {
         // `[`/`]` を含むバッファで zsh パターンエラーになる回帰の Rust 側カバー。
         // Rust 側は単に Glob としてハイライトされ、スパンの境界が一貫していれば OK。
         let buf = "echo [abc] foo";
-        let spans = highlight_buffer(buf, "", "");
+        let spans = highlight_buffer(buf, ShellNames::default());
         let total_chars: usize = buf.chars().count();
         for s in &spans {
             assert!(s.end <= total_chars);
@@ -1971,7 +2220,7 @@ mod tests {
     #[test]
     fn highlight_ダブルクォート代入値の後もコマンド位置が続く() {
         // `FOO="bar baz" echo hi` — クォート値でコマンド位置を失わないこと
-        let spans = highlight_buffer("FOO=\"bar baz\" echo hi", "", "");
+        let spans = highlight_buffer("FOO=\"bar baz\" echo hi", ShellNames::default());
         let assign = find_span(&spans, 0, 13).expect("代入語スパンが必要");
         assert_eq!(assign.style, "fg=cyan");
         let quote = find_span(&spans, 4, 13).expect("クォートセグメントスパンが必要");
@@ -1982,7 +2231,7 @@ mod tests {
 
     #[test]
     fn highlight_シングルクォート代入値の後もコマンド位置が続く() {
-        let spans = highlight_buffer("FOO='bar baz' true", "", "");
+        let spans = highlight_buffer("FOO='bar baz' true", ShellNames::default());
         let cmd = find_span(&spans, 14, 18).expect("true のスパンが必要");
         assert_eq!(cmd.style, "fg=green");
     }
@@ -1990,7 +2239,7 @@ mod tests {
     #[test]
     fn highlight_クォート結合語はひとつのコマンドとして分類される() {
         // `ec'ho' hi` は zsh では echo として実行される
-        let spans = highlight_buffer("ec'ho' hi", "", "");
+        let spans = highlight_buffer("ec'ho' hi", ShellNames::default());
         let cmd = find_span(&spans, 0, 6).expect("結合語全体のスパンが必要");
         assert_eq!(cmd.style, "fg=green");
         let quote = find_span(&spans, 2, 6).expect("クォートセグメントスパンが必要");
@@ -2000,7 +2249,7 @@ mod tests {
     #[test]
     fn highlight_クォート付きオプションはシアン() {
         // `--file='a b'` は 1 語のオプション
-        let spans = highlight_buffer("true --file='a b'", "", "");
+        let spans = highlight_buffer("true --file='a b'", ShellNames::default());
         let opt = find_span(&spans, 5, 17).expect("オプションスパンが必要");
         assert_eq!(opt.style, "fg=cyan");
         let quote = find_span(&spans, 12, 17).expect("クォートセグメントスパンが必要");
@@ -2013,7 +2262,7 @@ mod tests {
 
     #[test]
     fn highlight_sudoの直後のオプションは未知コマンド扱いしない() {
-        let spans = highlight_buffer("sudo -u root ls", "", "");
+        let spans = highlight_buffer("sudo -u root ls", ShellNames::default());
         let sudo = find_span(&spans, 0, 4).expect("sudo のスパンが必要");
         assert_eq!(sudo.style, "fg=green,bold");
         let opt = find_span(&spans, 5, 7).expect("-u のスパンが必要");
@@ -2028,7 +2277,7 @@ mod tests {
     fn highlight_セミコロン直後のハイフン語は引き続き未知コマンド扱い() {
         // オプション救済はプレフィックスコマンド直後に限定する
         // (`-foo` 単体はコマンドとして実行されず command not found になるため)
-        let spans = highlight_buffer("true; -foo", "", "");
+        let spans = highlight_buffer("true; -foo", ShellNames::default());
         let word = find_span(&spans, 6, 10).expect("-foo のスパンが必要");
         assert_eq!(word.style, "fg=red,bold");
     }
@@ -2039,7 +2288,7 @@ mod tests {
 
     #[test]
     fn highlight_if_then内のコマンドがハイライトされる() {
-        let spans = highlight_buffer("if true; then echo hi; fi", "", "");
+        let spans = highlight_buffer("if true; then echo hi; fi", ShellNames::default());
         assert_eq!(find_span(&spans, 0, 2).unwrap().style, "fg=yellow,bold"); // if
         assert_eq!(find_span(&spans, 3, 7).unwrap().style, "fg=green"); // true
         assert_eq!(find_span(&spans, 9, 13).unwrap().style, "fg=yellow,bold"); // then
@@ -2049,14 +2298,14 @@ mod tests {
 
     #[test]
     fn highlight_time_の後続はコマンド位置() {
-        let spans = highlight_buffer("time true", "", "");
+        let spans = highlight_buffer("time true", ShellNames::default());
         assert_eq!(find_span(&spans, 0, 4).unwrap().style, "fg=yellow,bold");
         assert_eq!(find_span(&spans, 5, 9).unwrap().style, "fg=green");
     }
 
     #[test]
     fn highlight_while_の後続はコマンド位置() {
-        let spans = highlight_buffer("while true; do echo x; done", "", "");
+        let spans = highlight_buffer("while true; do echo x; done", ShellNames::default());
         assert_eq!(find_span(&spans, 6, 10).unwrap().style, "fg=green"); // true
         assert_eq!(find_span(&spans, 15, 19).unwrap().style, "fg=green"); // echo
     }
@@ -2067,27 +2316,27 @@ mod tests {
 
     #[test]
     fn highlight_コロンとドットは組み込み() {
-        let spans = highlight_buffer(": true", "", "");
+        let spans = highlight_buffer(": true", ShellNames::default());
         assert_eq!(find_span(&spans, 0, 1).unwrap().style, "fg=green");
-        let spans = highlight_buffer(". ./script", "", "");
+        let spans = highlight_buffer(". ./script", ShellNames::default());
         assert_eq!(find_span(&spans, 0, 1).unwrap().style, "fg=green");
     }
 
     #[test]
     fn highlight_二重ブラケットと単一ブラケットは正当な構文() {
-        let spans = highlight_buffer("[[ -f x ]]", "", "");
+        let spans = highlight_buffer("[[ -f x ]]", ShellNames::default());
         assert_eq!(find_span(&spans, 0, 2).unwrap().style, "fg=yellow,bold");
-        let spans = highlight_buffer("[ -f x ]", "", "");
+        let spans = highlight_buffer("[ -f x ]", ShellNames::default());
         assert_eq!(find_span(&spans, 0, 1).unwrap().style, "fg=green");
     }
 
     #[test]
     fn highlight_ブレースと否定は予約語() {
-        let spans = highlight_buffer("{ echo hi; }", "", "");
+        let spans = highlight_buffer("{ echo hi; }", ShellNames::default());
         assert_eq!(find_span(&spans, 0, 1).unwrap().style, "fg=yellow,bold"); // {
         assert_eq!(find_span(&spans, 2, 6).unwrap().style, "fg=green"); // echo (位置維持)
         assert_eq!(find_span(&spans, 11, 12).unwrap().style, "fg=yellow,bold"); // }
-        let spans = highlight_buffer("! true", "", "");
+        let spans = highlight_buffer("! true", ShellNames::default());
         assert_eq!(find_span(&spans, 0, 1).unwrap().style, "fg=yellow,bold"); // !
         assert_eq!(find_span(&spans, 2, 6).unwrap().style, "fg=green"); // true (位置維持)
     }
@@ -2099,7 +2348,7 @@ mod tests {
     #[test]
     fn highlight_チルダ始まりの実在パスは実行可能パス扱い() {
         // `~/` はホームディレクトリとして必ず実在する
-        let spans = highlight_buffer("~/ x", "", "");
+        let spans = highlight_buffer("~/ x", ShellNames::default());
         let cmd = find_span(&spans, 0, 2).expect("チルダパスのスパンが必要");
         assert_eq!(cmd.style, "fg=green,underline");
     }
@@ -2107,7 +2356,7 @@ mod tests {
     #[test]
     fn highlight_clobberリダイレクトの後続をコマンド扱いしない() {
         // `>|` の `|` はパイプではなく CLOBBER 演算子の一部
-        let spans = highlight_buffer("echo hi >| out", "", "");
+        let spans = highlight_buffer("echo hi >| out", ShellNames::default());
         let op = find_span(&spans, 8, 10).expect(">| は 1 トークン");
         assert_eq!(op.style, "fg=magenta");
         assert!(
@@ -2118,36 +2367,89 @@ mod tests {
 
     #[test]
     fn highlight_append_clobberも1トークン() {
-        let spans = highlight_buffer("true >>| f", "", "");
+        let spans = highlight_buffer("true >>| f", ShellNames::default());
         let op = find_span(&spans, 5, 8).expect(">>| は 1 トークン");
         assert_eq!(op.style, "fg=magenta");
     }
 
     #[test]
     fn highlight_fd付きclobberも1トークン() {
-        let spans = highlight_buffer("true 2>| f", "", "");
+        let spans = highlight_buffer("true 2>| f", ShellNames::default());
         let op = find_span(&spans, 5, 8).expect("2>| は 1 トークン");
         assert_eq!(op.style, "fg=magenta");
     }
 
     #[test]
+    fn リダイレクト直前の数字は1桁だけを記述子として読む() {
+        let names = ShellNames {
+            functions: "12",
+            ..ShellNames::default()
+        };
+        for operator in [">", ">>", "<", ">&", "<&"] {
+            let buffer = format!("12{operator}file");
+            let spans = highlight_buffer(&buffer, names);
+            assert_eq!(
+                find_span(&spans, 0, 2).unwrap().style,
+                "fg=green",
+                "{buffer}"
+            );
+            assert_eq!(
+                find_span(&spans, 2, 2 + operator.len()).unwrap().style,
+                "fg=magenta",
+                "{buffer}"
+            );
+            let buffer = format!("2{operator}file");
+            let spans = highlight_buffer(&buffer, names);
+            assert_eq!(
+                find_span(&spans, 0, 1 + operator.len()).unwrap().style,
+                "fg=magenta",
+                "{buffer}"
+            );
+        }
+    }
+
+    #[test]
+    fn 数値globは語の一部として読みリダイレクトに分けない() {
+        for pattern in ["<1-10>", "<->", "<-9>", "<1->"] {
+            for word in [
+                pattern.to_owned(),
+                format!("file{pattern}.txt"),
+                format!("1{pattern}"),
+            ] {
+                let buffer = format!("echo {word} plain");
+                let spans = highlight_buffer(&buffer, ShellNames::default());
+                assert_eq!(
+                    find_span(&spans, 5, 5 + word.len()).unwrap().style,
+                    "fg=blue,bold",
+                    "{buffer}"
+                );
+                assert!(spans.iter().all(|span| span.style != "fg=magenta"));
+            }
+        }
+        for buffer in ["echo '<1-10>'", "echo \\<1-10\\>"] {
+            let spans = highlight_buffer(buffer, ShellNames::default());
+            assert!(spans.iter().all(|span| span.style != "fg=blue,bold"));
+        }
+    }
+
+    #[test]
     fn highlight_バックスラッシュ付きコマンドはエイリアスバイパス() {
         // `\echo` は zsh でエイリアス展開を抑止して echo を実行する常用イディオム
-        let spans = highlight_buffer("\\echo hi", "", "");
+        let spans = highlight_buffer("\\echo hi", ShellNames::default());
         let cmd = find_span(&spans, 0, 5).expect("\\echo のスパンが必要");
         assert_eq!(cmd.style, "fg=green");
     }
 
     #[test]
     fn highlight_バックスラッシュ付き未知コマンドは赤() {
-        let spans = highlight_buffer("\\zt_no_such_cmd_x", "", "");
+        let spans = highlight_buffer("\\zt_no_such_cmd_x", ShellNames::default());
         assert_eq!(spans[0].style, "fg=red,bold");
     }
 
     #[test]
     fn highlight_バックスラッシュ付き予約語は予約語として扱わない() {
         // `\if` は予約語解釈が無効化されるため通常のコマンド検索になる
-        let spans = highlight_buffer("\\if x", "", "");
+        let spans = highlight_buffer("\\if x", ShellNames::default());
         let cmd = find_span(&spans, 0, 3).expect("\\if のスパンが必要");
         assert_ne!(cmd.style, "fg=yellow,bold");
     }
@@ -2168,18 +2470,18 @@ mod tests {
         )
         .unwrap();
 
-        let set = build_path_cache_from(dir.path().to_str().unwrap());
+        let dirs = path_dirs_from_in(dir.path().as_os_str(), None);
 
         assert!(
-            set.contains(OsString::from("zt-real").as_os_str()),
+            in_path("zt-real", &dirs),
             "実体の実行ファイルが登録されるべき"
         );
         assert!(
-            set.contains(OsString::from("zt-link").as_os_str()),
+            in_path("zt-link", &dirs),
             "symlink された実行ファイル (Homebrew 形式) が登録されるべき"
         );
         assert!(
-            !set.contains(OsString::from("zt-dangling").as_os_str()),
+            !in_path("zt-dangling", &dirs),
             "壊れた symlink は登録しない"
         );
     }
@@ -2195,7 +2497,7 @@ mod tests {
             "diff <(ls) <(ls -a)",
             "cat << EOF\nhello world\nEOF",
         ] {
-            let spans = highlight_buffer(buf, "", "");
+            let spans = highlight_buffer(buf, ShellNames::default());
             let total = buf.chars().count();
             for s in &spans {
                 assert!(
@@ -2204,5 +2506,146 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// 括弧・行継続・リダイレクト・代入など、zsh の構文に沿った分類のテスト
+#[cfg(test)]
+mod syntax_tests {
+    use super::*;
+
+    fn pairs(buffer: &str) -> Vec<(String, String)> {
+        highlight_buffer(buffer, ShellNames::default())
+            .iter()
+            .map(|s| {
+                let text: String = buffer.chars().skip(s.start).take(s.end - s.start).collect();
+                (text, s.style.clone())
+            })
+            .collect()
+    }
+
+    fn assert_no_red(buffer: &str) {
+        let p = pairs(buffer);
+        assert!(
+            !p.iter().any(|(_, s)| s == "fg=red,bold"),
+            "{buffer:?} に赤スパンがある: {p:?}"
+        );
+    }
+
+    fn style_of(buffer: &str, text: &str) -> Option<String> {
+        pairs(buffer)
+            .into_iter()
+            .find(|(t, _)| t == text)
+            .map(|(_, s)| s)
+    }
+
+    #[test]
+    fn 行継続の後もコマンド位置を保つ() {
+        for buffer in [
+            "true && \\\n  echo hi",
+            "FOO=1 \\\n  echo hi",
+            "sudo \\\n  echo hi",
+            "true | \\\n  echo hi",
+        ] {
+            assert_no_red(buffer);
+            assert_eq!(
+                style_of(buffer, "echo").as_deref(),
+                Some("fg=green"),
+                "{buffer:?}"
+            );
+        }
+        // 語中の行継続は語を連結する (`ec\<改行>ho` は echo)
+        assert_eq!(pairs("ec\\\nho hi")[0].1, "fg=green");
+    }
+
+    #[test]
+    fn 配列代入の要素をコマンドとして分類しない() {
+        assert_eq!(
+            pairs("arr=(one two three)"),
+            [("arr=(one two three)".to_string(), "fg=cyan".to_string())]
+        );
+        assert_no_red("files=( a.txt 'b c.txt' )");
+        assert_eq!(
+            style_of("arr=(a b) echo hi", "echo").as_deref(),
+            Some("fg=green")
+        );
+    }
+
+    #[test]
+    fn 追記代入と添字付き代入は代入語() {
+        for word in ["PATH+=:/opt/bin", "arr[2]=x", "arr+=(c)", "h[key]+=v"] {
+            assert_eq!(style_of(word, word).as_deref(), Some("fg=cyan"), "{word}");
+        }
+        assert_eq!(
+            style_of("N+=1 echo hi", "echo").as_deref(),
+            Some("fg=green")
+        );
+    }
+
+    #[test]
+    fn 標準出力とエラーをまとめるリダイレクトは1トークン() {
+        for op in [
+            ">>&", "&>|", "&>!", "&>>|", "&>>!", ">>&|", ">>&!", ">&!", "2>>&",
+        ] {
+            let buffer = format!("true {op} out.log");
+            assert_eq!(
+                style_of(&buffer, op).as_deref(),
+                Some("fg=magenta"),
+                "{buffer}"
+            );
+            assert_no_red(&buffer);
+        }
+    }
+
+    #[test]
+    fn サブシェル_算術_関数定義を赤にしない() {
+        let buffer = "(cd /tmp && echo ok)";
+        assert_no_red(buffer);
+        assert_eq!(style_of(buffer, "cd").as_deref(), Some("fg=green"));
+        assert_eq!(style_of(buffer, "echo").as_deref(), Some("fg=green"));
+        assert_no_red("(( n = 1 + 2 ))");
+        assert_no_red("greet() { echo hi; }");
+        assert_eq!(
+            style_of("(( n > 1 )) && echo hi", "echo").as_deref(),
+            Some("fg=green")
+        );
+        // 引数中のグロブの選択肢 `(a|b)` の `|` はパイプではない
+        assert_eq!(
+            pairs("echo (foo|bar).txt"),
+            [("echo".to_string(), "fg=green".to_string())]
+        );
+        assert_no_red("[[ $x == (a|b) ]] && echo ok");
+        assert_no_red("echo $(ls|wc -l)");
+    }
+
+    #[test]
+    fn 二重ブラケット内の論理演算子はコマンド区切りではない() {
+        for buffer in [
+            "[[ -f a && -r a ]] && echo ok",
+            "[[ -n $a || -z b ]]; echo ok",
+        ] {
+            assert_no_red(buffer);
+            assert_eq!(
+                style_of(buffer, "echo").as_deref(),
+                Some("fg=green"),
+                "{buffer}"
+            );
+        }
+    }
+
+    #[test]
+    fn zshの組み込みコマンドを赤にしない() {
+        for name in ["disown", "r", "bye", "disable", "sched", "pushln"] {
+            assert_eq!(pairs(name)[0].1, "fg=green", "{name}");
+        }
+    }
+
+    #[test]
+    fn 履歴展開をコマンド名として赤にしない() {
+        for buffer in ["sudo !!", "!!", "!vim file", "!-2"] {
+            assert_no_red(buffer);
+        }
+        // `!` 単独は予約語のまま
+        assert_eq!(pairs("! true")[0].1, "fg=yellow,bold");
     }
 }

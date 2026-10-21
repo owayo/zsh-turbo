@@ -1,6 +1,7 @@
 //! 入力中のパス引数に対するディレクトリ内の候補を返す。
 
-use crate::shell_words::is_blank;
+use crate::executable::is_executable_file;
+use crate::shell_words::{is_blank, numeric_glob_len};
 use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fs;
@@ -164,7 +165,7 @@ impl Request {
         let started = Instant::now();
         let entries = fs::read_dir(&self.dir).ok()?;
         let base = nfc(&self.base);
-        let folded_base = base.to_lowercase();
+        let folded_base = fold(&base);
         let mut found = Vec::new();
         let mut complete = true;
         for (index, entry) in entries.enumerate() {
@@ -187,7 +188,7 @@ impl Request {
             }
             // macOS のファイル名は NFD が多く、IME の入力は NFC のため正規化して照合する
             let normalized = nfc(&name);
-            let folded = normalized.to_lowercase();
+            let folded = fold(&normalized);
             if !folded.starts_with(&folded_base) {
                 continue;
             }
@@ -196,7 +197,7 @@ impl Request {
             // ディスク上の表記 (NFD など) へ直す候補は残す
             if !directory
                 && ((!self.include_exact && self.adds_only_space(&name))
-                    || (self.executables && !is_executable(&entry.path())))
+                    || (self.executables && !is_executable_file(&entry.path())))
             {
                 continue;
             }
@@ -330,7 +331,21 @@ impl Word {
             .collect()
     }
 
-    /// クォート外の `NAME=` で始まる代入語か
+    /// クォート・エスケープの無い 1 桁の数字だけの語か
+    fn is_fd_number(&self) -> bool {
+        !self.unsupported
+            && matches!(
+                self.pieces[..],
+                [Piece::Lit { ch, quote: Quote::None, escaped: false, .. }] if ch.is_ascii_digit()
+            )
+    }
+
+    /// `NAME=` `NAME+=` だけの語か (直後の `(` で配列の代入が始まる)
+    fn opens_array(&self) -> bool {
+        self.is_assignment() && self.pieces.last().is_some_and(|piece| piece.is_bare('='))
+    }
+
+    /// クォート外の `NAME=` `NAME+=` で始まる代入語か
     fn is_assignment(&self) -> bool {
         let mut name = String::new();
         for piece in &self.pieces {
@@ -340,7 +355,7 @@ impl Word {
                     quote: Quote::None,
                     escaped: false,
                     ..
-                } => return is_name(&name),
+                } => return is_name(name.strip_suffix('+').unwrap_or(&name)),
                 Piece::Lit {
                     ch,
                     quote: Quote::None,
@@ -393,6 +408,8 @@ struct Position {
     after_prefix: bool,
     /// リダイレクト先の語を読み終えたら戻す状態
     redirect: Option<(bool, bool)>,
+    /// `NAME=(` の配列の中。閉じ括弧の後に戻すコマンド位置
+    array: Option<bool>,
 }
 
 impl Position {
@@ -451,6 +468,7 @@ fn last_word(buffer: &str) -> Option<(Word, bool)> {
         command: true,
         after_prefix: false,
         redirect: None,
+        array: None,
     };
     let mut word: Option<Word> = None;
     let mut quote = Quote::None;
@@ -491,11 +509,31 @@ fn last_word(buffer: &str) -> Option<(Word, bool)> {
                 }
             }
             Quote::None => match c {
+                // `<1-10>` `<->` は zsh の数値 glob で、リダイレクトではなく語の一部
+                '<' if numeric_glob_end(&text, i).is_some() => {
+                    word.get_or_insert_default().unsupported = true;
+                    i = numeric_glob_end(&text, i).unwrap_or(i + 1);
+                }
                 _ if is_blank(c) || is_operator(c) => {
+                    let mut array = false;
                     if let Some(done) = word.take() {
-                        position.end_word(&done);
+                        array = c == '(' && done.opens_array();
+                        // `2>log` の `2` のように `<` `>` に直結した 1 桁の数字は fd の番号で、語ではない
+                        if !(matches!(c, '<' | '>') && done.is_fd_number()) {
+                            position.end_word(&done);
+                        }
                     }
                     i = if is_blank(c) {
+                        i + 1
+                    } else if array {
+                        // `NAME=(` は配列の代入で、括弧の中の語はコマンドではない
+                        position.array = Some(position.command);
+                        position.command = false;
+                        i + 1
+                    } else if c == ')'
+                        && let Some(command) = position.array.take()
+                    {
+                        position.command = command;
                         i + 1
                     } else {
                         position.operator(&text, i)
@@ -591,6 +629,11 @@ fn read_dollar(text: &Text, i: usize, quote: Quote, word: &mut Word) -> Option<u
     }
 }
 
+/// `i` 文字目の `<` から zsh の数値 glob (`<N-M>`、N と M は省略可) が始まるなら、`>` の次の位置を返す
+fn numeric_glob_end(text: &Text, i: usize) -> Option<usize> {
+    numeric_glob_len(text.chars.get(i..)?.iter().map(|&(_, c)| c)).map(|len| i + len)
+}
+
 /// `$(` の中身を読み飛ばし、対応する `)` の次の位置を返す。閉じていなければ None。
 fn skip_substitution(text: &Text, mut i: usize) -> Option<usize> {
     let mut depth = 1;
@@ -682,6 +725,7 @@ fn is_prefix_word(word: &str) -> bool {
             | "nocorrect"
             | "time"
             | "nohup"
+            | "coproc"
             | "if"
             | "then"
             | "else"
@@ -742,6 +786,15 @@ fn push_escaped(out: &mut String, name: &str, quote: Quote) {
     }
 }
 
+/// 大文字小文字を無視した照合用の表記。`str::to_lowercase` は語末の Σ だけを ς にするため、
+/// 途中まで打った入力とファイル名で σ と ς が食い違う。文字ごとに小文字にして ς も σ にそろえる
+fn fold(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == 'ς' { 'σ' } else { c })
+        .collect()
+}
+
 fn nfc(text: &str) -> String {
     if text.is_ascii() {
         text.to_owned()
@@ -756,19 +809,6 @@ fn is_directory(entry: &fs::DirEntry) -> bool {
         Ok(kind) if !kind.is_symlink() => kind.is_dir(),
         _ => fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir()),
     }
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
 }
 
 #[cfg(test)]
@@ -1382,6 +1422,94 @@ mod tests {
                 complete: true,
             })
         );
+    }
+
+    #[test]
+    fn ギリシャ文字のシグマも大文字小文字を無視して前方一致する() {
+        let tmp = tempfile::tempdir().unwrap();
+        touch(&tmp.path().join("ΟΔΟΣ.txt"));
+        for input in [
+            "ls ./ΟΔΟ",
+            "ls ./ΟΔΟΣ",
+            "ls ./ΟΔΟΣ.",
+            "ls ./οδος",
+            "ls ./οδοσ",
+        ] {
+            assert_eq!(
+                labels(&list_in(tmp.path(), input).unwrap()),
+                ["ΟΔΟΣ.txt"],
+                "{input}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn コマンド候補の実行権限をシェルと同じユーザーで判定する() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("run.sh");
+        touch(&file);
+        for mode in [0o011, 0o700, 0o600] {
+            fs::set_permissions(&file, fs::Permissions::from_mode(mode)).unwrap();
+            // 特権ユーザーでの実行にも対応するため、固定の期待値ではなくシェルの -x と比較する。
+            let executable = std::process::Command::new("/bin/sh")
+                .args(["-c", "test -x \"$1\"", "check"])
+                .arg(&file)
+                .status()
+                .unwrap()
+                .success();
+            let listing = list_in(tmp.path(), "./").unwrap();
+            assert_eq!(
+                listing.candidates.len(),
+                usize::from(executable),
+                "{mode:o}"
+            );
+            assert_eq!(labels(&list_in(tmp.path(), "cat ./").unwrap()), ["run.sh"]);
+        }
+    }
+
+    #[test]
+    fn 数値globはリダイレクトとして読まない() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("ng/1")).unwrap();
+        for input in ["ls ng/<1-2>/", "ls ng/<->/", "ls ng/<-9>/a", "ls ng/x<1->/"] {
+            assert_eq!(list_in(tmp.path(), input), None, "{input}");
+        }
+        // `<` の後ろが数値 glob の形でなければ従来どおりリダイレクト
+        assert_eq!(labels(&list_in(tmp.path(), "cat <ng/").unwrap()), ["1/"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn 演算子に直結した1桁の数字はfd番号として読む() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join("bin")).unwrap();
+        executable(&root.join("run.sh"));
+        touch(&root.join("data.txt"));
+        for head in [
+            "2>log ",
+            "2>/dev/null ",
+            "echo a; 2>err ",
+            "1>&2 ",
+            "coproc ",
+            "X+=1 ",
+            "arr=(x) ",
+        ] {
+            assert_eq!(
+                buffers(&list_in(root, &format!("{head}./")).unwrap()),
+                [format!("{head}./bin/"), format!("{head}./run.sh ")],
+                "{head}"
+            );
+        }
+        // 2 桁や空白を挟んだ数字は語 (コマンド名・引数)。配列の代入の中はコマンド位置ではない
+        for head in ["echo 2>log ", "12>log ", "arr=(", "arr+=(", "arr=(a "] {
+            assert_eq!(
+                buffers(&list_in(root, &format!("{head}./")).unwrap()).len(),
+                3,
+                "{head}"
+            );
+        }
     }
 
     #[test]

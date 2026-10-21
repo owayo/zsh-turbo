@@ -21,9 +21,11 @@ function _zsh_turbo_project_completion() {
             ;;
     esac
     if [[ -n "$query" ]]; then
+        # 候補の最大数は入力中の一覧の行数なので Tab では使わず、一覧の上限まで受け取る。
+        # 入力済みの名前と完全に一致するタスクも候補に含め、`fmt` が `fmt-check` に化けないようにする
         while IFS= read -r full; do
             [[ -n "$full" ]] && names+=("${full##* }")
-        done < <("$ZSH_TURBO_CMD" complete --project-only -- "$query" 2>/dev/null)
+        done < <("$ZSH_TURBO_CMD" complete --project-only --include-exact --max 256 -- "$query" 2>/dev/null)
         if (( ${#names} )); then
             compadd -Q -a names && return 0
         fi

@@ -120,6 +120,9 @@ enum Commands {
         /// カレントディレクトリのタスク候補だけを返す
         #[arg(long)]
         project_only: bool,
+        /// 入力済みの名前と完全に一致するタスクも返す (Tab 補完用)
+        #[arg(long, hide = true, requires = "project_only")]
+        include_exact: bool,
     },
     /// 実行した行を標準入力から受け取り、ディレクトリごとの履歴とタスクの利用を記録する
     #[command(hide = true)]
@@ -148,6 +151,9 @@ enum Commands {
         /// zsh から渡す改行区切りの関数一覧
         #[arg(long, default_value = "", allow_hyphen_values = true)]
         functions: String,
+        /// zsh から渡す改行区切りの組み込みコマンド一覧（空なら既定の一覧を使う）
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
+        builtins: String,
     },
 }
 
@@ -344,11 +350,16 @@ fn main() {
             strategy,
             max,
             project_only,
+            include_exact,
         } => {
             let history_file = resolve_history_file(history_file, directory_history);
             let max = max.unwrap_or_else(|| config::load_config().suggest.max_suggestions);
             let completions = if project_only {
-                project_tasks::candidates(&prefix, max)
+                project_tasks::task_list(&prefix, max, include_exact)
+                    .items
+                    .into_iter()
+                    .map(|(_, command)| command)
+                    .collect()
             } else if let Some(strategy) = strategy {
                 suggest::get_completions_with_strategy(
                     &prefix,
@@ -408,8 +419,16 @@ fn main() {
             buffer,
             aliases,
             functions,
+            builtins,
         } => {
-            let spans = highlight::highlight_buffer(&buffer, &aliases, &functions);
+            let spans = highlight::highlight_buffer(
+                &buffer,
+                highlight::ShellNames {
+                    aliases: &aliases,
+                    functions: &functions,
+                    builtins: &builtins,
+                },
+            );
             print!("{}", highlight::format_spans(&spans));
         }
     }

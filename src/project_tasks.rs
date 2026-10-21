@@ -153,10 +153,14 @@ pub fn invocation(line: &str) -> Option<(&str, &str)> {
 /// make の `-C dir`・`-f file` など、読む Makefile を変えるオプション
 fn changes_makefile(option: &str) -> bool {
     match option.strip_prefix("--") {
-        Some(long) => matches!(
-            long.split('=').next(),
-            Some("directory" | "file" | "makefile")
-        ),
+        // GNU make は長いオプションを一意な省略形でも受け付ける (`--dir=sub` は `--directory=sub`)
+        Some(long) => {
+            let name = long.split('=').next().unwrap_or("");
+            !name.is_empty()
+                && ["directory", "file", "makefile"]
+                    .iter()
+                    .any(|full| full.starts_with(name))
+        }
         None => option[1..].contains(['C', 'f']),
     }
 }
@@ -227,14 +231,56 @@ fn matching(
 }
 
 fn read_small(path: &Path) -> Option<String> {
-    crate::small_file::read_to_string(path, crate::small_file::PROJECT_FILE_LIMIT)
+    let text = crate::small_file::read_to_string(path, crate::small_file::PROJECT_FILE_LIMIT)?;
+    // Windows のエディタが付ける BOM は npm なども読み飛ばす
+    Some(match text.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_owned(),
+        None => text,
+    })
 }
 
 fn safe_name(name: &str) -> bool {
+    // `-` 始まりはタスク名の位置でもオプションとして解釈される (`make -t` は touch モード)
     !name.is_empty()
+        && !name.starts_with('-')
         && name
             .chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | '+' | '/'))
+}
+
+/// `[`・`{` がこれより多い文書は解析しない。json5 は入れ子の深さに上限がなくスタックを使い切って
+/// 異常終了し、YAML のフロー記法は入れ子が深いほど解析が二乗で遅くなる。文字列の中の括弧も数え、
+/// 閉じ括弧を文字列に隠して入れ子を浅く見せる文書でも上限を超えないようにする
+const MAX_OPENING_BRACKETS: usize = 4096;
+
+fn few_brackets(text: &str) -> bool {
+    text.bytes().filter(|b| matches!(b, b'[' | b'{')).count() <= MAX_OPENING_BRACKETS
+}
+
+/// バックスラッシュと改行で続く物理行を、GNU make と同じく 1 つの論理行にまとめる
+fn make_logical_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        let continued = line.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1;
+        let body = if continued {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        match current.as_mut() {
+            Some(logical) => {
+                logical.push(' ');
+                logical.push_str(body.trim_start());
+            }
+            None => current = Some(body.to_owned()),
+        }
+        if !continued {
+            lines.extend(current.take());
+        }
+    }
+    lines.extend(current);
+    lines
 }
 
 fn make_targets(cwd: &Path) -> Vec<String> {
@@ -247,7 +293,8 @@ fn make_targets(cwd: &Path) -> Vec<String> {
     let mut targets = Vec::new();
     // 複数行の変数定義 (`define NAME` … `endef`) の入れ子の深さ。本文はルールではない
     let mut define_depth = 0usize;
-    for line in text.lines() {
+    for line in make_logical_lines(&text) {
+        let line = line.as_str();
         if line.starts_with('\t') {
             continue;
         }
@@ -336,15 +383,14 @@ fn uv_scripts(cwd: &Path) -> Vec<String> {
 
 fn deno_tasks(cwd: &Path) -> Vec<String> {
     let mut names = package_scripts(cwd, false);
-    if let Some((file, text)) = ["deno.json", "deno.jsonc"]
+    if let Some(text) = ["deno.json", "deno.jsonc"]
         .into_iter()
-        .find_map(|file| read_small(&cwd.join(file)).map(|text| (file, text)))
+        .find_map(|file| read_small(&cwd.join(file)))
     {
-        let document = if file == "deno.jsonc" {
-            json5::from_str::<serde_json::Value>(&text).ok()
-        } else {
-            serde_json::from_str::<serde_json::Value>(&text).ok()
-        };
+        // Deno は deno.json もコメントと末尾のカンマを許す JSONC として読む
+        let document = few_brackets(&text)
+            .then(|| json5::from_str::<serde_json::Value>(&text).ok())
+            .flatten();
         if let Some(tasks) = document
             .as_ref()
             .and_then(|document| document.get("tasks"))
@@ -353,7 +399,10 @@ fn deno_tasks(cwd: &Path) -> Vec<String> {
             names.extend(
                 tasks
                     .iter()
-                    .filter(|(name, value)| safe_name(name) && value.is_string())
+                    // Deno 2.1 以降は `{"command": ..., "dependencies": [...]}` の形でも書ける
+                    .filter(|(name, value)| {
+                        safe_name(name) && (value.is_string() || value.is_object())
+                    })
                     .map(|(name, _)| name.clone()),
             );
         }
@@ -403,6 +452,16 @@ fn collect_mise_file_tasks(dir: &Path, prefix: &str, depth: usize, names: &mut V
         }
         let Ok(kind) = entry.file_type() else {
             continue;
+        };
+        // mise はファイルタスクの拡張子を除いた名前で呼ぶ (`build.sh` は `mise run build`)
+        let name = if kind.is_file() {
+            Path::new(&name)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or(&name)
+                .to_owned()
+        } else {
+            name
         };
         let task_name = if prefix.is_empty() {
             name.clone()
@@ -486,6 +545,9 @@ fn taskfile_tasks(cwd: &Path) -> Vec<String> {
     .find_map(|file| read_small(&cwd.join(file))) else {
         return Vec::new();
     };
+    if !few_brackets(&text) {
+        return Vec::new();
+    }
     let Ok(document) = serde_yaml_ng::from_str::<serde_json::Value>(&text) else {
         return Vec::new();
     };
@@ -731,6 +793,9 @@ mod tests {
             "make --directory=sub install",
             "make -f other.mk install",
             "make --makefile other.mk install",
+            "make --dir=sub install",
+            "make --fi=other.mk install",
+            "make --makef other.mk install",
             "make $TARGET",
             "make 'install'",
             "make install && make test",
@@ -841,5 +906,89 @@ mod tests {
         assert!(!defines("just", "build", tmp.path()));
         assert_eq!(command_of("make"), "make");
         assert_eq!(command_of("npm run de"), "npm");
+    }
+
+    #[test]
+    fn makefileのバックスラッシュで続く行はルールとして読まない() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Makefile"),
+            "PYTHON_IMAGE := \\\n  python:3.12-slim\n\nbuild:\n\tdocker build \\\n        --pull \\\n        -t app:latest .\n# note \\\nphantom: x\ntest:\n\tcargo test\nall \\\nrelease: deps\n",
+        )
+        .unwrap();
+        assert_eq!(
+            make_targets(tmp.path()),
+            ["all", "build", "release", "test"]
+        );
+        // `-` 始まりの名前は make のオプションになるため、どの定義ファイルからも出さない
+        assert!(!safe_name("-t"));
+        assert!(safe_name("fmt-check"));
+    }
+
+    #[test]
+    fn denoのオブジェクト形式のタスクも読む() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("deno.json"),
+            "{\n  // deno.json もコメントと末尾のカンマを書ける\n  \"tasks\": {\"build\": \"echo\", \"serve\": {\"command\": \"echo\", \"dependencies\": [\"build\"]}, \"dev\": {\"dependencies\": [\"serve\"]},},\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            candidates_in("deno task ", tmp.path(), 10),
+            ["deno task build", "deno task dev", "deno task serve"]
+        );
+        assert!(defines("deno", "serve", tmp.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn miseのファイルタスクは拡張子を除いた名前で出す() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("mise-tasks/test")).unwrap();
+        for file in ["mise-tasks/build.sh", "mise-tasks/test/unit.sh"] {
+            let path = tmp.path().join(file);
+            std::fs::write(&path, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            candidates_in("mise run ", tmp.path(), 10),
+            ["mise run build", "mise run test:unit"]
+        );
+        assert!(defines("mise", "build", tmp.path()));
+    }
+
+    #[test]
+    fn bom付きのpackage_jsonのスクリプトも読む() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            "\u{feff}{\"scripts\":{\"build\":\"vite build\"}}",
+        )
+        .unwrap();
+        assert_eq!(candidates_in("npm run ", tmp.path(), 10), ["npm run build"]);
+    }
+
+    #[test]
+    fn 括弧の入れ子が深い定義ファイルは解析せずにすぐ返す() {
+        let tmp = tempfile::tempdir().unwrap();
+        let depth = 100_000;
+        std::fs::write(
+            tmp.path().join("deno.jsonc"),
+            format!("{{\"tasks\": {}{}}}", "[".repeat(depth), "]".repeat(depth)),
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("Taskfile.yml"),
+            format!(
+                "x: {}{}\ntasks:\n  build: echo\n",
+                "[".repeat(depth),
+                "]".repeat(depth)
+            ),
+        )
+        .unwrap();
+        let start = std::time::Instant::now();
+        assert!(candidates_in("deno task ", tmp.path(), 10).is_empty());
+        assert!(candidates_in("task ", tmp.path(), 10).is_empty());
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 }

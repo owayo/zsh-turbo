@@ -1160,9 +1160,10 @@ unset _zsh_turbo_keymap
 
 typeset -g _ZSH_TURBO_HIGHLIGHT_ALIASES=""
 typeset -g _ZSH_TURBO_HIGHLIGHT_FUNCTIONS=""
+typeset -g _ZSH_TURBO_HIGHLIGHT_BUILTINS=""
 typeset -gi _ZSH_TURBO_HIGHLIGHT_FD=0
 
-# 初期化時に aliases/functions をキャッシュし、precmd で更新する
+# 初期化時に aliases/functions/builtins をキャッシュし、precmd で更新する
 function _zsh_turbo_refresh_shell_objects() {
     emulate -L zsh
     # ${(F)...} = 実改行での join。double quote 付きのネスト展開は zsh の展開規則
@@ -1171,6 +1172,8 @@ function _zsh_turbo_refresh_shell_objects() {
     # 未知コマンド (赤) になる。代入の右辺は word split されないため quote 不要。
     _ZSH_TURBO_HIGHLIGHT_ALIASES=${(F)${(k)aliases}}
     _ZSH_TURBO_HIGHLIGHT_FUNCTIONS=${(F)${(k)functions}}
+    # 読み込んだモジュールの組み込み (zsh/datetime の strftime 等) も含めて渡す
+    _ZSH_TURBO_HIGHLIGHT_BUILTINS=${(F)${(k)builtins}}
 }
 _zsh_turbo_refresh_shell_objects
 add-zsh-hook precmd _zsh_turbo_refresh_shell_objects
@@ -1188,7 +1191,8 @@ function _zsh_turbo_highlight() {
     exec {_ZSH_TURBO_HIGHLIGHT_FD}< <(
         "$ZSH_TURBO_CMD" highlight \
             --aliases "$_ZSH_TURBO_HIGHLIGHT_ALIASES" \
-            --functions "$_ZSH_TURBO_HIGHLIGHT_FUNCTIONS" -- "$BUFFER" 2>/dev/null
+            --functions "$_ZSH_TURBO_HIGHLIGHT_FUNCTIONS" \
+            --builtins "$_ZSH_TURBO_HIGHLIGHT_BUILTINS" -- "$BUFFER" 2>/dev/null
         printf '\n'
     )
     zle -F "$_ZSH_TURBO_HIGHLIGHT_FD" _zsh_turbo_async_dispatch

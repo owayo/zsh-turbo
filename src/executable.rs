@@ -36,19 +36,7 @@ fn resolve_in(command: &str, path_env: &std::ffi::OsStr) -> io::Result<PathBuf> 
     }
     std::env::split_paths(path_env)
         .map(|p| p.join(command))
-        .find(|p| {
-            std::fs::metadata(p).is_ok_and(|m| {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    m.is_file() && m.permissions().mode() & 0o111 != 0
-                }
-                #[cfg(not(unix))]
-                {
-                    m.is_file()
-                }
-            })
-        })
+        .find(|p| is_executable_file(p))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "executable not found in PATH"))
         .and_then(|path| {
             if path.is_absolute() {
@@ -59,6 +47,34 @@ fn resolve_in(command: &str, path_env: &std::ffi::OsStr) -> io::Result<PathBuf> 
                 ))
             }
         })
+}
+
+/// このユーザーが実行できる通常ファイルか。zsh のコマンド探索と同じく、symlink を辿った先が
+/// 通常ファイルで `access(X_OK)` が通るものとする (壊れた symlink とディレクトリは含めない)。
+/// 実行ビットだけを見ると、他のユーザー向けのビットしか無いファイルも実行できると誤る。
+pub(crate) fn is_executable_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file()) && can_execute(path)
+}
+
+#[cfg(unix)]
+fn can_execute(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    const X_OK: std::ffi::c_int = 1;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // 安全性: C 文字列ポインタは呼び出しの間有効で、`access(2)` は副作用がない。
+    unsafe { access(c_path.as_ptr(), X_OK) == 0 }
+}
+
+#[cfg(not(unix))]
+fn can_execute(_path: &Path) -> bool {
+    true
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn access(pathname: *const std::ffi::c_char, mode: std::ffi::c_int) -> std::ffi::c_int;
 }
 
 #[cfg(test)]

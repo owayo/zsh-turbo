@@ -12,6 +12,8 @@ use crate::config::UiLanguage;
 use crate::{completion, path_candidates, project_tasks, suggest, tui};
 use std::fmt::Write as _;
 use std::path::Path;
+use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::is_combining_mark;
 use unicode_width::UnicodeWidthChar;
 
 /// パス候補の取得上限。入力中は `max_suggestions` 行まで表示し、残りは ↓ のメニューで選ぶ。
@@ -237,11 +239,15 @@ fn selection(
     if !request.menu {
         return fallback;
     }
-    // 入れると末尾に空白 (サブコマンド・ファイル) か `/` (ディレクトリ) が付くだけの項目も完全一致
+    // 入れると末尾に空白 (サブコマンド・ファイル) か `/` (ディレクトリ) が付くだけの項目も完全一致。
+    // 開いたクォートを閉じる項目 (`"file" `) と、ディスク上の NFD の表記へ直す項目も同じ扱い
+    let buffer: String = request.buffer.nfc().collect();
     let exact = |value: &str| {
         value
-            .strip_prefix(request.buffer)
-            .is_some_and(|rest| matches!(rest, "" | " " | "/"))
+            .nfc()
+            .collect::<String>()
+            .strip_prefix(buffer.as_str())
+            .is_some_and(|rest| matches!(rest, "" | " " | "/" | "\" " | "' "))
     };
     items
         .iter()
@@ -256,7 +262,8 @@ fn selection(
 /// ghost が一覧の項目を経由するか。項目の BUFFER で始まり、その直後で語か階層が切れること
 /// (`make install` は `make installer` を経由しない。`ls dir/` は `ls dir/a` を経由する)
 fn passes_through(ghost: &str, value: &str) -> bool {
-    let stem = value.trim_end_matches([' ', '\t']);
+    // 採用時に足す区切りの空白 1 つだけを外す (`foo\ ` のエスケープした空白は名前の一部)
+    let stem = value.strip_suffix(' ').unwrap_or(value);
     ghost
         .strip_prefix(stem)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t']) || stem.ends_with('/'))
@@ -334,7 +341,17 @@ fn fit_width(text: &str, columns: usize) -> String {
         return text.to_owned();
     }
     let max = columns - 3;
-    let width = |c: char| c.width().unwrap_or(0);
+    // ZLE は結合文字以外の幅 0 の文字 (U+200B・U+FEFF・双方向制御など) を `<200b>` の形で描く
+    let width = |c: char| match c.width() {
+        Some(0) if !is_combining_mark(c) => {
+            if u32::from(c) > 0xffff {
+                8
+            } else {
+                6
+            }
+        }
+        width => width.unwrap_or(0),
+    };
     if text.chars().map(width).sum::<usize>() <= max {
         return text.to_owned();
     }
@@ -466,6 +483,66 @@ mod tests {
         // `alpha.txt` の途中まででは完全一致にしない
         menu.buffer = "ls alpha.t";
         assert_eq!(selection(&menu, &paths, None), Some(1));
+    }
+
+    #[test]
+    fn メニューではクォートを閉じる候補とnfdの候補も完全一致として選ぶ() {
+        use unicode_normalization::UnicodeNormalization;
+        let mut menu = request("cat \"dir/file.txt", "");
+        menu.menu = true;
+        let double = [
+            ("file.txt".to_owned(), "cat \"dir/file.txt\" ".to_owned()),
+            (
+                "file.txt.bak".to_owned(),
+                "cat \"dir/file.txt.bak\" ".to_owned(),
+            ),
+        ];
+        menu.selected = Some("cat \"dir/file.txt.bak\" ");
+        assert_eq!(selection(&menu, &double, Some(1)), Some(0));
+        let single = [
+            ("file.txt".to_owned(), "cat 'dir/file.txt' ".to_owned()),
+            (
+                "file.txt.bak".to_owned(),
+                "cat 'dir/file.txt.bak' ".to_owned(),
+            ),
+        ];
+        menu.buffer = "cat 'dir/file.txt";
+        menu.selected = Some("cat 'dir/file.txt.bak' ");
+        assert_eq!(selection(&menu, &single, Some(1)), Some(0));
+        // ディスク上が NFD の名前を、IME の NFC で最後まで打った
+        let nfd = |text: &str| text.nfd().collect::<String>();
+        let names = [
+            ("データ.csv".to_owned(), nfd("ls データ.csv ")),
+            ("データ.csv.bak".to_owned(), nfd("ls データ.csv.bak ")),
+        ];
+        let selected = nfd("ls データ.csv.bak ");
+        menu.buffer = "ls データ.csv";
+        menu.selected = Some(&selected);
+        assert_eq!(selection(&menu, &names, Some(1)), Some(0));
+    }
+
+    #[test]
+    fn エスケープした末尾の空白は区切りの空白として外さない() {
+        // `foo ` (末尾に空白) と `foo bar` があり、ghost は `foo bar` を指す
+        assert!(!passes_through("ls ts/foo\\ bar | wc", "ls ts/foo\\  "));
+        assert!(passes_through("ls ts/foo\\ bar | wc", "ls ts/foo\\ bar "));
+        assert!(passes_through("ls ts/foo\\  | wc", "ls ts/foo\\  "));
+    }
+
+    #[test]
+    fn zleが記号で描く幅0の書式文字も幅に数える() {
+        // ZLE は U+200B を `<200b>` (6 セル) で描く
+        let label = "ab\u{200b}\u{200b}\u{200b}cdefg.txt";
+        let fitted = fit_width(label, 30);
+        let zle_cells: usize = fitted
+            .chars()
+            .map(|c| match c {
+                '\u{200b}' => 6,
+                '…' => 2,
+                c => c.width().unwrap_or(0),
+            })
+            .sum();
+        assert!(zle_cells <= 27, "{fitted:?} は ZLE で {zle_cells} セル");
     }
 
     #[test]
