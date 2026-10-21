@@ -39,3 +39,37 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 状態ファイルを置き換えて一時ファイルを残さない() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        write_atomic(&path, b"old data").unwrap();
+        write_atomic(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn 置換に失敗したら既存の内容を保ち一時ファイルを除去する() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("keep"), b"existing").unwrap();
+        assert!(write_atomic(&path, b"replacement").is_err());
+        assert_eq!(fs::read(path.join("keep")).unwrap(), b"existing");
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
+    }
+}
