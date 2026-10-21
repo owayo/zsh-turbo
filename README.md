@@ -41,8 +41,8 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 - **Custom Command Segments**: Define any segment in the TUI or TOML
 - **Parallel Execution**: All segments run concurrently via `std::thread::scope`
 - **Async Autosuggestions**: History-based with prefix, substring, and fuzzy strategies
-- **Syntax Highlighting**: Commands, assignments, redirections including fd duplication (`2>&1`), paths, glob patterns with shell escape handling, strings, variables including zsh special parameters, and newline command separators. Full-width spaces and other Unicode spaces remain part of the word, as in zsh. Partially quoted or escaped names suppress alias and reserved-word recognition.
-- **PATH-Aware Highlighting**: Executable files in the current directory are recognized when `$PATH` contains an empty entry, as zsh does
+- **Syntax Highlighting**: Commands, assignments, redirections including fd duplication (`2>&1`), paths, glob patterns including numeric ranges (`<1-10>`) with shell escape handling, strings, variables including zsh special parameters, and newline command separators. Full-width spaces and other Unicode spaces remain part of the word, as in zsh. Partially quoted or escaped names suppress alias and reserved-word recognition.
+- **PATH-Aware Highlighting**: Looks up only the command names in the input, including executable files in empty or relative `$PATH` entries. Loaded zsh module builtins are recognized too.
 - **Transient Prompt**: Previous prompts simplify after command execution
 - **Semantic Prompt Markers**: OSC 133 prompt markers for iTerm2 3.7+ and Warp, including right prompt and secondary prompt (`PS2`) ranges
 - **Robust zsh Integration**: Initialization, widgets, and `compinit` tolerate user shell options such as `SH_GLOB` and `NO_UNSET`, preserve existing ZLE hooks and larger history limits, and accept CLI buffer values beginning with `-`. Suggestions and highlighting are limited to command input, excluding `vared` and `select`.
