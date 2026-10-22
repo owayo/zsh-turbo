@@ -432,7 +432,7 @@ impl App {
 
     fn save(&mut self) {
         if let Some(initial) = &self.initial_config_bytes {
-            let current = match std::fs::read(config::config_path()) {
+            let current = match config::config_path().and_then(std::fs::read) {
                 Ok(bytes) => Some(bytes),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => {
@@ -466,7 +466,8 @@ impl App {
             Ok(()) => {
                 self.dirty = false;
                 if self.initial_config_bytes.is_some() {
-                    self.initial_config_bytes = Some(std::fs::read(config::config_path()).ok());
+                    self.initial_config_bytes =
+                        Some(config::config_path().and_then(std::fs::read).ok());
                 }
                 crate::completion::refresh_saved_async();
                 self.status_msg = Some(
@@ -1503,7 +1504,7 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> std::io::R
 pub fn run_tui() -> std::io::Result<()> {
     let config = config::load_config_strict()?;
     let lang = Lang::from_preference(config.ui.language);
-    let initial = match std::fs::read(config::config_path()) {
+    let initial = match std::fs::read(config::config_path()?) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),

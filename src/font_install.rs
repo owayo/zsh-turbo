@@ -123,17 +123,27 @@ fn save_font_license(dest_dir: &Path) -> io::Result<()> {
 /// macOS は `~/Library/Fonts`、それ以外の Unix は `~/.local/share/fonts` を使う。
 #[cfg(target_os = "macos")]
 fn font_install_dir() -> io::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "could not resolve home directory")
-    })?;
+    let home = dirs::home_dir()
+        .filter(|home| home.is_absolute())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "could not resolve absolute home directory",
+            )
+        })?;
     Ok(home.join("Library").join("Fonts"))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn font_install_dir() -> io::Result<PathBuf> {
-    let base = dirs::data_dir().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "could not resolve data directory")
-    })?;
+    let base = dirs::data_dir()
+        .filter(|base| base.is_absolute())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "could not resolve absolute data directory",
+            )
+        })?;
     Ok(base.join("fonts"))
 }
 

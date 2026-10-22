@@ -363,13 +363,14 @@ fn installed_fonts() -> Vec<String> {
 
 fn config_candidates(terminal: TerminalKind) -> io::Result<Vec<PathBuf>> {
     let home = dirs::home_dir()
+        .filter(|home| home.is_absolute())
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory unavailable"))?;
     if terminal == TerminalKind::Cmux {
         return Ok(vec![home.join(
             "Library/Application Support/com.cmuxterm.app/config.ghostty",
         )]);
     }
-    let xdg = crate::config::config_base_from_xdg(std::env::var_os("XDG_CONFIG_HOME"));
+    let xdg = crate::config::config_base_from_xdg(std::env::var_os("XDG_CONFIG_HOME"))?;
     let mut choices = vec![xdg.join("ghostty/config.ghostty")];
     let old = xdg.join("ghostty/config");
     if old.exists() {

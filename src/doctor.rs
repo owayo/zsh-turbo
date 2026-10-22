@@ -62,7 +62,25 @@ pub fn run_doctor() {
     check_tool("terraform", &["--version"]);
 
     section("Configuration");
-    let path = config::config_path();
+    check_configuration();
+
+    section("Additional Features");
+    ok("Parallel segment execution (std::thread::scope)");
+    ok("Custom command segments (TOML declarative)");
+    ok("Fuzzy/substring suggestion strategies");
+    ok("Environment diagnostics (this command)");
+
+    println!();
+}
+
+fn check_configuration() {
+    let path = match config::config_path() {
+        Ok(path) => path,
+        Err(error) => {
+            warn(&error.to_string());
+            return;
+        }
+    };
     if path.exists() {
         ok(&format!("Config file: {}", path.display()));
         match std::fs::read_to_string(&path) {
@@ -93,14 +111,6 @@ pub fn run_doctor() {
         ));
         info("  Run `zsh-turbo configure` to create one");
     }
-
-    section("Additional Features");
-    ok("Parallel segment execution (std::thread::scope)");
-    ok("Custom command segments (TOML declarative)");
-    ok("Fuzzy/substring suggestion strategies");
-    ok("Environment diagnostics (this command)");
-
-    println!();
 }
 
 fn section(name: &str) {

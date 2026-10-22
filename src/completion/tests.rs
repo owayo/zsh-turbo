@@ -2,6 +2,24 @@ use super::*;
 use std::fs;
 
 #[test]
+fn チルダを展開しても補完元と監視ファイルは絶対パスに限る() {
+    for home in [None, Some(""), Some("."), Some("home")] {
+        assert!(expand_path_from("~/completion", home.map(PathBuf::from)).is_err());
+        assert_eq!(
+            expand_path_from("/completions/_example", home.map(PathBuf::from)).unwrap(),
+            PathBuf::from("/completions/_example")
+        );
+    }
+    assert_eq!(
+        expand_path_from("~/completion", Some("/home/you".into())).unwrap(),
+        PathBuf::from("/home/you/completion")
+    );
+    for path in ["", "completion", "./completion"] {
+        assert!(expand_path_from(path, Some("/home/you".into())).is_err());
+    }
+}
+
+#[test]
 fn キャッシュの保存先は絶対パスだけを使う() {
     use std::path::PathBuf;
     let home = Some(PathBuf::from("/home/you"));

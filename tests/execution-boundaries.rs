@@ -5,6 +5,119 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
+fn 相対homeから作業ディレクトリの設定を読み込まない() {
+    let tmp = tempfile::tempdir().unwrap();
+    for home in [".", "home"] {
+        let config = tmp.path().join(home).join(".config/zsh-turbo");
+        fs::create_dir_all(&config).unwrap();
+        fs::write(
+            config.join("config.toml"),
+            "[prompt]\nleft_segments=['probe']\nright_segments=[]\n[[prompt.custom]]\nname='probe'\ncommand='printf LOCAL_CONFIG_LOADED'\n",
+        )
+        .unwrap();
+        for xdg in [None, Some(""), Some("config")] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_zsh-turbo"));
+            command
+                .arg("prompt")
+                .current_dir(tmp.path())
+                .env("HOME", home)
+                .env("XDG_STATE_HOME", tmp.path().join("state"))
+                .env_remove("XDG_CONFIG_HOME");
+            if let Some(xdg) = xdg {
+                command.env("XDG_CONFIG_HOME", xdg);
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains("LOCAL_CONFIG_LOADED"),
+                "HOME={home:?}, XDG_CONFIG_HOME={xdg:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn 相対homeでも絶対xdgの設定は読み込む() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("config/zsh-turbo");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(
+        config.join("config.toml"),
+        "[prompt]\nleft_segments=['probe']\nright_segments=[]\n[[prompt.custom]]\nname='probe'\ncommand='printf ABSOLUTE_CONFIG_LOADED'\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_zsh-turbo"))
+        .arg("prompt")
+        .current_dir(tmp.path())
+        .env("HOME", ".")
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ABSOLUTE_CONFIG_LOADED"));
+}
+
+#[test]
+fn 相対homeのチルダ経由で作業ディレクトリの補完を取り込まない() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("config/zsh-turbo");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(
+        config.join("config.toml"),
+        "[[completions]]\ncommand='example'\nsource='file'\nfile='~/_example'\n",
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("_example"),
+        "#compdef example\n_arguments '--unsafe'\n",
+    )
+    .unwrap();
+    let cache = tmp.path().join("cache");
+    let output = Command::new(env!("CARGO_BIN_EXE_zsh-turbo"))
+        .arg("completion-refresh")
+        .current_dir(tmp.path())
+        .env("HOME", ".")
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("XDG_CACHE_HOME", &cache)
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("no absolute home directory"));
+    assert!(
+        !cache
+            .join("zsh-turbo/managed-completions/example.zsh")
+            .exists()
+    );
+}
+
+#[test]
+fn 設定やフォントの保存先が相対パスなら書き込まず失敗する() {
+    let tmp = tempfile::tempdir().unwrap();
+    for command in ["configure", "install-font"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zsh-turbo"))
+            .arg(command)
+            .current_dir(tmp.path())
+            .env("HOME", "home")
+            .env("XDG_CONFIG_HOME", "config")
+            .env("XDG_DATA_HOME", "data")
+            .env("XDG_STATE_HOME", tmp.path().join("state"))
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{command}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("absolute"),
+            "{output:?}"
+        );
+        assert!(!tmp.path().join("home").exists());
+        assert!(!tmp.path().join("config").exists());
+        assert!(!tmp.path().join("data").exists());
+    }
+}
+
+#[test]
 fn 相対xdg設定からカレントディレクトリのコードを実行しない() {
     let tmp = tempfile::tempdir().unwrap();
     let config = tmp.path().join("config/zsh-turbo");
