@@ -21,7 +21,8 @@
 
 - プロンプト出力 (`style::colored*`) は `text` 中の制御文字を U+FFFD に置換し、`%` を `%%` にエスケープして zsh の prompt expansion と端末制御シーケンス注入を防ぐ。`plain_colored` も制御文字を置換するが `%` は維持する。新しい色付き出力ヘルパーにも同じ境界処理を適用する。
 - `zsh-turbo init` が出力する変数代入は値を single-quote で囲むこと。`shell_single_quote` ヘルパーを使い、設定ファイル経由のコマンド注入を防ぐ。
-- `XDG_CONFIG_HOME` は未設定・空・相対パスなら無効として扱い、`~/.config/zsh-turbo` にフォールバックすること。カレントディレクトリの設定ファイルを自動で読み込まない。
+- `XDG_CONFIG_HOME` は未設定・空・相対パスなら無効として扱い、絶対パスのホーム配下の `.config/zsh-turbo` にフォールバックすること。ホームも不明・相対パスなら、非対話の読み込みは既定値を使い、厳密な読み込みと保存はエラーにする。補完元・監視ファイルの `~/` 展開とフォントの保存先も絶対パスを必須とし、カレントディレクトリの設定やコードを読み書きしない。
+- Taskfile の `internal` は明示値を優先し、`<<` の多段継承とマージ列の優先順位も反映する。タスク名は数値に見える名前も元の表記のまま保つ。
 - オートサジェストのハイライト設定は zsh の `region_highlight` 形式（例: `fg=8`）で扱う。Rust 側の色名（例: `bright_black`）をそのまま渡さないこと。
 - zsh から渡る `$BUFFER` やエイリアス/関数名は `-` 始まりも有り得るため、それらを受ける CLI 引数には `#[arg(allow_hyphen_values = true)]` を付ける。positional の `buffer`/`prefix` だけでなく、`highlight --aliases`/`--functions`、`suggest --strategy`、`suggest`/`complete --history-file` などのオプションも対象（`-` 始まりの値で clap が exit 2 になり、ハイライト等が無言で停止する）。
 - `git status -b` のヘッダーは `## No commits yet on <branch>` (unborn) や `## HEAD (no branch)` (detached) のような特殊形式を返す。`parse_git_branch` で網羅する。

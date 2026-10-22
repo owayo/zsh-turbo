@@ -236,6 +236,8 @@ After installation, configure the terminal if needed and open a new terminal win
 
 Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` is an absolute path; otherwise `~/.config/zsh-turbo/config.toml`. Empty and relative values use the default.
 
+If neither the XDG setting nor the home directory provides an absolute path, shell integration uses default settings and `configure` reports an error. Configuration, completion sources, and font installation never fall back to paths relative to the working directory.
+
 Configuration saves use atomic replacement. Concurrent saves use independent, exclusively created temporary files so one writer cannot overwrite another writer's in-progress data.
 
 Run `zsh-turbo configure` to edit every setting below, or edit the config file directly. The TUI loads your existing configuration; press `S` to save it to the same file.
