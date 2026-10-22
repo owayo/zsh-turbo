@@ -4,6 +4,8 @@
 
 Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` is an absolute path; otherwise `~/.config/zsh-turbo/config.toml`. Empty and relative values use the default, following the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/).
 
+The home directory must also be absolute. If neither location resolves to an absolute path, shell integration uses defaults without reading local configuration, and `configure` fails before opening the screen. An absolute `XDG_CONFIG_HOME` works even when `HOME` is relative. Font installation also fails if its destination cannot be resolved to an absolute path.
+
 Automatic prompt and completion commands use absolute executable paths. If a command is found through an empty or relative PATH entry, it is not executed. Syntax highlighting still recognizes these entries because it checks file metadata and permissions without executing commands.
 
 Configuration saves use atomic replacement and preserve existing file permissions. If the config file is a symlink, its target is updated and the link is kept. Concurrent saves use independent, exclusively created temporary files so one writer cannot overwrite another writer's in-progress data.
@@ -167,7 +169,7 @@ Task names are read from files in the current directory:
 | `deno task <name>` | `deno.json` or `deno.jsonc` tasks, plus `package.json` scripts |
 | `mise run <task>`, `mise r <task>` | `mise.toml` or `.mise.toml` `[tasks]`, plus executable file tasks in the default task directories (`mise-tasks/`, `.mise-tasks/`, `mise/tasks/`, `.mise/tasks/`, `.config/mise/tasks/`) |
 | `just <recipe>` | `justfile`, `Justfile`, or `.justfile` recipes (private recipes excluded) |
-| `task <name>` (Go Task) | `Taskfile.yml`/`.yaml`, including `.dist` variants (internal tasks excluded) |
+| `task <name>` (Go Task) | `Taskfile.yml`/`.yaml`, including `.dist` variants (internal tasks excluded, including inherited `internal: true`) |
 
 Makefile continuations are joined before extracting targets. Deno definitions support comments, trailing commas, and object-form tasks in both `deno.json` and `deno.jsonc`. Mise file tasks use names without the final extension (`mise-tasks/build.sh` becomes `mise run build`). A leading UTF-8 BOM is accepted in task definition files. Names beginning with `-` are excluded because task runners interpret them as options.
 
@@ -254,3 +256,5 @@ At shell startup and subsequent prompts (at least 30 seconds between checks), a 
 Cache files live in `${XDG_CACHE_HOME:-~/.cache}/zsh-turbo/managed-completions`. Tab uses already loaded functions and checks the cache file with zsh's built-in stat module; the cache layer does not launch a CLI/help/hash process on every keypress or Tab. Native completion scripts can still run their own commands to fetch dynamic candidates. Generation is locked per CLI, syntax-checked, and atomically published. A failure preserves the last working cache and is shown in the TUI. Unchanged failed inputs are retried after five minutes; changed settings/files and `--force` bypass this wait. Updates load on the next Tab after publication; a failed initial generation leaves existing zsh completion available. Missing, empty, or relative XDG cache settings fall back to `~/.cache`. If no absolute cache directory can be determined, managed caches and automatic help lists are disabled; existing zsh completion remains available.
 
 Run `zsh-turbo completion-refresh` for an immediate change check, or add `--force` to rebuild without waiting for metadata to change. These commands report each registration's result.
+
+Completion sources and watched files using `~/` require an absolute home directory. If the home directory is missing or relative, refreshing fails and preserves any existing cache.

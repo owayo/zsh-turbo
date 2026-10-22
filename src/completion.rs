@@ -132,11 +132,23 @@ pub fn shell_init(entries: &[Registration]) -> String {
     script
 }
 
-pub fn expand_path(path: &str) -> PathBuf {
+pub fn expand_path(path: &str) -> std::io::Result<PathBuf> {
+    expand_path_from(path, dirs::home_dir())
+}
+
+fn expand_path_from(path: &str, home: Option<PathBuf>) -> std::io::Result<PathBuf> {
     if let Some(rest) = path.strip_prefix("~/") {
-        return dirs::home_dir().unwrap_or_default().join(rest);
+        return home
+            .filter(|home| home.is_absolute())
+            .map(|home| home.join(rest))
+            .ok_or_else(|| std::io::Error::other("no absolute home directory"));
     }
-    PathBuf::from(path)
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(std::io::Error::other("no absolute completion source path"))
+    }
 }
 
 pub fn valid_source_path(path: &str) -> bool {

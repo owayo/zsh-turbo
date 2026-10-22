@@ -86,9 +86,11 @@ fn stamps(entry: &Registration) -> io::Result<Vec<Stamp>> {
         paths.push(resolve(generator)?);
     }
     if entry.source == Source::File {
-        paths.push(expand_path(&entry.file));
+        paths.push(expand_path(&entry.file)?);
     }
-    paths.extend(entry.watch_files.iter().map(|p| expand_path(p)));
+    for path in &entry.watch_files {
+        paths.push(expand_path(path)?);
+    }
     paths.into_iter().map(|p| stamp(&p)).collect()
 }
 
@@ -270,14 +272,15 @@ fn refresh_locked(
                 })?
             }
             Source::File => {
-                let script = fs::read_to_string(expand_path(&entry.file))?;
+                let path = expand_path(&entry.file)?;
+                let script = fs::read_to_string(&path)?;
                 if script.len() > 4 * 1024 * 1024 || !script.starts_with("#compdef") {
                     return Err(io::Error::other(
                         "expected a zsh #compdef completion file (max 4 MiB)",
                     ));
                 }
-                let source_path = fs::canonicalize(expand_path(&entry.file))?;
-                let name = expand_path(&entry.file)
+                let source_path = fs::canonicalize(&path)?;
+                let name = path
                     .file_name()
                     .and_then(|s| s.to_str())
                     .filter(|s| {

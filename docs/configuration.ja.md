@@ -4,6 +4,8 @@
 
 設定ファイル: `XDG_CONFIG_HOME` が絶対パスの場合は `${XDG_CONFIG_HOME}/zsh-turbo/config.toml`、未設定・空・相対パスの場合は `~/.config/zsh-turbo/config.toml`。[XDG Base Directory 仕様](https://specifications.freedesktop.org/basedir/latest/)に沿って相対パスを無効として扱います。
 
+ホームも絶対パスの場合だけ使います。どちらからも絶対パスを決められない場合、シェル連携はローカルの設定を読まず既定値で動作し、`configure` は画面を開く前にエラーを返します。`XDG_CONFIG_HOME` が絶対パスなら、`HOME` が相対パスでも使えます。フォントのインストールも、絶対パスの保存先を決められなければエラーになります。
+
 プロンプトと補完が自動で実行する外部コマンドは、絶対パスへ解決してから起動します。空や相対パスの PATH 要素から見つかったコマンドは実行しません。構文ハイライトは実行せずにファイルの属性と権限を確認するため、これらの PATH 要素も判定に使います。
 
 設定は既存ファイルの権限を引き継ぎ、アトミックに置換して保存します。設定ファイルがシンボリックリンクの場合は、リンクを残してリンク先を更新します。並行保存では排他的に作成した別々の一時ファイルを使うため、書き込み途中のデータを別の保存処理が上書きしません。
@@ -167,7 +169,7 @@ term_shell_integration = "auto" # auto, 1（有効）, 0（無効）
 | `deno task <name>` | `deno.json` または `deno.jsonc` の tasks と `package.json` の scripts |
 | `mise run <task>`・`mise r <task>` | `mise.toml` または `.mise.toml` の `[tasks]` と、既定のタスクディレクトリ（`mise-tasks/`・`.mise-tasks/`・`mise/tasks/`・`.mise/tasks/`・`.config/mise/tasks/`）内の実行可能ファイル |
 | `just <recipe>` | `justfile`・`Justfile`・`.justfile` のレシピ（非公開レシピは除外） |
-| `task <name>`（Go Task） | `Taskfile.yml`・`.yaml` と `.dist` 形式（内部タスクは除外） |
+| `task <name>`（Go Task） | `Taskfile.yml`・`.yaml` と `.dist` 形式（継承した `internal: true` も含め、内部タスクは除外） |
 
 Makefile の行継続はつなげてからターゲットを読み取ります。Deno は `deno.json`・`deno.jsonc` の両方で、コメント、末尾のカンマ、オブジェクト形式のタスクに対応します。mise のファイルタスクは最後の拡張子を外した名前で呼びます（`mise-tasks/build.sh` は `mise run build`）。タスク定義ファイルの先頭にある UTF-8 BOM も読み飛ばします。`-` で始まる名前は、タスクを実行するツールがオプションとして解釈するため候補に出しません。
 
@@ -256,3 +258,5 @@ watch_files = [] # ラッパーの実体など: ["~/bin/tool-core"]
 保存先は `${XDG_CACHE_HOME:-~/.cache}/zsh-turbo/managed-completions` です。Tab は読み込み済みの関数を使い、zsh の stat モジュールでキャッシュの変更を確認します。キャッシュ管理のためにキー入力や Tab のたびに CLI・help・ハッシュ計算の外部プロセスを起動することはありません。公式補完スクリプト自身が動的な候補を取得するコマンドは実行されることがあります。同じ CLI の生成処理はロックし、構文検証を通ったファイルをアトミックに公開します。失敗時は前の補完を残し、TUI に理由を表示します。同じ設定・ファイル状態での再試行は5分待ちます。設定やファイルが変わった場合と `--force` では待ちません。生成完了後の次の Tab で反映され、初回生成に失敗した場合は既存の zsh 補完に戻ります。XDG のキャッシュ設定が未指定・空・相対パスなら `~/.cache` を使います。絶対パスの保存先を決められない場合は、管理キャッシュと自動ヘルプ一覧を無効にし、既存の zsh 補完を使います。
 
 `zsh-turbo completion-refresh` ですぐに変更を確認できます。`--force` を付けると、ファイル情報の変化を待たずに再構築します。結果は登録ごとに表示されます。
+
+補完元と監視ファイルの `~/` は、ホームが絶対パスの場合だけ展開します。ホームが不明・相対パスなら更新は失敗し、既存のキャッシュを保持します。

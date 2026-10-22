@@ -365,33 +365,46 @@ impl Default for StyleConfig {
     }
 }
 
-pub fn config_dir() -> PathBuf {
-    config_base_from_xdg(std::env::var_os("XDG_CONFIG_HOME")).join("zsh-turbo")
+pub fn config_dir() -> std::io::Result<PathBuf> {
+    config_base_from_xdg(std::env::var_os("XDG_CONFIG_HOME")).map(|base| base.join("zsh-turbo"))
 }
 
-pub(crate) fn config_base_from_xdg(xdg_config_home: Option<OsString>) -> PathBuf {
-    // 相対パスはカレントディレクトリの設定を読み込むため採用しない。
-    if let Some(path) = xdg_config_home.map(PathBuf::from)
-        && path.is_absolute()
-    {
-        return path;
-    }
-
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".config")
+pub(crate) fn config_base_from_xdg(xdg_config_home: Option<OsString>) -> std::io::Result<PathBuf> {
+    config_base_from(xdg_config_home, dirs::home_dir())
 }
 
-pub fn config_path() -> PathBuf {
-    config_dir().join("config.toml")
+fn config_base_from(
+    xdg_config_home: Option<OsString>,
+    home: Option<PathBuf>,
+) -> std::io::Result<PathBuf> {
+    // HOME も相対パスなら、作業ディレクトリの設定を読み込まないよう失敗にする。
+    xdg_config_home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            home.filter(|path| path.is_absolute())
+                .map(|home| home.join(".config"))
+        })
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no absolute configuration directory (set XDG_CONFIG_HOME or HOME)",
+            )
+        })
+}
+
+pub fn config_path() -> std::io::Result<PathBuf> {
+    config_dir().map(|dir| dir.join("config.toml"))
 }
 
 pub fn load_config() -> Config {
-    load_config_from(&config_path())
+    config_path()
+        .map(|path| load_config_from(&path))
+        .unwrap_or_default()
 }
 
 pub fn load_config_strict() -> std::io::Result<Config> {
-    load_config_strict_from(&config_path())
+    load_config_strict_from(&config_path()?)
 }
 
 fn load_config_strict_from(path: &Path) -> std::io::Result<Config> {
@@ -458,9 +471,9 @@ fn load_config_from(path: &std::path::Path) -> Config {
 }
 
 pub fn save_config(config: &Config) -> std::io::Result<()> {
-    let dir = config_dir();
+    let dir = config_dir()?;
     std::fs::create_dir_all(&dir)?;
-    save_config_to(config, &config_path())
+    save_config_to(config, &dir.join("config.toml"))
 }
 
 /// `dest` へ Config を書き込む。アトミック書き込みのテスト容易性のため
@@ -565,7 +578,7 @@ mod tests {
 
     #[test]
     fn config_dir_は_zsh_turboで終わる() {
-        let dir = config_dir();
+        let dir = config_dir().unwrap();
         assert!(
             dir.ends_with("zsh-turbo"),
             "config_dir が zsh-turbo で終わっていない: {dir:?}"
@@ -574,7 +587,7 @@ mod tests {
 
     #[test]
     fn config_path_は_config_tomlで終わる() {
-        let path = config_path();
+        let path = config_path().unwrap();
         assert!(
             path.ends_with("config.toml"),
             "config_path が config.toml で終わっていない: {path:?}"
@@ -583,8 +596,8 @@ mod tests {
 
     #[test]
     fn config_path_は_config_dir配下にある() {
-        let dir = config_dir();
-        let path = config_path();
+        let dir = config_dir().unwrap();
+        let path = config_path().unwrap();
         assert!(
             path.starts_with(&dir),
             "config_path が config_dir 配下にない: dir={dir:?}, path={path:?}"
@@ -593,13 +606,13 @@ mod tests {
 
     #[test]
     fn config_base_from_xdg_指定値を優先する() {
-        let base = config_base_from_xdg(Some(OsString::from("/tmp/zsh-turbo-config")));
+        let base = config_base_from_xdg(Some(OsString::from("/tmp/zsh-turbo-config"))).unwrap();
         assert_eq!(base, PathBuf::from("/tmp/zsh-turbo-config"));
     }
 
     #[test]
     fn config_base_from_xdg_空文字列は_defaultへフォールバックする() {
-        let base = config_base_from_xdg(Some(OsString::new()));
+        let base = config_base_from_xdg(Some(OsString::new())).unwrap();
         assert!(
             base.ends_with(".config"),
             "空の XDG_CONFIG_HOME は ~/.config 相当へフォールバックする必要がある: {base:?}"
@@ -612,10 +625,33 @@ mod tests {
 
     #[test]
     fn config_base_from_xdg_相対パスは_defaultへフォールバックする() {
-        let fallback = config_base_from_xdg(None);
+        let fallback = config_base_from_xdg(None).unwrap();
         for path in ["config", ".", "./config", "../config", "~/.config"] {
-            assert_eq!(config_base_from_xdg(Some(path.into())), fallback);
+            assert_eq!(config_base_from_xdg(Some(path.into())).unwrap(), fallback);
         }
+    }
+
+    #[test]
+    fn 設定の基点は絶対パスだけを採用し解決不能ならエラーにする() {
+        let home = PathBuf::from("/tmp/home");
+        for xdg in [None, Some(""), Some("config"), Some(".")] {
+            assert_eq!(
+                config_base_from(xdg.map(OsString::from), Some(home.clone())).unwrap(),
+                home.join(".config")
+            );
+            for home in [None, Some(""), Some("."), Some("home")] {
+                assert_eq!(
+                    config_base_from(xdg.map(OsString::from), home.map(PathBuf::from))
+                        .unwrap_err()
+                        .kind(),
+                    std::io::ErrorKind::NotFound
+                );
+            }
+        }
+        assert_eq!(
+            config_base_from(Some("/tmp/config".into()), Some(".".into())).unwrap(),
+            PathBuf::from("/tmp/config")
+        );
     }
 
     // --- 存在しないパスで load_config がデフォルトを返す ---
