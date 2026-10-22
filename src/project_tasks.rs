@@ -556,17 +556,24 @@ fn taskfile_tasks(cwd: &Path) -> Vec<String> {
     };
     let mut names: Vec<String> = tasks
         .iter()
-        .filter(|(name, value)| {
-            safe_name(name)
-                && !value
-                    .get("internal")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-        })
+        .filter(|(name, value)| safe_name(name) && task_internal(value) != Some(true))
         .map(|(name, _)| name.clone())
         .collect();
     names.sort_unstable();
     names
+}
+
+fn task_internal(task: &serde_json::Value) -> Option<bool> {
+    if let Some(internal) = task.get("internal") {
+        return Some(internal.as_bool().unwrap_or(false));
+    }
+    // 明示値が最優先。マージ列では先に internal を定義した要素を採り、多段の継承も辿る。
+    let merged = task.get("<<")?;
+    match merged {
+        serde_json::Value::Object(_) => task_internal(merged),
+        serde_json::Value::Array(sources) => sources.iter().find_map(task_internal),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -990,5 +997,36 @@ mod tests {
         assert!(candidates_in("deno task ", tmp.path(), 10).is_empty());
         assert!(candidates_in("task ", tmp.path(), 10).is_empty());
         assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn taskfileのマージで継承したinternalと明示的な上書きを反映する() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Taskfile.yml"),
+            "version: '3'\nhidden: &hidden\n  internal: true\n  cmds: [echo hidden]\nmid: &mid\n  <<: *hidden\ntasks:\n  hidden:\n    <<: *mid\n  visible:\n    <<: *hidden\n    internal: false\n  first:\n    <<: [{internal: false}, *hidden]\n  last:\n    <<: [*hidden, {internal: false}]\n  001: echo numeric\n",
+        )
+        .unwrap();
+        assert_eq!(
+            candidates_in("task ", tmp.path(), 10),
+            ["task 001", "task first", "task visible"]
+        );
+    }
+
+    #[test]
+    fn internalを継承しないタスクと不正なマージでも他の名前を失わない() {
+        let tmp = tempfile::tempdir().unwrap();
+        for merge in ["42", "[42]", "[{}, false]"] {
+            std::fs::write(
+                tmp.path().join("Taskfile.yml"),
+                format!("tasks:\n  visible:\n    <<: {merge}\n  build: echo build\n"),
+            )
+            .unwrap();
+            assert_eq!(
+                candidates_in("task ", tmp.path(), 10),
+                ["task build", "task visible"],
+                "{merge}"
+            );
+        }
     }
 }
