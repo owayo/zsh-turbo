@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 /// mise のシムのようにバイナリが同じでも中身が更新されることがあるため、一定時間で取り直す
 const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// 失敗・タイムアウトは長く覚えず、少し待って取り直す

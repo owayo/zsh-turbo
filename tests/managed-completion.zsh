@@ -7,6 +7,13 @@ zpty -b fixture zsh -di || exit 1
     done
     zpty -w -n fixture $'demohelp --bef\t'
     await_fixture buffer 'demohelp --before ' || exit 2
+    # 繰り返しフラグは長い名前でも補完し、短い別名の使用後も候補に残す
+    zpty -w -n fixture $'\x15demohelp --verb\t'
+    await_fixture buffer 'demohelp --verbose ' || exit 8
+    zpty -w -n fixture $'\x15demohelp --verbose --verb\t'
+    await_fixture buffer 'demohelp --verbose --verbose ' || exit 9
+    zpty -w -n fixture $'\x15demohelp -vv --verb\t'
+    await_fixture buffer 'demohelp -vv --verbose ' || exit 10
     zpty -w -n fixture $'\x15demohelp remote --trans\t'
     await_fixture buffer 'demohelp remote --transport=' || exit 3
     # 候補を足せなかった補完関数が 0 を返すと、部分一致の matcher まで進まない

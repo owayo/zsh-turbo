@@ -122,7 +122,7 @@ fn registered_completions_refresh_after_binary_replacement_in_a_running_shell() 
     let root = tmp.path();
     fs::create_dir(root.join("zsh-turbo")).unwrap();
     fs::create_dir(root.join("bin")).unwrap();
-    let fixture = "#!/bin/sh\ncase \"$*\" in\n'--help') printf 'Options:\\n  --before  Before update\\n  --config <FILE>  Config file\\nCommands:\\n  remote  Remote commands\\n';;\n'remote --help') printf 'Options:\\n  --transport <MODE>  Transport\\n';;\nesac\n";
+    let fixture = "#!/bin/sh\ncase \"$*\" in\n'--help') printf 'Options:\\n  --before  Before update\\n  -v, --verbose...  Verbose output\\n  --config <FILE>  Config file\\nCommands:\\n  remote, r  Remote commands\\n';;\n'remote --help') printf 'Options:\\n  --transport <MODE>  Transport\\n';;\nesac\n";
     // サブコマンドを持つ CLI でも、ファイル引数は matcher-list の部分一致で補完できる
     fs::write(root.join("sample-settings.toml"), "").unwrap();
     for name in ["demohelp", "demogen", "demofile"] {

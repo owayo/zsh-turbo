@@ -35,6 +35,7 @@ struct OptionSpec {
     flags: Vec<String>,
     value: Option<String>,
     optional: bool,
+    repeatable: bool,
     description: String,
 }
 
@@ -239,7 +240,7 @@ pub(super) fn parse(text: &str) -> Help {
                 .split_whitespace()
                 .next()
                 .unwrap_or("")
-                .split('|')
+                .split([',', '|'])
                 .next()
                 .unwrap_or("");
             if is_command_name(name) {
@@ -257,6 +258,7 @@ fn parse_option(syntax: &str, description: &str) -> Option<OptionSpec> {
     // `--[no-]color` の角括弧は、値ではなくフラグ名の省略表記。
     let value_syntax = syntax.replace("[no-]", "");
     let mut flags = Vec::new();
+    let mut repeatable = false;
     for token in syntax.split(|c: char| c.is_whitespace() || c == ',' || c == '|') {
         let expanded = if let Some((head, tail)) = token.split_once("[no-]") {
             vec![format!("{head}{tail}"), format!("{head}no-{tail}")]
@@ -264,6 +266,10 @@ fn parse_option(syntax: &str, description: &str) -> Option<OptionSpec> {
             vec![token.to_owned()]
         };
         for token in expanded {
+            // `--verbose...` はフラグの反復、`<FILE>...` は引数の反復なので区別する。
+            let repeated_flag = token.strip_suffix("...").filter(|flag| is_flag_name(flag));
+            repeatable |= repeated_flag.is_some();
+            let token = repeated_flag.unwrap_or(&token);
             let flag = token.split(['=', '[', '<']).next().unwrap_or("");
             if is_flag_name(flag) && !flags.iter().any(|existing| existing == flag) {
                 flags.push(flag.to_string());
@@ -277,6 +283,7 @@ fn parse_option(syntax: &str, description: &str) -> Option<OptionSpec> {
         flags,
         value: option_value(&value_syntax),
         optional: value_syntax.contains('['),
+        repeatable,
         description: description.into(),
     })
 }
@@ -431,11 +438,13 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
                 } else {
                     ""
                 };
-                let mut spec = format!(
-                    "({}){flag}{suffix}[{}]",
-                    option.flags.join(" "),
-                    escape(&option.description)
-                );
+                let exclusion = if option.repeatable {
+                    "*".to_owned()
+                } else {
+                    format!("({})", option.flags.join(" "))
+                };
+                let mut spec =
+                    format!("{exclusion}{flag}{suffix}[{}]", escape(&option.description));
                 if let Some(value) = &option.value {
                     let lower = value.to_ascii_lowercase();
                     let action = if ["file", "path", "directory"]
@@ -501,6 +510,35 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 別名を併記したコマンド行から正規の名前と説明を読む() {
+        let text = "Commands:\n  build, b  Compile the project\n  check,c  Check the project\n  doc|d  Build documentation\n  run [ARGS]  Run the project\n";
+        let expected = [
+            ("build".into(), "Compile the project".into()),
+            ("check".into(), "Check the project".into()),
+            ("doc".into(), "Build documentation".into()),
+            ("run".into(), "Run the project".into()),
+        ];
+        assert_eq!(parse(text).commands, expected);
+        assert_eq!(parse_top_level("demo", text).commands, expected);
+    }
+
+    #[test]
+    fn 繰り返しフラグの名前と補完を保持する() {
+        let help = parse(
+            "Options:\n  -v, --verbose...  Verbose output\n  -q, --quiet  Quiet output\n  --include <FILE>...  Input files\n",
+        );
+        assert_eq!(help.options[0].flags, ["-v", "--verbose"]);
+        assert_eq!(help.options[0].value, None);
+        let top = parse_top_level("demo", "Options:\n  --verbose...  Verbose output\n");
+        assert_eq!(top.options, [("--verbose".into(), "Verbose output".into())]);
+        let script = render("demo", &BTreeMap::from([(vec![], help)]));
+        assert!(script.contains("'*-v[Verbose output]'"), "{script}");
+        assert!(script.contains("'*--verbose[Verbose output]'"), "{script}");
+        assert!(script.contains("'(-q --quiet)--quiet[Quiet output]'"));
+        assert!(script.contains("'(--include)--include=[Input files]:FILE:_files'"));
+    }
 
     #[test]
     fn 子のヘルプが取れなくても親と他の子の補完は残す() {

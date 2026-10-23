@@ -371,8 +371,15 @@ pub fn highlight_buffer(buffer: &str, names: ShellNames) -> Vec<Span> {
                 pos += 1;
                 while pos < chars.len() && chars[pos] != '"' {
                     if chars[pos] == '\\' && pos + 1 < chars.len() {
-                        logical.push(chars[pos]);
-                        pos += 1;
+                        let next = chars[pos + 1];
+                        // 行継続は除き、ダブルクォートでエスケープできる文字だけ `\` を外す。
+                        if next == '\n' {
+                            pos += 2;
+                            continue;
+                        }
+                        if matches!(next, '$' | '`' | '"' | '\\' | '!') {
+                            pos += 1;
+                        }
                     }
                     logical.push(chars[pos]);
                     pos += 1;
@@ -2244,6 +2251,31 @@ mod tests {
         assert_eq!(cmd.style, "fg=green");
         let quote = find_span(&spans, 2, 6).expect("クォートセグメントスパンが必要");
         assert_eq!(quote.style, "fg=yellow");
+    }
+
+    #[test]
+    fn ダブルクォート内のエスケープを論理語へ復元する() {
+        for (buffer, name) in [
+            (r#"cmd"\$"tail"#, "cmd$tail"),
+            (r#"cmd"\`"tail"#, "cmd`tail"),
+            (r#"cmd"\""tail"#, "cmd\"tail"),
+            (r#"cmd"\\"tail"#, "cmd\\tail"),
+            (r#"cmd"\q"tail"#, "cmd\\qtail"),
+            ("cmd\"\\界\"tail", "cmd\\界tail"),
+            ("cmd\"\\\n\"tail", "cmdtail"),
+        ] {
+            let spans = highlight_buffer(
+                buffer,
+                ShellNames {
+                    functions: name,
+                    ..ShellNames::default()
+                },
+            );
+            assert_eq!(spans[0].style, "fg=green", "{buffer:?}");
+            assert_eq!((spans[0].start, spans[0].end), (0, buffer.chars().count()));
+            assert_eq!(spans[1].style, "fg=yellow");
+            assert_eq!(span_styles(buffer, name, "")[0].1, "fg=red,bold");
+        }
     }
 
     #[test]
