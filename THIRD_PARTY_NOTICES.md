@@ -11,7 +11,7 @@ Identical license documents are reproduced once, with references from each packa
 OR (and the legacy / notation) denotes alternative licenses; AND denotes combined terms.
 Reproducing alternative license texts does not turn OR into AND.
 
-Cargo.lock SHA-256: `153d63e2e9d19994bcb9bdab6a29321565fa3654951a34237d4673127e630ad5`
+Cargo.lock SHA-256: `90de449a6d972732566471f2c7f13a51d6f2c656debcaee445dabf9bd717374c`
 
 ## MPL source availability
 
@@ -91,7 +91,7 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | iana-time-zone-haiku 0.1.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/iana-time-zone-haiku/iana-time-zone-haiku-0.1.2.crate) | [LICENSE-APACHE](#document-42); [LICENSE-MIT](#document-43) |
 | ident_case 1.0.1 | MIT/Apache-2.0 | [source](https://static.crates.io/crates/ident_case/ident_case-1.0.1.crate) | [LICENSE](#document-44) |
 | indexmap 2.14.2 | Apache-2.0 OR MIT | [source](https://static.crates.io/crates/indexmap/indexmap-2.14.2.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-45) |
-| indoc 2.0.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/indoc/indoc-2.0.7.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
+| indoc 2.0.8 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/indoc/indoc-2.0.8.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | instability 0.3.14 | MIT | [source](https://static.crates.io/crates/instability/instability-0.3.14.crate) | [LICENSE.md](#document-46) |
 | is_terminal_polyfill 1.70.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/is_terminal_polyfill/is_terminal_polyfill-1.70.2.crate) | [LICENSE-APACHE](#document-5); [LICENSE-MIT](#document-6) |
 | itertools 0.14.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/itertools/itertools-0.14.0.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-33) |
@@ -158,9 +158,9 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | time 0.3.55 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/time/time-0.3.55.crate) | [LICENSE-Apache](#document-63); [LICENSE-MIT](#document-88) |
 | time-core 0.1.9 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/time-core/time-core-0.1.9.crate) | [LICENSE-Apache](#document-63); [LICENSE-MIT](#document-88) |
 | tinyvec 1.13.3 | Zlib OR Apache-2.0 OR MIT | [source](https://static.crates.io/crates/tinyvec/tinyvec-1.13.3.crate) | [LICENSE-APACHE.md](#document-84); [LICENSE-MIT.md](#document-89); [LICENSE-ZLIB.md](#document-90) |
-| toml 1.1.7+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml/toml-1.1.7+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
+| toml 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml/toml-1.1.8+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | toml_datetime 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_datetime/toml_datetime-1.1.2+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
-| toml_parser 1.1.4+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_parser/toml_parser-1.1.4+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
+| toml_parser 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_parser/toml_parser-1.1.5+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | toml_writer 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_writer/toml_writer-1.1.3+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | typenum 1.20.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/typenum/typenum-1.20.1.crate) | [LICENSE](#document-91); [LICENSE-APACHE](#document-92); [LICENSE-MIT](#document-93) |
 | ucd-trie 0.1.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/ucd-trie/ucd-trie-0.1.7.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-60) |
