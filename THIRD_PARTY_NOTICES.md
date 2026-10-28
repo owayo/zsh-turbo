@@ -11,7 +11,7 @@ Identical license documents are reproduced once, with references from each packa
 OR (and the legacy / notation) denotes alternative licenses; AND denotes combined terms.
 Reproducing alternative license texts does not turn OR into AND.
 
-Cargo.lock SHA-256: `90de449a6d972732566471f2c7f13a51d6f2c656debcaee445dabf9bd717374c`
+Cargo.lock SHA-256: `7b9db9ff570a6a82285ff63ad4790712712a3bb5f3a200d3f810ecf3382180d8`
 
 ## MPL source availability
 
@@ -47,7 +47,7 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | block-buffer 0.12.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/block-buffer/block-buffer-0.12.1.crate) | [LICENSE-APACHE](#document-10); [LICENSE-MIT](#document-11) |
 | bumpalo 3.20.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/bumpalo/bumpalo-3.20.3.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-12) |
 | castaway 0.2.4 | MIT | [source](https://static.crates.io/crates/castaway/castaway-0.2.4.crate) | [LICENSE](#document-13) |
-| cc 1.6.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/cc/cc-1.6.0.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
+| cc 1.8.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/cc/cc-1.8.0.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
 | cfg-if 1.0.5 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/cfg-if/cfg-if-1.0.5.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
 | chrono 0.4.45 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/chrono/chrono-0.4.45.crate) | [LICENSE.txt](#document-15) |
 | clap 4.6.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/clap/clap-4.6.7.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
@@ -68,7 +68,7 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | darling 0.24.1 | MIT | [source](https://static.crates.io/crates/darling/darling-0.24.1.crate) | [LICENSE](#document-24) |
 | darling_core 0.24.1 | MIT | [source](https://static.crates.io/crates/darling_core/darling_core-0.24.1.crate) | [LICENSE](#document-24) |
 | darling_macro 0.24.1 | MIT | [source](https://static.crates.io/crates/darling_macro/darling_macro-0.24.1.crate) | [LICENSE](#document-24) |
-| deranged 0.5.8 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/deranged/deranged-0.5.8.crate) | [LICENSE-Apache](#document-25); [LICENSE-MIT](#document-26) |
+| deranged 0.5.9 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/deranged/deranged-0.5.9.crate) | [LICENSE-Apache](#document-25); [LICENSE-MIT](#document-26) |
 | derive_more 2.1.1 | MIT | [source](https://static.crates.io/crates/derive_more/derive_more-2.1.1.crate) | [LICENSE](#document-27) |
 | derive_more-impl 2.1.1 | MIT | [source](https://static.crates.io/crates/derive_more-impl/derive_more-impl-2.1.1.crate) | [LICENSE](#document-27) |
 | digest 0.11.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/digest/digest-0.11.3.crate) | [LICENSE-APACHE](#document-10); [LICENSE-MIT](#document-28) |
@@ -76,7 +76,7 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | dirs-sys 0.5.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/dirs-sys/dirs-sys-0.5.0.crate) | [LICENSE-APACHE](#document-29); [LICENSE-MIT](#document-30) |
 | document-features 0.2.12 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/document-features/document-features-0.2.12.crate) | [LICENSE-APACHE](#document-31); [LICENSE-MIT](#document-32) |
 | either 1.19.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/either/either-1.19.0.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-33) |
-| equivalent 1.0.2 | Apache-2.0 OR MIT | [source](https://static.crates.io/crates/equivalent/equivalent-1.0.2.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-34) |
+| equivalent 1.0.3 | Apache-2.0 OR MIT | [source](https://static.crates.io/crates/equivalent/equivalent-1.0.3.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-34) |
 | errno 0.3.14 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/errno/errno-0.3.14.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-35) |
 | find-msvc-tools 0.1.14 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/find-msvc-tools/find-msvc-tools-0.1.14.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
 | foldhash 0.2.0 | Zlib | [source](https://static.crates.io/crates/foldhash/foldhash-0.2.0.crate) | [LICENSE](#document-36) |
@@ -103,7 +103,7 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | libredox 0.1.25 | MIT | [source](https://static.crates.io/crates/libredox/libredox-0.1.25.crate) | [LICENSE](#document-51) |
 | line-clipping 0.3.8 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/line-clipping/line-clipping-0.3.8.crate) | [LICENSE-APACHE](#document-52); [LICENSE-MIT](#document-53) |
 | linux-raw-sys 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [source](https://static.crates.io/crates/linux-raw-sys/linux-raw-sys-0.12.1.crate) | [COPYRIGHT](#document-54); [LICENSE-APACHE](#document-7); [LICENSE-Apache-2.0_WITH_LLVM-exception](#document-55); [LICENSE-MIT](#document-2) |
-| litrs 1.0.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/litrs/litrs-1.0.0.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-56) |
+| litrs 1.0.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/litrs/litrs-1.0.1.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-56) |
 | lock_api 0.4.14 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/lock_api/lock_api-0.4.14.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-57) |
 | log 0.4.34 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/log/log-0.4.34.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-9) |
 | lru 0.18.5 | MIT | [source](https://static.crates.io/crates/lru/lru-0.18.5.crate) | [LICENSE](#document-58) |
@@ -137,22 +137,22 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | serde 1.0.229 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/serde/serde-1.0.229.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | serde_core 1.0.229 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/serde_core/serde_core-1.0.229.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | serde_derive 1.0.229 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/serde_derive/serde_derive-1.0.229.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
-| serde_json 1.0.151 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/serde_json/serde_json-1.0.151.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
+| serde_json 1.0.154 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/serde_json/serde_json-1.0.154.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | serde_spanned 1.1.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/serde_spanned/serde_spanned-1.1.2.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | serde_yaml_ng 0.10.0 | MIT | [source](https://static.crates.io/crates/serde_yaml_ng/serde_yaml_ng-0.10.0.crate) | [LICENSE](#document-77) |
-| sha2 0.11.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/sha2/sha2-0.11.0.crate) | [LICENSE-APACHE](#document-10); [LICENSE-MIT](#document-78) |
+| sha2 0.11.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/sha2/sha2-0.11.1.crate) | [LICENSE-APACHE](#document-10); [LICENSE-MIT](#document-78) |
 | shlex 2.0.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/shlex/shlex-2.0.1.crate) | [LICENSE-APACHE](#document-79); [LICENSE-MIT](#document-80) |
 | signal-hook 0.3.18 | Apache-2.0/MIT | [source](https://static.crates.io/crates/signal-hook/signal-hook-0.3.18.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-81) |
 | signal-hook-mio 0.2.5 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/signal-hook-mio/signal-hook-mio-0.2.5.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-81) |
 | signal-hook-registry 1.4.8 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/signal-hook-registry/signal-hook-registry-1.4.8.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-81) |
 | slab 0.4.12 | MIT | [source](https://static.crates.io/crates/slab/slab-0.4.12.crate) | [LICENSE](#document-82) |
-| smallvec 1.16.2 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/smallvec/smallvec-1.16.2.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-83) |
+| smallvec 1.16.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/smallvec/smallvec-1.16.3.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-83) |
 | static_assertions 1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/static_assertions/static_assertions-1.1.0.crate) | [LICENSE-APACHE](#document-84); [LICENSE-MIT](#document-85) |
 | strsim 0.11.1 | MIT | [source](https://static.crates.io/crates/strsim/strsim-0.11.1.crate) | [LICENSE](#document-86) |
 | strum 0.28.0 | MIT | [source](https://static.crates.io/crates/strum/strum-0.28.0.crate) | [LICENSE](#document-87) |
 | strum_macros 0.28.0 | MIT | [source](https://static.crates.io/crates/strum_macros/strum_macros-0.28.0.crate) | [LICENSE](#document-87) |
 | syn 2.0.119 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/syn/syn-2.0.119.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
-| syn 3.0.6 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/syn/syn-3.0.6.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
+| syn 3.0.9 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/syn/syn-3.0.9.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | thiserror 2.0.21 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/thiserror/thiserror-2.0.21.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | thiserror-impl 2.0.21 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/thiserror-impl/thiserror-impl-2.0.21.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | time 0.3.55 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/time/time-0.3.55.crate) | [LICENSE-Apache](#document-63); [LICENSE-MIT](#document-88) |
@@ -164,7 +164,7 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | toml_writer 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_writer/toml_writer-1.1.3+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | typenum 1.20.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/typenum/typenum-1.20.1.crate) | [LICENSE](#document-91); [LICENSE-APACHE](#document-92); [LICENSE-MIT](#document-93) |
 | ucd-trie 0.1.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/ucd-trie/ucd-trie-0.1.7.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-60) |
-| unicode-ident 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | [source](https://static.crates.io/crates/unicode-ident/unicode-ident-1.0.26.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2); [LICENSE-UNICODE](#document-94) |
+| unicode-ident 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | [source](https://static.crates.io/crates/unicode-ident/unicode-ident-1.0.27.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2); [LICENSE-UNICODE](#document-94) |
 | unicode-normalization 0.1.25 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-normalization/unicode-normalization-0.1.25.crate) | [COPYRIGHT](#document-95); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-40) |
 | unicode-segmentation 1.13.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-segmentation/unicode-segmentation-1.13.3.crate) | [COPYRIGHT](#document-95); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-40) |
 | unicode-truncate 2.0.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-truncate/unicode-truncate-2.0.1.crate) | [COPYRIGHT](#document-95); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-96) |

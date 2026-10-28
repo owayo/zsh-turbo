@@ -182,7 +182,7 @@ For example, if `ls -l` suggests `/path/to/hoge/fuga`, each Right Arrow press ac
 
 Equally strong matches are ranked by frequency, then recency. `Ctrl+R` searches history using the current input, or the entire history when the input is empty. Choose with Up/Down or Tab, press Enter to insert, then Enter again to execute. Esc / Ctrl+C restores the original input and cursor. Set the menu limit in **Suggest → Max Suggestions**; the default is 10.
 
-History suggestions prefer a prefix match over substring and fuzzy matches across the entire history file. Incomplete final entries and fragments of multiline commands are excluded, including fragments at the 64 KiB read boundary. Only the top candidates are selected, avoiding a full sort of all matches.
+History suggestions prefer a prefix match over substring and fuzzy matches across the entire history file. Substring positions and fuzzy lengths are compared in characters, including Japanese text. Incomplete final entries, fragments of multiline commands, and entries with invalid UTF-8 are excluded. History decoding reuses the read buffer. Only the top candidates are selected, avoiding a full sort of all matches.
 
 Ghost suggestions and Ctrl+R use history recorded in the directory where each command ran. Commands from other directories and older shared history without directory metadata are excluded. Regular Up/Down navigation still uses shared shell history. Suggestions accumulate as you run commands in each directory after enabling this feature. Records live in `${XDG_STATE_HOME:-~/.local/state}/zsh-turbo/directory-history/`; set `[suggest].record_directory_history = false` to stop new records. See [stored content and deletion](docs/configuration.md#directory-history).
 

@@ -1,6 +1,5 @@
 use crate::{project_tasks, task_usage};
-use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::collections::{HashMap, hash_map::Entry};
 use std::path::{Path, PathBuf};
 
 /// サジェストの検索戦略
@@ -20,100 +19,46 @@ impl Strategy {
     }
 }
 
-const CHUNK_SIZE: u64 = 65536; // ファイル末尾から 64KB ずつ読む
-
-/// zsh histfile の metafy エスケープ (0x83 + byte^0x20) を復元する。
-/// zsh は特定の特殊バイトを Meta (0x83) エスケープして保存するため、非 ASCII
-/// コマンドはディスク上では有効な UTF-8 でなく、復元しないと候補が文字化けし
-/// 生 UTF-8 のクエリとも一致しない。
-/// Meta ペアの 2 バイト目は必ず 0x80 以上で改行になり得ないため、
-/// 行分割の前後どちらで呼んでも安全。
-fn unmetafy(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut iter = bytes.iter().copied();
-    while let Some(b) = iter.next() {
-        if b == 0x83 {
-            match iter.next() {
-                Some(next) => out.push(next ^ 0x20),
-                None => break, // 末尾の孤立 Meta (書きかけ) は捨てる
-            }
-        } else {
-            out.push(b);
-        }
-    }
-    out
-}
-
-/// 末尾が改行で終わらない場合、zsh が追記中の書きかけ最終行を捨てる。
-/// zsh は 1 エントリを必ず改行終端で書くため、完全なファイルでは何もしない。
-fn drop_partial_tail(mut text: String) -> String {
-    if !text.is_empty() && !text.ends_with('\n') {
-        match text.rfind('\n') {
-            Some(idx) => text.truncate(idx + 1),
-            None => text.clear(),
-        }
-    }
-    text
-}
-
-/// 履歴ファイルを末尾からチャンク単位で読み込む。
-/// 全ファイル読み込みに比べ、直近のマッチ検索が高速。
-fn read_history_chunks(path: &PathBuf) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let file_len = file.metadata().ok()?.len();
-    if file_len == 0 {
-        return None;
-    }
-    let read_start = file_len.saturating_sub(CHUNK_SIZE);
-    // 境界直前の 2 バイトも読み、直前の物理行が継続行か判定する。
-    let prefix_len = read_start.min(2) as usize;
-    file.seek(SeekFrom::Start(read_start - prefix_len as u64))
-        .ok()?;
-    let read_len = (file_len - read_start) as usize + prefix_len;
-    let mut buf = vec![0u8; read_len];
-    file.read_exact(&mut buf).ok()?;
-    // ファイル途中から読んだ場合、先頭の不完全な行と、その継続部分を捨てる。
-    let slice: &[u8] = if read_start > 0 {
-        let Some(first_end_offset) = buf[prefix_len..].iter().position(|&b| b == b'\n') else {
-            return Some(String::new());
-        };
-        let first_end = prefix_len + first_end_offset;
-        let mut start = first_end + 1;
-        let mut continued = continues_to_next_line_bytes(&buf[..first_end]);
-        while continued {
-            let Some(end_offset) = buf[start..].iter().position(|&b| b == b'\n') else {
-                return Some(String::new());
-            };
-            let end = start + end_offset;
-            continued = continues_to_next_line_bytes(&buf[start..end]);
-            start = end + 1;
-        }
-        &buf[start..]
-    } else {
-        &buf
+/// metafy の復元結果を同じバッファへ詰め、履歴全体の複製を避ける。
+fn unmetafy(mut bytes: Vec<u8>) -> Vec<u8> {
+    let Some(first) = memchr::memchr(0x83, &bytes) else {
+        return bytes;
     };
-    Some(drop_partial_tail(
-        String::from_utf8_lossy(&unmetafy(slice)).into_owned(),
-    ))
+    let (mut read, mut write) = (first, first);
+    while read < bytes.len() {
+        let b = bytes[read];
+        read += 1;
+        bytes[write] = if b == 0x83 {
+            let Some(&next) = bytes.get(read) else {
+                break;
+            };
+            read += 1;
+            next ^ 0x20
+        } else {
+            b
+        };
+        write += 1;
+    }
+    bytes.truncate(write);
+    bytes
 }
 
-/// 履歴ファイルを全読み込みする（末尾チャンクでマッチしなかった場合のフォールバック）。
-fn read_history_full(path: &PathBuf) -> Option<String> {
-    let content = std::fs::read(path).ok()?;
-    Some(drop_partial_tail(
-        String::from_utf8_lossy(&unmetafy(&content)).into_owned(),
-    ))
+/// zsh が追記中の、改行で終わらない最終行を捨てる。
+fn drop_partial_tail(mut bytes: Vec<u8>) -> Vec<u8> {
+    if !bytes.ends_with(b"\n") {
+        let end = memchr::memrchr(b'\n', &bytes).map_or(0, |i| i + 1);
+        bytes.truncate(end);
+    }
+    bytes
 }
 
-/// zsh histfile の物理行が次の物理行へ継続する (`\` 終端) かどうか。
-/// zsh は複数行コマンドの改行を `\`+LF で書き、読むときは `\\` を含めて `\` で終わる行を
-/// すべて継続とみなす (readhistline と同じ規則)。`\` (と空白) で終わるコマンドは
-/// 書くときに空白を 1 つ足すため、継続と取り違えない。
-fn continues_to_next_line(line: &str) -> bool {
-    continues_to_next_line_bytes(line.as_bytes())
+/// 全履歴を同じ基準で順位付けするため、末尾だけでなく全体を読む。
+fn read_history(path: &Path) -> Option<Vec<u8>> {
+    Some(drop_partial_tail(unmetafy(std::fs::read(path).ok()?)))
 }
 
-fn continues_to_next_line_bytes(line: &[u8]) -> bool {
+/// zsh は複数行コマンドの内部改行を `\`+LF で保存する。
+fn continues_to_next_line(line: &[u8]) -> bool {
     line.ends_with(b"\\")
 }
 
@@ -136,17 +81,22 @@ fn history_command(line: &str) -> &str {
 /// 1 行プロトコル (zsh 側の `read -r`) で運べないため候補にしない。
 /// zsh の readhistline と同じく LF だけで分ける (`lines()` は行末の CR も削り、
 /// `\`+CR の行を継続行と取り違える)。
-fn history_candidates_rev(text: &str) -> impl Iterator<Item = &str> {
-    let mut lines = text.split_terminator('\n').rev().peekable();
+fn history_candidates_rev(text: &[u8]) -> impl Iterator<Item = &str> {
+    let mut remaining = text.strip_suffix(b"\n").unwrap_or(text);
     std::iter::from_fn(move || {
-        while let Some(line) = lines.next() {
+        while !remaining.is_empty() {
+            let separator = memchr::memrchr(b'\n', remaining);
             // ファイル順で 1 つ前の物理行が `\` 終端なら、この行は継続部分
-            let prev_continues = lines
-                .peek()
-                .is_some_and(|prev| continues_to_next_line(prev));
+            let prev_continues = separator.is_some_and(|i| i > 0 && remaining[i - 1] == b'\\');
+            let line = &remaining[separator.map_or(0, |i| i + 1)..];
+            remaining = &remaining[..separator.unwrap_or(0)];
             if prev_continues || continues_to_next_line(line) {
                 continue;
             }
+            // 不正な UTF-8 を別の文字列に置き換えて採用しない。
+            let Ok(line) = std::str::from_utf8(line) else {
+                continue;
+            };
             return Some(history_command(line));
         }
         None
@@ -194,7 +144,7 @@ pub fn preferred_task(
         _ => HashMap::new(),
     };
     let history = resolve_history_path(history_file)
-        .and_then(|path| read_ranked_history(&path))
+        .and_then(|path| read_history(&path))
         .map(|text| task_calls(command, &text))
         .unwrap_or_default();
     task_usage::preferred(
@@ -206,7 +156,7 @@ pub fn preferred_task(
 
 /// 履歴全体から `command` のタスクの呼び出しをタスク名ごとに数える。
 /// 呼び出しの判定は利用記録と同じ規則 (`project_tasks::invocation`) を使う。
-fn task_calls(command: &str, text: &str) -> HashMap<String, task_usage::HistoryUse> {
+fn task_calls(command: &str, text: &[u8]) -> HashMap<String, task_usage::HistoryUse> {
     let mut calls = HashMap::<String, task_usage::HistoryUse>::new();
     for (newest, line) in history_candidates_rev(text).enumerate() {
         if !line.starts_with(command) {
@@ -237,25 +187,17 @@ pub fn get_history_suggestion(
 
     let history_path = resolve_history_path(history_file)?;
 
-    let text = read_ranked_history(&history_path)?;
+    let text = read_history(&history_path)?;
     search_text(query, &text, strategy)
 }
 
-fn read_ranked_history(path: &PathBuf) -> Option<String> {
-    if std::fs::metadata(path).ok()?.len() > CHUNK_SIZE {
-        read_history_full(path)
-    } else {
-        read_history_chunks(path)
-    }
-}
-
-fn search_text(query: &str, text: &str, strategy: &Strategy) -> Option<String> {
+fn search_text(query: &str, text: &[u8], strategy: &Strategy) -> Option<String> {
     ranked_candidates(query, text, strategy, 1)
         .into_iter()
         .next()
 }
 
-fn ranked_candidates(query: &str, text: &str, strategy: &Strategy, max: usize) -> Vec<String> {
+fn ranked_candidates(query: &str, text: &[u8], strategy: &Strategy, max: usize) -> Vec<String> {
     if max == 0 || query.chars().any(char::is_control) {
         return Vec::new();
     }
@@ -265,14 +207,22 @@ fn ranked_candidates(query: &str, text: &str, strategy: &Strategy, max: usize) -
         if cmd.is_empty() || cmd == query {
             continue;
         }
-        if let Some((_, frequency, _)) = matches.get_mut(cmd) {
-            *frequency = frequency.saturating_add(1);
+        let prefix = cmd.starts_with(query);
+        if !prefix && matches!(strategy, Strategy::Prefix) {
             continue;
         }
-        let quality = if cmd.starts_with(query) {
+        let slot = match matches.entry(cmd) {
+            Entry::Occupied(mut seen) => {
+                let frequency = &mut seen.get_mut().1;
+                *frequency = frequency.saturating_add(1);
+                continue;
+            }
+            Entry::Vacant(slot) => slot,
+        };
+        let quality = if prefix {
             (0, 0)
-        } else if matches!(strategy, Strategy::Substring | Strategy::Fuzzy) && cmd.contains(query) {
-            (1, cmd.find(query).unwrap())
+        } else if let Some(at) = cmd.find(query) {
+            (1, cmd[..at].chars().count())
         } else if matches!(strategy, Strategy::Fuzzy) && fuzzy_match(query, cmd) {
             (2, cmd.chars().count().saturating_sub(query_chars))
         } else {
@@ -281,7 +231,7 @@ fn ranked_candidates(query: &str, text: &str, strategy: &Strategy, max: usize) -
         if cmd.chars().any(char::is_control) {
             continue;
         }
-        matches.insert(cmd, (quality, 1, recency));
+        slot.insert((quality, 1, recency));
     }
     let rank = |(_, (quality, frequency, recency)): &(&str, ((u8, usize), usize, usize))| {
         (*quality, std::cmp::Reverse(*frequency), *recency)
@@ -323,8 +273,7 @@ pub fn get_completions_with_strategy(
     if project.len() == max {
         return project;
     }
-    let Some(text) = resolve_history_path(history_file).and_then(|path| read_ranked_history(&path))
-    else {
+    let Some(text) = resolve_history_path(history_file).and_then(|path| read_history(&path)) else {
         return project;
     };
     for candidate in ranked_candidates(query, &text, strategy, max) {
@@ -587,7 +536,7 @@ mod tests {
     #[test]
     fn search_text_prefix戦略で先頭一致を返す() {
         let text = "git status\ngit push\nls -la";
-        let result = search_text("git", text, &Strategy::Prefix);
+        let result = search_text("git", text.as_bytes(), &Strategy::Prefix);
         assert!(result.is_some());
         assert!(result.unwrap().starts_with("git"));
     }
@@ -595,7 +544,7 @@ mod tests {
     #[test]
     fn search_text_完全一致はスキップする() {
         let text = "git\ngit push";
-        let result = search_text("git", text, &Strategy::Prefix);
+        let result = search_text("git", text.as_bytes(), &Strategy::Prefix);
         // "git" と完全一致する行はスキップし、"git push" を返す
         assert_eq!(result, Some("git push".to_string()));
     }
@@ -603,7 +552,7 @@ mod tests {
     #[test]
     fn search_text_マッチなしでnone() {
         let text = "ls -la\ncd /tmp";
-        let result = search_text("git", text, &Strategy::Prefix);
+        let result = search_text("git", text.as_bytes(), &Strategy::Prefix);
         assert!(result.is_none());
     }
 
@@ -611,20 +560,20 @@ mod tests {
     fn search_text_substring戦略で部分一致を返す() {
         let text = "docker run nginx\nkubectl get pods";
         // "nginx" は prefix マッチしないが substring マッチする
-        let result = search_text("nginx", text, &Strategy::Substring);
+        let result = search_text("nginx", text.as_bytes(), &Strategy::Substring);
         assert_eq!(result, Some("docker run nginx".to_string()));
     }
 
     #[test]
     fn search_text_fuzzy戦略でファジーマッチを返す() {
         let text = "git push origin main";
-        let result = search_text("gpom", text, &Strategy::Fuzzy);
+        let result = search_text("gpom", text.as_bytes(), &Strategy::Fuzzy);
         assert_eq!(result, Some("git push origin main".to_string()));
     }
 
     #[test]
     fn search_text_空テキストでnone() {
-        let result = search_text("git", "", &Strategy::Prefix);
+        let result = search_text("git", b"", &Strategy::Prefix);
         assert!(result.is_none());
     }
 
@@ -644,44 +593,44 @@ mod tests {
     }
 
     // -------------------------------------------------------
-    // 分割読み込みと全体読み込みのテスト
+    // 履歴読み込みのテスト
     // -------------------------------------------------------
 
     #[test]
-    fn read_history_chunks_空ファイルはnone() {
+    fn read_history_空ファイルは空の履歴() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("empty_history");
         std::fs::write(&path, "").unwrap();
-        assert!(read_history_chunks(&path).is_none());
+        assert_eq!(read_history(&path), Some(Vec::new()));
     }
 
     #[test]
-    fn read_history_chunks_小さいファイルを読める() {
+    fn read_history_小さいファイルを読める() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("small_history");
         std::fs::write(&path, "ls\ncd /tmp\ngit status\n").unwrap();
-        let result = read_history_chunks(&path);
+        let result = read_history(&path);
         assert!(result.is_some());
         let content = result.unwrap();
-        assert!(content.contains("git status"));
+        assert!(content.windows(10).any(|s| s == b"git status"));
     }
 
     #[test]
-    fn read_history_full_ファイル全体を読める() {
+    fn read_history_ファイル全体を読める() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("full_history");
         std::fs::write(&path, "first\nlast\n").unwrap();
-        let result = read_history_full(&path);
+        let result = read_history(&path);
         assert!(result.is_some());
         let content = result.unwrap();
-        assert!(content.contains("first"));
-        assert!(content.contains("last"));
+        assert!(content.starts_with(b"first\n"));
+        assert!(content.ends_with(b"last\n"));
     }
 
     #[test]
-    fn read_history_full_存在しないファイルはnone() {
+    fn read_history_存在しないファイルはnone() {
         let path = PathBuf::from("/tmp/nonexistent_history_xyz_999");
-        assert!(read_history_full(&path).is_none());
+        assert!(read_history(&path).is_none());
     }
 
     // -------------------------------------------------------
@@ -745,40 +694,23 @@ mod tests {
     }
 
     #[test]
-    fn read_history_chunks_先頭の不完全な行を捨てる() {
-        // CHUNK_SIZE (64KB) を超えるファイル先頭に長いガード行を置き、
-        // 末尾チャンクの先頭が不完全な行になる状況を再現する。
+    fn read_history_長い行も途中から切らず全体を読む() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
-        // 行頭に必ず判別可能な接頭辞 "broken-" を含む長い 1 行を先頭に置く
-        let broken_line = format!("broken-{}\n", "x".repeat(80_000));
-        let valid_line = "valid-cmd\n";
-        let content = format!("{broken_line}{valid_line}");
+        let content = format!("long-{}\nvalid-cmd\n", "x".repeat(80_000));
         std::fs::write(&path, &content).unwrap();
-
-        let result = read_history_chunks(&path).expect("チャンク読み込みは成功すべき");
-        // 末尾の有効な行は必ず含まれる
-        assert!(
-            result.contains("valid-cmd"),
-            "末尾の有効な行が読み込まれていない"
-        );
-        // 先頭の不完全な行（broken-xxxxx... の途中）は除外されている
-        assert!(
-            !result.contains("broken-"),
-            "不完全な先頭行が含まれている: {:?}",
-            result.chars().take(50).collect::<String>()
-        );
+        assert_eq!(read_history(&path).unwrap(), content.as_bytes());
     }
 
     // -------------------------------------------------------
-    // 補完候補取得: ファイル全体読み込みへのフォールバック
+    // 補完候補取得: 大きい履歴の全体検索
     // -------------------------------------------------------
 
     #[test]
-    fn get_completions_フルファイルフォールバックで追加候補を取得() {
+    fn get_completions_大きい履歴の先頭も候補にする() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
-        // CHUNK_SIZE (64KB) より大きいファイルを作成し、先頭に一意なコマンドを配置
+        // 64 KiB より大きいファイルを作成し、先頭に一意なコマンドを配置
         let unique_cmd = "git unique-first-command";
         let mut content = format!("{unique_cmd}\n");
         // 64KB を超えるために行を追加
@@ -789,10 +721,10 @@ mod tests {
         std::fs::write(&path, &content).unwrap();
         // max を大きくして全候補を取得
         let results = get_completions("git", Some(path.to_str().unwrap()), 100);
-        // フォールバックにより先頭のコマンドも取得できる
+        // 先頭のコマンドも取得できる
         assert!(
             results.iter().any(|r| r == unique_cmd),
-            "フルファイルフォールバックで先頭のコマンドが取得されていない: {:?}",
+            "先頭のコマンドが取得されていない: {:?}",
             results
         );
     }
@@ -899,7 +831,7 @@ mod tests {
     #[test]
     fn search_text_マルチバイト文字を含むクエリ() {
         let text = "echo こんにちは\necho さようなら";
-        let result = search_text("echo こ", text, &Strategy::Prefix);
+        let result = search_text("echo こ", text.as_bytes(), &Strategy::Prefix);
         assert_eq!(result, Some("echo こんにちは".to_string()));
     }
 
@@ -920,7 +852,7 @@ mod tests {
 
     /// zsh が histfile 書き込み時に行う metafy を再現する (テスト用)。
     /// 0x83 (Meta) を含む特殊域のバイトを `0x83 + byte^0x20` にエスケープする。
-    fn metafy(raw: &str) -> Vec<u8> {
+    pub(super) fn metafy(raw: &str) -> Vec<u8> {
         let mut out = Vec::new();
         for &b in raw.as_bytes() {
             if (0x83..=0xa2).contains(&b) {
@@ -934,14 +866,18 @@ mod tests {
     }
 
     #[test]
-    fn read_history_chunks_マルチバイト末尾でも壊れない() {
+    fn read_history_メタファイされた日本語を復元する() {
         // 末尾に多バイト文字を含むファイルでもパニック・データ破損しない。
         // zsh は非 ASCII を metafy して保存するため、実際のディスク形式で書く。
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
         std::fs::write(&path, metafy("ls\necho 日本語コマンド\n")).unwrap();
-        let result = read_history_chunks(&path).expect("読み込みは成功すべき");
-        assert!(result.contains("日本語コマンド"));
+        let result = read_history(&path).expect("読み込みは成功すべき");
+        assert!(
+            String::from_utf8(result)
+                .unwrap()
+                .contains("日本語コマンド")
+        );
     }
 
     #[test]
@@ -965,17 +901,20 @@ mod tests {
     #[test]
     fn unmetafy_メタペアを復元する() {
         // 「日」(E6 97 A5) はディスク上 E6 83 B7 A5 と保存される
-        assert_eq!(unmetafy(&[0xe6, 0x83, 0xb7, 0xa5]), vec![0xe6, 0x97, 0xa5]);
+        assert_eq!(
+            unmetafy(vec![0xe6, 0x83, 0xb7, 0xa5]),
+            vec![0xe6, 0x97, 0xa5]
+        );
     }
 
     #[test]
     fn unmetafy_プレーンなバイト列はそのまま() {
-        assert_eq!(unmetafy(b"echo hello"), b"echo hello".to_vec());
+        assert_eq!(unmetafy(b"echo hello".to_vec()), b"echo hello".to_vec());
     }
 
     #[test]
     fn unmetafy_末尾の孤立メタは捨てる() {
-        assert_eq!(unmetafy(&[0x61, 0x83]), vec![0x61]);
+        assert_eq!(unmetafy(vec![0x61, 0x83]), vec![0x61]);
     }
 
     #[test]
@@ -999,23 +938,26 @@ mod tests {
 
     #[test]
     fn continues_to_next_line_の判定規則() {
-        assert!(continues_to_next_line("echo foo\\"));
+        assert!(continues_to_next_line(b"echo foo\\"));
         // zsh の readhistline は `\\` 終端も継続とみなす (`echo first \` + 改行 + 続き を
         // 入力すると、改行の前の `\` に継続の `\` が足されて `echo first \\` と書かれる)
-        assert!(continues_to_next_line("echo foo\\\\"));
+        assert!(continues_to_next_line(b"echo foo\\\\"));
         // 実際に `\` で終わるコマンドは `\ `+LF で書かれる
-        assert!(!continues_to_next_line("echo foo\\ "));
-        assert!(!continues_to_next_line("echo foo"));
+        assert!(!continues_to_next_line(b"echo foo\\ "));
+        assert!(!continues_to_next_line(b"echo foo"));
     }
 
     #[test]
     fn 行継続を含む複数行の履歴は断片を候補にしない() {
         // zsh 5.9 で `echo first \` Enter `second-part` と入力したときの書き方
         let text = ": 1:0;echo first \\\\\nsecond-part\n: 2:0;git status\n";
-        assert_eq!(search_text("sec", text, &Strategy::Prefix), None);
-        assert_eq!(search_text("echo first", text, &Strategy::Prefix), None);
+        assert_eq!(search_text("sec", text.as_bytes(), &Strategy::Prefix), None);
         assert_eq!(
-            search_text("git", text, &Strategy::Prefix).as_deref(),
+            search_text("echo first", text.as_bytes(), &Strategy::Prefix),
+            None
+        );
+        assert_eq!(
+            search_text("git", text.as_bytes(), &Strategy::Prefix).as_deref(),
             Some("git status")
         );
     }
@@ -1033,7 +975,7 @@ mod tests {
         // zsh 5.9 が `print -sr -- $'echo slash-cr\\\r'` などを `fc -W` で書いた内容
         let text = ": 1:0;echo slash-cr\\\r\n: 2:0;echo next-entry\n: 3:0;echo crlf\r\n";
         assert_eq!(
-            search_text("echo n", text, &Strategy::Prefix).as_deref(),
+            search_text("echo n", text.as_bytes(), &Strategy::Prefix).as_deref(),
             Some("echo next-entry")
         );
     }
@@ -1041,7 +983,10 @@ mod tests {
     #[test]
     fn crを含むエントリは制御文字を含む履歴として候補にしない() {
         let text = ": 1:0;echo crlf\r\n: 2:0;ls\n";
-        assert_eq!(search_text("echo c", text, &Strategy::Prefix), None);
+        assert_eq!(
+            search_text("echo c", text.as_bytes(), &Strategy::Prefix),
+            None
+        );
         assert_eq!(history_command(": 1:0;echo crlf\r"), "echo crlf\r");
     }
 
@@ -1060,7 +1005,7 @@ mod tests {
         assert_eq!(parse_history_line("\\ls"), "\\ls");
         let text = "\\: > truncated.log\nls\n";
         assert_eq!(
-            search_text(": >", text, &Strategy::Prefix).as_deref(),
+            search_text(": >", text.as_bytes(), &Strategy::Prefix).as_deref(),
             Some(": > truncated.log")
         );
     }
@@ -1069,12 +1014,18 @@ mod tests {
     fn search_text_複数行コマンドの断片を候補にしない() {
         // `echo foo\` + `echo bar` は 1 つの複数行エントリ
         let text = "echo foo\\\necho bar\ngit status\n";
-        assert_eq!(search_text("echo f", text, &Strategy::Prefix), None);
+        assert_eq!(
+            search_text("echo f", text.as_bytes(), &Strategy::Prefix),
+            None
+        );
         // 継続の 2 行目 (body) も候補にしない
-        assert_eq!(search_text("echo b", text, &Strategy::Prefix), None);
+        assert_eq!(
+            search_text("echo b", text.as_bytes(), &Strategy::Prefix),
+            None
+        );
         // 単独行エントリは通常どおり候補になる
         assert_eq!(
-            search_text("git s", text, &Strategy::Prefix),
+            search_text("git s", text.as_bytes(), &Strategy::Prefix),
             Some("git status".to_string())
         );
     }
@@ -1082,10 +1033,10 @@ mod tests {
     #[test]
     fn search_text_forループ断片を候補にしない() {
         let text = "for i in 1 2 3\\\ndo echo $i\\\ndone\nls -la\n";
-        assert_eq!(search_text("do", text, &Strategy::Prefix), None);
-        assert_eq!(search_text("don", text, &Strategy::Prefix), None);
+        assert_eq!(search_text("do", text.as_bytes(), &Strategy::Prefix), None);
+        assert_eq!(search_text("don", text.as_bytes(), &Strategy::Prefix), None);
         assert_eq!(
-            search_text("ls", text, &Strategy::Prefix),
+            search_text("ls", text.as_bytes(), &Strategy::Prefix),
             Some("ls -la".to_string())
         );
     }
@@ -1105,10 +1056,10 @@ mod tests {
 
     #[test]
     fn drop_partial_tail_改行終端でない最終行を捨てる() {
-        assert_eq!(drop_partial_tail("a\nb".to_string()), "a\n");
-        assert_eq!(drop_partial_tail("a\nb\n".to_string()), "a\nb\n");
-        assert_eq!(drop_partial_tail("ab".to_string()), "");
-        assert_eq!(drop_partial_tail(String::new()), "");
+        assert_eq!(drop_partial_tail(b"a\nb".to_vec()), b"a\n");
+        assert_eq!(drop_partial_tail(b"a\nb\n".to_vec()), b"a\nb\n");
+        assert_eq!(drop_partial_tail(b"ab".to_vec()), b"");
+        assert_eq!(drop_partial_tail(Vec::new()), b"");
     }
 
     #[test]
@@ -1144,16 +1095,16 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // 全ファイルフォールバック (末尾チャンク不一致時)
+    // 大きい履歴の全体検索
     // ---------------------------------------------------------------
 
     #[test]
-    fn get_suggestion_チャンク外の古い履歴にフォールバックする() {
+    fn get_suggestion_大きい履歴の先頭も検索する() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
         // 先頭に一意な行、その後 64KB 超の filler
         let mut content = String::from("git unique-head-cmd\n");
-        while content.len() < (CHUNK_SIZE as usize) + 4096 {
+        while content.len() < 65_536 + 4096 {
             content.push_str("ls -la\n");
         }
         std::fs::write(&path, &content).unwrap();
@@ -1170,10 +1121,7 @@ mod tests {
     fn get_suggestion_古い前方一致を新しい部分一致より優先する() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
-        let content = format!(
-            "git target\n{}\necho git recent\n",
-            "x".repeat(CHUNK_SIZE as usize)
-        );
+        let content = format!("git target\n{}\necho git recent\n", "x".repeat(65_536));
         std::fs::write(&path, content).unwrap();
 
         let result = get_suggestion(
@@ -1186,10 +1134,10 @@ mod tests {
     }
 
     #[test]
-    fn get_suggestion_チャンク境界の継続行を候補にしない() {
+    fn get_suggestion_長い複数行コマンドの断片を候補にしない() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hist");
-        let content = format!("{}\\\ngit fake\n", "x".repeat(CHUNK_SIZE as usize));
+        let content = format!("{}\\\ngit fake\n", "x".repeat(65_536));
         std::fs::write(&path, content).unwrap();
 
         let result = get_suggestion("git", Some(path.to_str().unwrap()), &Strategy::Prefix, None);
@@ -1204,13 +1152,63 @@ mod ranking_tests {
     use super::*;
 
     #[test]
+    fn 不正なutf8の行は置換せず除外し有効な履歴と置換文字自身は残す() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("hist");
+        let mut bytes = tests::metafy("cat valid\ncat �.txt\n");
+        bytes.extend_from_slice(b"cat \xff\xfe.txt\n");
+        std::fs::write(&path, bytes).unwrap();
+        let file = Some(path.to_str().unwrap());
+        assert_eq!(
+            get_history_suggestion("cat ", file, &Strategy::Prefix).as_deref(),
+            Some("cat �.txt")
+        );
+        assert_eq!(
+            get_completions("cat ", file, 10),
+            ["cat �.txt", "cat valid"]
+        );
+    }
+
+    #[test]
+    fn 部分一致の位置は文字数で比較する() {
+        let history = "abcdefgh foo\n日本語 foo\n";
+        assert_eq!(
+            ranked_candidates("foo", history.as_bytes(), &Strategy::Substring, 10),
+            ["日本語 foo", "abcdefgh foo"]
+        );
+    }
+
+    #[test]
+    fn 不正なutf8の継続行を候補にもタスクの利用回数にも含めない() {
+        let history = b"make good\nmake \xff\\\nmake fake\nmake \xfe\nmake other\n";
+        assert_eq!(
+            ranked_candidates("make", history, &Strategy::Prefix, 10),
+            ["make other", "make good"]
+        );
+        let calls = task_calls("make", history);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls["good"].count, 1);
+        assert_eq!(calls["other"].count, 1);
+    }
+
+    #[test]
+    fn 曖昧一致の長さはバイト数ではなく文字数で比較する() {
+        let history = "éXab\né🐱ab\néXYZab\n";
+        assert_eq!(
+            ranked_candidates("éa", history.as_bytes(), &Strategy::Fuzzy, 10),
+            ["é🐱ab", "éXab", "éXYZab"]
+        );
+        assert!(ranked_candidates("éa", history.as_bytes(), &Strategy::Substring, 10).is_empty());
+    }
+
+    #[test]
     fn 候補を絞っても頻度と新しさによる上位順を保つ() {
         let mut history = (0..40)
             .map(|i| format!("git show {i}\n"))
             .collect::<String>();
         history.push_str("git show 7\ngit show 3\ngit show 7\n");
         assert_eq!(
-            ranked_candidates("git", &history, &Strategy::Prefix, 5),
+            ranked_candidates("git", history.as_bytes(), &Strategy::Prefix, 5),
             [
                 "git show 7",
                 "git show 3",
@@ -1220,11 +1218,11 @@ mod ranking_tests {
             ]
         );
         assert_eq!(
-            ranked_candidates("git", &history, &Strategy::Prefix, 1),
+            ranked_candidates("git", history.as_bytes(), &Strategy::Prefix, 1),
             ["git show 7"]
         );
         assert_eq!(
-            ranked_candidates("git", &history, &Strategy::Prefix, usize::MAX).len(),
+            ranked_candidates("git", history.as_bytes(), &Strategy::Prefix, usize::MAX).len(),
             40
         );
     }
@@ -1233,7 +1231,7 @@ mod ranking_tests {
     fn 一致度を優先し同程度なら頻度と新しさで並べる() {
         let history = "zsh-turbo configure\nzsh-turbo configure\nzsh-turbo doctor\nsudo zsh-turbo configure\nsudo zsh-turbo configure\nsudo zsh-turbo configure\n";
         assert_eq!(
-            ranked_candidates("zsh-turbo", history, &Strategy::Fuzzy, 10),
+            ranked_candidates("zsh-turbo", history.as_bytes(), &Strategy::Fuzzy, 10),
             [
                 "zsh-turbo configure",
                 "zsh-turbo doctor",
@@ -1241,12 +1239,12 @@ mod ranking_tests {
             ]
         );
         assert_eq!(
-            search_text("zsh-turbo", history, &Strategy::Fuzzy).as_deref(),
+            search_text("zsh-turbo", history.as_bytes(), &Strategy::Fuzzy).as_deref(),
             Some("zsh-turbo configure")
         );
         let tied = "git status\ngit diff\n";
         assert_eq!(
-            ranked_candidates("git", tied, &Strategy::Prefix, 10),
+            ranked_candidates("git", tied.as_bytes(), &Strategy::Prefix, 10),
             ["git diff", "git status"]
         );
     }
@@ -1255,21 +1253,21 @@ mod ranking_tests {
     fn 制御文字を含む履歴は表示候補にせず日本語は保持する() {
         let history = "echo \u{1b}[2J\necho a\u{7}\necho 日本語\n";
         assert_eq!(
-            ranked_candidates("echo", history, &Strategy::Prefix, 10),
+            ranked_candidates("echo", history.as_bytes(), &Strategy::Prefix, 10),
             ["echo 日本語"]
         );
-        assert!(ranked_candidates("echo\n", history, &Strategy::Fuzzy, 10).is_empty());
+        assert!(ranked_candidates("echo\n", history.as_bytes(), &Strategy::Fuzzy, 10).is_empty());
     }
 
     #[test]
     fn 空の曖昧検索は全履歴から順位付けし重複を除く() {
         let history = "echo alpha\necho alpha\necho beta\n";
         assert_eq!(
-            ranked_candidates("", history, &Strategy::Fuzzy, 10),
+            ranked_candidates("", history.as_bytes(), &Strategy::Fuzzy, 10),
             ["echo alpha", "echo beta"]
         );
         assert_eq!(
-            ranked_candidates("ealp", history, &Strategy::Fuzzy, 10),
+            ranked_candidates("ealp", history.as_bytes(), &Strategy::Fuzzy, 10),
             ["echo alpha"]
         );
     }
@@ -1277,7 +1275,7 @@ mod ranking_tests {
     #[test]
     fn 履歴からタスクの呼び出しを数え最後に使った位置を覚える() {
         let history = ": 1700000000:0;make install\nmake test\nmake install PREFIX=/x\nmake -C sub build\nmake install && make test\nnpm run build\nmakefoo x\nmake test\\\nmake build\n";
-        let calls = task_calls("make", history);
+        let calls = task_calls("make", history.as_bytes());
         assert_eq!(
             calls["install"],
             task_usage::HistoryUse {
@@ -1294,6 +1292,6 @@ mod ranking_tests {
         );
         // ディレクトリを変える呼び出し・複数行の断片・別のコマンドは数えない
         assert_eq!(calls.len(), 2, "{calls:?}");
-        assert_eq!(task_calls("npm", history).len(), 1);
+        assert_eq!(task_calls("npm", history.as_bytes()).len(), 1);
     }
 }
