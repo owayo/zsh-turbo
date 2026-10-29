@@ -137,7 +137,7 @@ eval "$(zsh-turbo init)"
 git clone https://github.com/zsh-users/zsh-completions.git "$HOME/.zsh/zsh-completions"
 ```
 
-`~/.zshrc` に補完定義がある `src` ディレクトリを指定し、zsh-turbo を初期化します。複数の補完ディレクトリは `:` 区切りで指定できます。
+`~/.zshrc` に補完定義がある `src` ディレクトリを指定し、zsh-turbo を初期化します。複数の補完ディレクトリは `:` 区切りで指定できます。ディレクトリは絶対パスで指定してください。相対パスは、作業中のディレクトリにある補完を読み込まないよう無視します。
 
 ```bash
 export ZSH_TURBO_COMPLETION_DIRS="$HOME/.zsh/zsh-completions/src"

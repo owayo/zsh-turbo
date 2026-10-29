@@ -131,7 +131,7 @@ zsh-turbo configure
 eval "$(zsh-turbo init)"
 ```
 
-For example, to use completion definitions from [zsh-completions](https://github.com/zsh-users/zsh-completions), clone the repository once and add its `src` directory before initializing zsh-turbo:
+For example, to use completion definitions from [zsh-completions](https://github.com/zsh-users/zsh-completions), clone the repository once and add its `src` directory before initializing zsh-turbo. Separate multiple directories with `:` and use absolute paths; relative entries are ignored so that completions in the current directory are never loaded:
 
 ```bash
 git clone https://github.com/zsh-users/zsh-completions.git "$HOME/.zsh/zsh-completions"
