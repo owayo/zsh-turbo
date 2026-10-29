@@ -11,7 +11,7 @@ Identical license documents are reproduced once, with references from each packa
 OR (and the legacy / notation) denotes alternative licenses; AND denotes combined terms.
 Reproducing alternative license texts does not turn OR into AND.
 
-Cargo.lock SHA-256: `7b9db9ff570a6a82285ff63ad4790712712a3bb5f3a200d3f810ecf3382180d8`
+Cargo.lock SHA-256: `6dba4ef945e20342062d042f97bef31833428d0d7f49c11400e1f3f48741c8ff`
 
 ## MPL source availability
 
@@ -97,7 +97,7 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | itertools 0.14.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/itertools/itertools-0.14.0.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-33) |
 | itoa 1.0.18 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/itoa/itoa-1.0.18.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | js-sys 0.3.106 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/js-sys/js-sys-0.3.106.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
-| json5 1.3.1 | MIT | [source](https://static.crates.io/crates/json5/json5-1.3.1.crate) | [LICENSE](#document-47) |
+| json5 1.3.2 | MIT | [source](https://static.crates.io/crates/json5/json5-1.3.2.crate) | [LICENSE](#document-47) |
 | kasuari 0.4.12 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/kasuari/kasuari-0.4.12.crate) | [LICENSE-APACHE](#document-48); [LICENSE-MIT](#document-49) |
 | libc 0.2.190 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/libc/libc-0.2.190.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-50) |
 | libredox 0.1.25 | MIT | [source](https://static.crates.io/crates/libredox/libredox-0.1.25.crate) | [LICENSE](#document-51) |
