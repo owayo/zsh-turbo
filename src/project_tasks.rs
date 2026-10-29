@@ -25,6 +25,8 @@ pub struct TaskList {
     pub input: String,
     /// (タスク名, 採用後のコマンド全体) を名前順に
     pub items: Vec<(String, String)>,
+    /// 上限 (`max`) で切る前の一致件数
+    pub total: usize,
 }
 
 /// カレントディレクトリのタスクの一覧。`include_exact` なら入力済みの名前と
@@ -195,9 +197,13 @@ fn list_in(query: &str, cwd: &Path, max: usize, include_exact: bool) -> TaskList
         (head, prefix)
     };
     let names = task_names(command, cwd).unwrap_or_default();
+    let mut items = matching(&head, prefix, names, include_exact);
+    let total = items.len();
+    items.truncate(max);
     TaskList {
         input: format!("{head}{prefix}"),
-        items: matching(&head, prefix, names, max, include_exact),
+        items,
+        total,
     }
 }
 
@@ -213,7 +219,6 @@ fn matching(
     head: &str,
     prefix: &str,
     names: Vec<String>,
-    max: usize,
     include_exact: bool,
 ) -> Vec<(String, String)> {
     if prefix.chars().any(is_blank) || prefix.starts_with('-') {
@@ -222,7 +227,6 @@ fn matching(
     names
         .into_iter()
         .filter(|name| name.starts_with(prefix) && (include_exact || name != prefix))
-        .take(max)
         .map(|name| {
             let command = format!("{head}{name}");
             (name, command)
@@ -877,6 +881,17 @@ mod tests {
                 .items
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn 上限で切る前の一致件数を返す() {
+        let tmp = tempfile::tempdir().unwrap();
+        let makefile: String = (1..=5).map(|n| format!("t{n}:\n")).collect();
+        std::fs::write(tmp.path().join("Makefile"), makefile + "other:\n").unwrap();
+        let list = list_in("make t", tmp.path(), 3, false);
+        assert_eq!((list.items.len(), list.total), (3, 5));
+        assert_eq!(list_in("make o", tmp.path(), 3, false).total, 1);
+        assert_eq!(list_in("make z", tmp.path(), 3, false).total, 0);
     }
 
     #[test]

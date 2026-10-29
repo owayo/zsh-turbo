@@ -45,23 +45,36 @@ pub struct Request<'a> {
 }
 
 pub fn response(request: &Request) -> String {
-    let mut out = String::new();
-    let rows = request.max.min(MAX_PREVIEW_ROWS);
     let tasks = if request.buffer.is_empty() || request.max == 0 {
         project_tasks::TaskList::default()
     } else {
         project_tasks::task_list(request.buffer, project_tasks::LIST_LIMIT, request.menu)
     };
+    response_with(request, tasks, &|command| {
+        completion::top_level(command, request.completions)
+    })
+}
+
+/// カレントディレクトリのタスクの一覧と、CLI のヘルプを読む関数を受け取って応答を組み立てる
+fn response_with(
+    request: &Request,
+    tasks: project_tasks::TaskList,
+    top_level: &dyn Fn(&str) -> Option<completion::TopLevel>,
+) -> String {
+    let mut out = String::new();
+    let rows = request.max.min(MAX_PREVIEW_ROWS);
+    let listed = tasks.items.len();
     let names: Vec<_> = tasks
         .items
         .into_iter()
         .filter(|(name, command)| sendable(name) && sendable(command))
         .collect();
     if !names.is_empty() {
+        // 件数は files と同じく上限で切る前の一致件数。送れずに除いたタスクはそこからも引く
         push_header(
             &mut out,
             "tasks",
-            names.len(),
+            tasks.total.saturating_sub(listed - names.len()),
             true,
             rows,
             tui::task_list_title(request.language),
@@ -94,10 +107,12 @@ pub fn response(request: &Request) -> String {
     // CLI の名前・2 語目を入力中なら、ヘルプから読んだサブコマンドを出す
     if listing_allowed
         && let Some((command, head, word)) = completion::subcommand_query(request.buffer)
-        && let Some(help) = completion::top_level(command, request.completions)
+        && let Some(help) = top_level(command)
     {
+        let (items, total) = command_items(&help, &head, word, request.menu);
+        let listed = items.len();
         let items = sendable_items(
-            command_items(&help, &head, word, request.menu)
+            items
                 .into_iter()
                 .map(|(label, value)| (fit_width(&label, request.columns), value)),
         );
@@ -107,7 +122,8 @@ pub fn response(request: &Request) -> String {
             } else {
                 tui::command_list_title(request.language)
             };
-            push_header(&mut out, "commands", items.len(), true, rows, title);
+            let total = total.saturating_sub(listed - items.len());
+            push_header(&mut out, "commands", total, true, rows, title);
             let input = format!("{head}{word}");
             push_ghost_and_items(&mut out, request, history.as_deref(), &input, &items);
             out.push_str("end\n");
@@ -283,14 +299,14 @@ fn pick_ghost<'a>(
 }
 
 /// 入力中の語に前方一致するサブコマンド (`-` 始まりならオプション) を、
-/// (説明付きの表示名, 採用後の BUFFER) の組で名前順に返す。
+/// (説明付きの表示名, 採用後の BUFFER) の組で名前順に、上限で切る前の一致件数と合わせて返す。
 /// `include_exact` なら入力中の語と完全に一致する名前も含める。
 fn command_items(
     help: &completion::TopLevel,
     head: &str,
     word: &str,
     include_exact: bool,
-) -> Vec<(String, String)> {
+) -> (Vec<(String, String)>, usize) {
     let entries = if word.starts_with('-') {
         &help.options
     } else {
@@ -302,6 +318,7 @@ fn command_items(
         .collect();
     matched.sort_by(|a, b| a.0.cmp(&b.0));
     matched.dedup_by(|a, b| a.0 == b.0);
+    let total = matched.len();
     matched.truncate(PATH_LIST_LIMIT);
     // 名前の列をそろえ、説明を続ける (長すぎる名前で説明が押し出されないよう上限を設ける)
     let width = matched
@@ -310,7 +327,7 @@ fn command_items(
         .max()
         .unwrap_or(0)
         .min(24);
-    matched
+    let items = matched
         .into_iter()
         .map(|(name, description)| {
             let description = description.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -321,7 +338,8 @@ fn command_items(
             };
             (label, format!("{head}{name} "))
         })
-        .collect()
+        .collect();
+    (items, total)
 }
 
 /// 直前の widget が履歴の移動なら真。呼び出した行でファイル一覧を出すと、
@@ -587,6 +605,73 @@ mod tests {
     }
 
     #[test]
+    fn タスクとサブコマンドの見出しは上限で切る前の一致件数を返す() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = dir.path().join("history");
+        std::fs::write(&history, "").unwrap();
+        let history = history.to_str().unwrap();
+        let tasks = |names: &[&str], total| project_tasks::TaskList {
+            input: "make ".to_owned(),
+            items: names
+                .iter()
+                .map(|name| (name.to_string(), format!("make {name}")))
+                .collect(),
+            total,
+        };
+        let no_help = |_: &str| None;
+        let items = |out: &str| {
+            out.lines()
+                .filter(|line| line.starts_with("item\t"))
+                .count()
+        };
+
+        // files と同じく、件数は送った項目数ではなく切る前の一致件数 (zsh は残りがあることを示す)
+        let out = response_with(
+            &request("make", history),
+            tasks(&["a", "b", "c"], 300),
+            &no_help,
+        );
+        assert!(
+            out.starts_with("v1\ttasks\t300\tcomplete\t10\tTasks\n"),
+            "{out}"
+        );
+        assert_eq!(items(&out), 3);
+        // 送れない (制御文字を含む) タスクは件数からも除く
+        let out = response_with(
+            &request("make", history),
+            tasks(&["a", "b\tx", "c"], 3),
+            &no_help,
+        );
+        assert!(out.starts_with("v1\ttasks\t2\tcomplete\t"), "{out}");
+
+        let mut options: Vec<_> = (1..=300)
+            .map(|n| (format!("--opt{n:03}"), String::new()))
+            .collect();
+        let help = |options: &[(String, String)]| completion::TopLevel {
+            commands: Vec::new(),
+            options: options.to_vec(),
+        };
+        let out = response_with(
+            &request("uv --", history),
+            project_tasks::TaskList::default(),
+            &|_| Some(help(&options)),
+        );
+        assert!(
+            out.starts_with("v1\tcommands\t300\tcomplete\t10\tOptions\n"),
+            "{out}"
+        );
+        assert_eq!(items(&out), PATH_LIST_LIMIT);
+        options.truncate(3);
+        options[1].1 = "a\u{1b}b".to_owned();
+        let out = response_with(
+            &request("uv --", history),
+            project_tasks::TaskList::default(),
+            &|_| Some(help(&options)),
+        );
+        assert!(out.starts_with("v1\tcommands\t2\tcomplete\t"), "{out}");
+    }
+
+    #[test]
     fn 履歴移動の直後と候補数0ではファイル一覧を返さない() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
@@ -649,7 +734,7 @@ mod tests {
         };
         let pair = |label: &str, value: &str| (label.to_owned(), value.to_owned());
         assert_eq!(
-            command_items(&help, "uv ", "", false),
+            command_items(&help, "uv ", "", false).0,
             [
                 pair("run   Run a command", "uv run "),
                 pair("self", "uv self "),
@@ -657,20 +742,20 @@ mod tests {
             ]
         );
         assert_eq!(
-            command_items(&help, "uv ", "s", false),
+            command_items(&help, "uv ", "s", false).0,
             [
                 pair("self", "uv self "),
                 pair("sync  Update the environment", "uv sync ")
             ]
         );
-        assert!(command_items(&help, "uv ", "sync", false).is_empty());
+        assert!(command_items(&help, "uv ", "sync", false).0.is_empty());
         // メニューでは打ち切った名前も含める
         assert_eq!(
-            command_items(&help, "uv ", "sync", true),
+            command_items(&help, "uv ", "sync", true).0,
             [pair("sync  Update the environment", "uv sync ")]
         );
         assert_eq!(
-            command_items(&help, "uv ", "--", false),
+            command_items(&help, "uv ", "--", false).0,
             [pair("--quiet  Quiet", "uv --quiet ")]
         );
     }
