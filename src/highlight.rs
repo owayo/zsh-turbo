@@ -350,6 +350,7 @@ impl<'a> Highlighter<'a> {
             // 未知コマンド (赤) ではなくオプションとして扱う。値付きオプションを
             // 区別できないため、以降はコマンド位置を消費する (誤検出ゼロ優先)。
             self.push_span(word.start, word.end, "fg=cyan");
+            self.push_quote_segs(&word.quote_segs);
             self.position.consume_command_name();
             return;
         }
@@ -2403,6 +2404,25 @@ mod tests {
         assert!(
             !spans.iter().any(|s| s.style == "fg=red,bold"),
             "赤スパンが存在してはならない: {spans:?}"
+        );
+    }
+
+    #[test]
+    fn highlight_プレフィックス直後のオプションもクォートに文字列色を重ねる() {
+        // 引数位置のオプション (`ls --file='a b'`) と同じく、オプションの色の後にクォートの色を重ねる
+        let spans = highlight_buffer("sudo --user='root' ls", ShellNames::default());
+        let position = |range| {
+            spans
+                .iter()
+                .position(|s| (s.start, s.end) == range)
+                .unwrap_or_else(|| panic!("{range:?} のスパンが必要: {spans:?}"))
+        };
+        let (option, quote) = (position((5, 18)), position((12, 18)));
+        assert_eq!(spans[option].style, "fg=cyan");
+        assert_eq!(spans[quote].style, "fg=yellow");
+        assert!(
+            option < quote,
+            "クォートの色はオプションの後に重ねる: {spans:?}"
         );
     }
 
