@@ -100,458 +100,559 @@ pub fn highlight_buffer(buffer: &str, names: ShellNames) -> Vec<Span> {
     if buffer.is_empty() {
         return Vec::new();
     }
+    Highlighter::new(buffer, Classifier::new(names, path_dirs())).run()
+}
 
-    let mut classifier = Classifier::new(names, path_dirs());
-    let mut spans = Vec::new();
-    let mut pos = 0;
-    let mut position = CommandPosition::initial();
+/// 入力 1 件を先頭から走査してスパンを集める。トークンの優先順位は `run` のループに並べる。
+struct Highlighter<'a> {
+    chars: Vec<char>,
+    pos: usize,
+    spans: Vec<Span>,
+    classifier: Classifier<'a>,
+    position: CommandPosition,
     // `( … )` サブシェルの深さ。0 より大きい間は `)` で語を区切る
-    let mut subshell_depth = 0usize;
+    subshell_depth: usize,
     // `[[ … ]]` の中か。中の `&&`/`||` は条件の演算子でコマンド区切りではない
-    let mut in_condition = false;
+    in_condition: bool,
+}
 
-    let chars: Vec<char> = buffer.chars().collect();
-
-    while pos < chars.len() {
-        // `\` + 改行は行継続。zsh は両方を取り除くため、区切りにも語にもしない
-        if chars[pos] == '\\' && chars.get(pos + 1) == Some(&'\n') {
-            pos += 2;
-            continue;
+impl<'a> Highlighter<'a> {
+    fn new(buffer: &str, classifier: Classifier<'a>) -> Self {
+        Self {
+            chars: buffer.chars().collect(),
+            pos: 0,
+            spans: Vec::new(),
+            classifier,
+            position: CommandPosition::initial(),
+            subshell_depth: 0,
+            in_condition: false,
         }
+    }
 
-        // 改行はシェル構文上のコマンド区切りとして扱う。
-        if chars[pos] == '\n' {
-            pos += 1;
-            position.separator();
-            continue;
-        }
-
-        // 空白をスキップ
-        if is_blank(chars[pos]) {
-            pos += 1;
-            continue;
-        }
-
-        let token_start = pos;
-
-        if chars[pos] == '$' && pos + 1 < chars.len() {
-            // 変数
-            pos += 1;
-            if chars[pos] == '{' {
-                while pos < chars.len() && chars[pos] != '}' {
-                    pos += 1;
-                }
-                if pos < chars.len() {
-                    pos += 1;
-                }
-            } else if is_zsh_special_parameter_char(chars[pos]) {
-                // `$?`, `$$`, `$!` などの特殊パラメータは 1 文字だけで成立する。
-                pos += 1;
-            } else {
-                while pos < chars.len() && (chars[pos].is_alphanumeric() || chars[pos] == '_') {
-                    pos += 1;
-                }
-            }
-            spans.push(Span {
-                start: token_start,
-                end: pos,
-                style: "fg=cyan".into(),
-            });
-            // 変数展開がコマンド名として消費されるため、区切り直後フラグも落とす。
-            position.consume_command_name();
-            continue;
-        }
-
-        // リダイレクト: >, >>, <, 2>, &>, 2>&, 0<&
-        if chars[pos].is_ascii_digit() {
-            // zsh で記述子になるのは 1 桁だけ。`12>file` の `12` はコマンド名や引数になる。
-            let fd_end = pos + 1;
-            if fd_end < chars.len()
-                && matches!(chars[fd_end], '>' | '<')
-                && !(chars[fd_end] == '<'
-                    && numeric_glob_len(chars[fd_end..].iter().copied()).is_some())
+    fn run(mut self) -> Vec<Span> {
+        while self.pos < self.chars.len() {
+            let start = self.pos;
+            // 各 try_consume_* は対象外なら何も変えずに false を返す。並び順が優先順位になる
+            if !(self.try_consume_layout()
+                || self.try_consume_variable()
+                || self.try_consume_redirect()
+                || self.try_consume_operator()
+                || self.try_consume_paren())
             {
-                let op_start = pos;
-                pos = redirect_operator_end(&chars, fd_end);
-                spans.push(Span {
-                    start: op_start,
-                    end: pos,
-                    style: "fg=magenta".into(),
-                });
-                // `;`/`|` 直後にリダイレクトが来た場合、次の単語はリダイレクト先
-                // (ファイル名等) であって新コマンドではないため、区切り直後の状態も
-                // 落とす (例: `; > file nextcmd` の file をコマンドと誤認しない)。
-                position.redirect();
-                continue;
+                self.consume_word();
             }
+            debug_assert!(self.pos > start, "{start} 文字目から走査が進まない");
         }
+        self.spans
+    }
 
-        if chars[pos] == '&' && pos + 1 < chars.len() && chars[pos + 1] == '>' {
-            let op_start = pos;
-            pos += 2;
-            if pos < chars.len() && chars[pos] == '>' {
-                pos += 1;
-            }
-            // `&>|`・`&>!`・`&>>|`・`&>>!` (CLOBBER) の `|`/`!` も演算子の一部
-            if matches!(chars.get(pos), Some('|' | '!')) {
-                pos += 1;
-            }
-            spans.push(Span {
-                start: op_start,
-                end: pos,
-                style: "fg=magenta".into(),
-            });
-            position.redirect();
-            continue;
-        }
+    fn peek(&self, offset: usize) -> Option<char> {
+        self.chars.get(self.pos + offset).copied()
+    }
 
-        if chars[pos] == '>'
-            || (chars[pos] == '<' && numeric_glob_len(chars[pos..].iter().copied()).is_none())
-        {
-            let op_start = pos;
-            pos = redirect_operator_end(&chars, pos);
-            spans.push(Span {
-                start: op_start,
-                end: pos,
-                style: "fg=magenta".into(),
-            });
-            position.redirect();
-            continue;
-        }
+    fn push_span(&mut self, start: usize, end: usize, style: impl Into<String>) {
+        self.spans.push(Span {
+            start,
+            end,
+            style: style.into(),
+        });
+    }
 
-        // 演算子: |, ||, &&, ;, &
-        if matches!(chars[pos], '|' | '&' | ';') {
-            let op_start = pos;
-            let ch = chars[pos];
-            pos += 1;
-            if pos < chars.len() && chars[pos] == ch {
-                pos += 1; // || または && の 2 文字目
-            }
-            spans.push(Span {
-                start: op_start,
-                end: pos,
-                style: "fg=magenta".into(),
-            });
-            // `[[ … ]]` の中の `&&`/`||` は条件の論理演算子で、次の語はコマンドではない
-            if !(in_condition && ch != ';') {
-                position.separator();
-            }
-            continue;
+    /// クォートセグメントを文字列色スパンとして追加する。
+    /// 単語全体のスパンより後に push することで region_highlight 上で優先される。
+    fn push_quote_segs(&mut self, segs: &[(usize, usize)]) {
+        for &(start, end) in segs {
+            self.push_span(start, end, "fg=yellow");
         }
+    }
 
-        // コマンド位置の `(` はサブシェル、`((` は算術コマンド
-        if chars[pos] == '(' && position.expects_command() {
-            let op_start = pos;
-            if chars.get(pos + 1) == Some(&'(') {
-                pos += 2;
-                spans.push(Span {
-                    start: op_start,
-                    end: pos,
-                    style: "fg=yellow,bold".into(),
-                });
-                let mut depth = 0usize;
-                while pos < chars.len() {
-                    match chars[pos] {
-                        '(' => depth += 1,
-                        ')' if depth > 0 => depth -= 1,
-                        ')' if chars.get(pos + 1) == Some(&')') => {
-                            spans.push(Span {
-                                start: pos,
-                                end: pos + 2,
-                                style: "fg=yellow,bold".into(),
-                            });
-                            pos += 2;
-                            break;
-                        }
-                        _ => {}
-                    }
-                    pos += 1;
-                }
-                position.consume_command_name();
-                continue;
+    /// 行継続・改行・空白を読み進める。
+    fn try_consume_layout(&mut self) -> bool {
+        match self.chars[self.pos] {
+            // `\` + 改行は行継続。zsh は両方を取り除くため、区切りにも語にもしない
+            '\\' if self.peek(1) == Some('\n') => self.pos += 2,
+            // 改行はシェル構文上のコマンド区切りとして扱う。
+            '\n' => {
+                self.pos += 1;
+                self.position.separator();
             }
-            pos += 1;
-            spans.push(Span {
-                start: op_start,
-                end: pos,
-                style: "fg=yellow,bold".into(),
-            });
-            subshell_depth += 1;
-            position.separator();
-            continue;
+            c if is_blank(c) => self.pos += 1,
+            _ => return false,
         }
-        if chars[pos] == ')' && subshell_depth > 0 {
-            spans.push(Span {
-                start: pos,
-                end: pos + 1,
-                style: "fg=yellow,bold".into(),
-            });
-            pos += 1;
-            subshell_depth -= 1;
-            position.consume_command_name();
-            continue;
-        }
+        true
+    }
 
-        // 通常の単語トークン。クォートは shell の語結合と同様に単語の一部として
-        // 閉じクォートまで消費する (`FOO='a b' cmd` や `ec'ho'` を 1 語に保つ)。
-        let word_start = pos;
-        // クォートセグメントの範囲 (黄色で塗る)
-        let mut quote_segs: Vec<(usize, usize)> = Vec::new();
-        // クォートを剥いだ論理語 (コマンド分類・代入判定用)
-        let mut logical = String::new();
-        // クォート外の文字のみ (引数位置でのオプション/パス/glob 判定用)
-        let mut bare = String::new();
-        // 配列代入 `name=( … )` の括弧の深さ。中の空白・改行・演算子は語の一部
-        let mut array_depth = 0usize;
-        // 語中のグロブの括弧 `(a|b)` の深さ。中の `|` はパイプではなく選択肢
-        let mut glob_depth = 0usize;
-        while pos < chars.len()
-            && (array_depth > 0
-                || (!is_blank(chars[pos])
-                    && !matches!(chars[pos], '&' | ';' | '>')
-                    && !(chars[pos] == '<'
-                        && numeric_glob_len(chars[pos..].iter().copied()).is_none())
-                    && !(chars[pos] == '|' && glob_depth == 0)
-                    && !(chars[pos] == ')' && subshell_depth > 0 && glob_depth == 0)
-                    // 関数定義 `name()` の名前はここで切る
-                    && !(chars[pos] == '('
-                        && chars.get(pos + 1) == Some(&')')
-                        && position.expects_command()
-                        && !logical.is_empty()
-                        && !logical.ends_with('='))))
-        {
-            if chars[pos] == '<'
-                && let Some(len) = numeric_glob_len(chars[pos..].iter().copied())
-            {
-                logical.extend(&chars[pos..pos + len]);
-                bare.extend(&chars[pos..pos + len]);
-                pos += len;
-                continue;
-            }
-            if chars[pos] == '(' {
-                let starts_array = array_depth == 0
-                    && position.expects_command()
-                    && logical.find('=') == Some(logical.len().saturating_sub(1))
-                    && is_assignment_word(&logical)
-                    && !chars[word_start..pos]
-                        .iter()
-                        .any(|&c| matches!(c, '\'' | '"' | '\\'));
-                if starts_array || array_depth > 0 {
-                    array_depth += 1;
+    /// 変数展開 (`$name`・`${…}`・`$?` など) を 1 つのスパンにする。
+    fn try_consume_variable(&mut self) -> bool {
+        let Some(end) = variable_end(&self.chars, self.pos) else {
+            return false;
+        };
+        self.push_span(self.pos, end, "fg=cyan");
+        self.pos = end;
+        // 変数展開がコマンド名として消費されるため、区切り直後フラグも落とす。
+        self.position.consume_command_name();
+        true
+    }
+
+    /// リダイレクト: >, >>, <, 2>, &>, 2>&, 0<&
+    fn try_consume_redirect(&mut self) -> bool {
+        let Some(end) = redirect_end(&self.chars, self.pos) else {
+            return false;
+        };
+        self.push_span(self.pos, end, "fg=magenta");
+        self.pos = end;
+        // `;`/`|` 直後にリダイレクトが来た場合、次の単語はリダイレクト先
+        // (ファイル名等) であって新コマンドではないため、区切り直後の状態も
+        // 落とす (例: `; > file nextcmd` の file をコマンドと誤認しない)。
+        self.position.redirect();
+        true
+    }
+
+    /// 演算子: |, ||, &&, ;, &
+    fn try_consume_operator(&mut self) -> bool {
+        let ch = self.chars[self.pos];
+        if !matches!(ch, '|' | '&' | ';') {
+            return false;
+        }
+        let start = self.pos;
+        self.pos += 1;
+        if self.peek(0) == Some(ch) {
+            self.pos += 1; // || または && の 2 文字目
+        }
+        self.push_span(start, self.pos, "fg=magenta");
+        // `[[ … ]]` の中の `&&`/`||` は条件の論理演算子で、次の語はコマンドではない
+        if !(self.in_condition && ch != ';') {
+            self.position.separator();
+        }
+        true
+    }
+
+    /// コマンド位置の `(` はサブシェル、`((` は算術コマンド。サブシェルの中では `)` で閉じる。
+    fn try_consume_paren(&mut self) -> bool {
+        match self.chars[self.pos] {
+            '(' if self.position.expects_command() => {
+                if self.peek(1) == Some('(') {
+                    self.consume_arithmetic();
                 } else {
-                    glob_depth += 1;
+                    self.push_span(self.pos, self.pos + 1, "fg=yellow,bold");
+                    self.pos += 1;
+                    self.subshell_depth += 1;
+                    self.position.separator();
                 }
-            } else if chars[pos] == ')' && array_depth > 0 {
-                array_depth -= 1;
-            } else if chars[pos] == ')' && glob_depth > 0 {
-                glob_depth -= 1;
             }
-            if chars[pos] == '\\' && chars.get(pos + 1) == Some(&'\n') {
-                // 語中の行継続は取り除いて前後を連結する (`ec\<改行>ho` は echo)
-                pos += 2;
-                continue;
+            ')' if self.subshell_depth > 0 => {
+                self.push_span(self.pos, self.pos + 1, "fg=yellow,bold");
+                self.pos += 1;
+                self.subshell_depth -= 1;
+                self.position.consume_command_name();
             }
-            if chars[pos] == '\'' {
-                // シングルクォートセグメント
-                let seg_start = pos;
-                pos += 1;
-                while pos < chars.len() && chars[pos] != '\'' {
-                    logical.push(chars[pos]);
-                    pos += 1;
-                }
-                if pos < chars.len() {
-                    pos += 1;
-                }
-                quote_segs.push((seg_start, pos));
-                continue;
-            }
-            if chars[pos] == '"' {
-                // ダブルクォートセグメント
-                let seg_start = pos;
-                pos += 1;
-                while pos < chars.len() && chars[pos] != '"' {
-                    if chars[pos] == '\\' && pos + 1 < chars.len() {
-                        let next = chars[pos + 1];
-                        // 行継続は除き、ダブルクォートでエスケープできる文字だけ `\` を外す。
-                        if next == '\n' {
-                            pos += 2;
-                            continue;
-                        }
-                        if matches!(next, '$' | '`' | '"' | '\\' | '!') {
-                            pos += 1;
-                        }
-                    }
-                    logical.push(chars[pos]);
-                    pos += 1;
-                }
-                if pos < chars.len() {
-                    pos += 1;
-                }
-                quote_segs.push((seg_start, pos));
-                continue;
-            }
-            if chars[pos] == '\\' && pos + 1 < chars.len() {
-                // 先頭の `\cmd` だけはエイリアスを抑止する意味を分類時まで保持する。
-                // それ以外のバックスラッシュは shell と同様に論理語から取り除く。
-                if pos == word_start {
-                    logical.push('\\');
-                }
-                // エスケープ対象はクォート済みなので glob/option/path 判定から除外する。
-                // `\\` を番兵として残し、後続文字が誤って語頭扱いされるのを防ぐ。
-                bare.push('\\');
-                pos += 1;
-                logical.push(chars[pos]);
-                pos += 1;
-                continue;
-            }
-            logical.push(chars[pos]);
-            bare.push(chars[pos]);
-            pos += 1;
+            _ => return false,
         }
+        true
+    }
 
-        // 関数定義 `name()`/`name ()`: 名前は分類せず、`()` の後の本体をコマンド位置にする
-        if position.expects_command()
-            && !logical.is_empty()
-            && !logical.ends_with('=')
-            && quote_segs.is_empty()
+    /// `((` … `))` の算術コマンド。中身は分類しない。
+    fn consume_arithmetic(&mut self) {
+        let open = self.pos;
+        self.push_span(open, open + 2, "fg=yellow,bold");
+        let end = match arithmetic_close(&self.chars, open + 2) {
+            Some(close) => {
+                self.push_span(close, close + 2, "fg=yellow,bold");
+                close + 2
+            }
+            None => self.chars.len(),
+        };
+        self.pos = end;
+        self.position.consume_command_name();
+    }
+
+    /// 通常の単語トークンを読み、分類してスパンを付ける。
+    fn consume_word(&mut self) {
+        let word = scan_word(
+            &self.chars,
+            self.pos,
+            WordScanContext {
+                expects_command: self.position.expects_command(),
+                in_subshell: self.subshell_depth > 0,
+            },
+        );
+        self.pos = word.end;
+        if self.try_consume_function_definition(&word) || self.try_close_condition(&word) {
+            return;
+        }
+        if self.position.expects_command() {
+            self.classify_command_word(&word);
+        } else {
+            self.classify_argument(&word);
+        }
+    }
+
+    /// 関数定義 `name()`/`name ()`: 名前は分類せず、`()` の後の本体をコマンド位置にする
+    fn try_consume_function_definition(&mut self, word: &Word) -> bool {
+        if !self.position.expects_command()
+            || word.logical.is_empty()
+            || word.logical.ends_with('=')
+            || !word.quote_segs.is_empty()
         {
-            let mut next = pos;
-            while next < chars.len() && matches!(chars[next], ' ' | '\t') {
-                next += 1;
-            }
-            if chars.get(next) == Some(&'(') && chars.get(next + 1) == Some(&')') {
-                spans.push(Span {
-                    start: next,
-                    end: next + 2,
-                    style: "fg=yellow,bold".into(),
-                });
-                pos = next + 2;
-                position.separator();
-                continue;
-            }
+            return false;
+        }
+        let mut next = word.end;
+        while next < self.chars.len() && matches!(self.chars[next], ' ' | '\t') {
+            next += 1;
+        }
+        if self.chars.get(next) != Some(&'(') || self.chars.get(next + 1) != Some(&')') {
+            return false;
+        }
+        self.push_span(next, next + 2, "fg=yellow,bold");
+        self.pos = next + 2;
+        self.position.separator();
+        true
+    }
+
+    /// `[[ … ]]` を閉じる `]]`。
+    fn try_close_condition(&mut self, word: &Word) -> bool {
+        if !self.in_condition || word.logical != "]]" || word.is_quoted() {
+            return false;
+        }
+        self.push_span(word.start, word.end, "fg=yellow,bold");
+        self.in_condition = false;
+        self.position.consume_command_name();
+        true
+    }
+
+    /// コマンド位置の語を分類する。
+    fn classify_command_word(&mut self, word: &Word) {
+        // `!!`・`!$`・`!vim` は対話 zsh (BANG_HIST) の履歴展開。展開後のコマンドは
+        // 分からないため分類せず、コマンド名として消費する
+        if word.is_history_expansion(&self.chars) {
+            self.push_quote_segs(&word.quote_segs);
+            self.position.consume_command_name();
+            return;
         }
 
-        if in_condition && logical == "]]" && quote_segs.is_empty() && !bare.contains('\\') {
-            spans.push(Span {
-                start: word_start,
-                end: pos,
-                style: "fg=yellow,bold".into(),
-            });
-            in_condition = false;
-            position.consume_command_name();
-            continue;
+        if word.bare.is_empty() && !word.quote_segs.is_empty() {
+            // 全体がクォートの語 (`; 'ls' -la` 等) はコマンド名として消費される。
+            // 中身は分類せず文字列色のみ付け、後続をコマンド誤分類しない。
+            self.push_quote_segs(&word.quote_segs);
+            self.position.consume_command_name();
+            return;
         }
 
-        if position.expects_command() {
-            // `!!`・`!$`・`!vim` は対話 zsh (BANG_HIST) の履歴展開。展開後のコマンドは
-            // 分からないため分類せず、コマンド名として消費する
-            if chars[word_start] == '!'
-                && pos - word_start > 1
-                && !matches!(chars[word_start + 1], '=' | '(')
-            {
-                push_quote_segs(&mut spans, &quote_segs);
-                position.consume_command_name();
-                continue;
-            }
+        if !word.has_quoted_name(&self.chars) && is_assignment_word(&word.logical) {
+            self.push_span(word.start, word.end, "fg=cyan");
+            self.push_quote_segs(&word.quote_segs);
+            self.position.assignment();
+            return;
+        }
 
-            if bare.is_empty() && !quote_segs.is_empty() {
-                // 全体がクォートの語 (`; 'ls' -la` 等) はコマンド名として消費される。
-                // 中身は分類せず文字列色のみ付け、後続をコマンド誤分類しない。
-                push_quote_segs(&mut spans, &quote_segs);
-                position.consume_command_name();
-                continue;
-            }
+        if self.position.after_prefix() && word.logical.starts_with('-') {
+            // プレフィックスコマンド直後のオプション (`sudo -u` 等) は
+            // 未知コマンド (赤) ではなくオプションとして扱う。値付きオプションを
+            // 区別できないため、以降はコマンド位置を消費する (誤検出ゼロ優先)。
+            self.push_span(word.start, word.end, "fg=cyan");
+            self.position.consume_command_name();
+            return;
+        }
 
-            let quoted_name = chars[word_start..pos]
-                .iter()
-                .take_while(|&&c| c != '=')
-                .any(|&c| matches!(c, '\'' | '"' | '\\'));
-            if !quoted_name && is_assignment_word(&logical) {
-                spans.push(Span {
-                    start: word_start,
-                    end: pos,
-                    style: "fg=cyan".into(),
-                });
-                push_quote_segs(&mut spans, &quote_segs);
-                position.assignment();
-                continue;
-            }
+        let quoted = word.is_quoted();
+        let style = self.classifier.classify(&word.logical, quoted);
+        self.push_span(word.start, word.end, style);
+        self.push_quote_segs(&word.quote_segs);
+        if !quoted && word.logical == "[[" {
+            self.in_condition = true;
+        }
+        self.position.command_word(&word.logical, quoted);
+    }
 
-            if position.after_prefix() && logical.starts_with('-') {
-                // プレフィックスコマンド直後のオプション (`sudo -u` 等) は
-                // 未知コマンド (赤) ではなくオプションとして扱う。値付きオプションを
-                // 区別できないため、以降はコマンド位置を消費する (誤検出ゼロ優先)。
-                spans.push(Span {
-                    start: word_start,
-                    end: pos,
-                    style: "fg=cyan".into(),
-                });
-                position.consume_command_name();
-                continue;
-            }
-
-            // コマンド位置: 単語を分類
-            let quoted = !quote_segs.is_empty() || bare.contains('\\');
-            let style = classifier.classify(&logical, quoted);
-            spans.push(Span {
-                start: word_start,
-                end: pos,
-                style,
-            });
-            push_quote_segs(&mut spans, &quote_segs);
-            if !quoted && logical == "[[" {
-                in_condition = true;
-            }
-            position.command_word(&logical, quoted);
-        } else if bare.starts_with('-') {
+    /// 引数位置の語を分類する。判定はクォート外の文字で行い、クォートには文字列色を付ける。
+    fn classify_argument(&mut self, word: &Word) {
+        let style = if word.bare.starts_with('-') {
             // オプション
-            spans.push(Span {
-                start: word_start,
-                end: pos,
-                style: "fg=cyan".into(),
-            });
-            push_quote_segs(&mut spans, &quote_segs);
-        } else if bare.contains('/') || bare.starts_with('.') || bare.starts_with('~') {
+            Some("fg=cyan")
+        } else if word.bare.contains('/')
+            || word.bare.starts_with('.')
+            || word.bare.starts_with('~')
+        {
             // パス風。実在判定はクォートを剥いだ論理語で行う。
-            let style = if path_exists(&logical) {
+            Some(if path_exists(&word.logical) {
                 "fg=magenta,underline"
             } else {
                 "fg=magenta"
-            };
-            spans.push(Span {
-                start: word_start,
-                end: pos,
-                style: style.into(),
-            });
-            push_quote_segs(&mut spans, &quote_segs);
-        } else if bare.contains(['*', '?', '[', '<']) {
+            })
+        } else if word.bare.contains(['*', '?', '[', '<']) {
             // glob パターン (クォート内の `*` 等は対象外)
-            spans.push(Span {
-                start: word_start,
-                end: pos,
-                style: "fg=blue,bold".into(),
-            });
-            push_quote_segs(&mut spans, &quote_segs);
+            Some("fg=blue,bold")
         } else {
-            // 通常の引数はハイライトなし（端末のデフォルト色）。
-            // ただしクォートセグメントは文字列色を付ける。
-            push_quote_segs(&mut spans, &quote_segs);
+            // 通常の引数はハイライトなし（端末のデフォルト色）
+            None
+        };
+        if let Some(style) = style {
+            self.push_span(word.start, word.end, style);
         }
+        self.push_quote_segs(&word.quote_segs);
     }
-
-    spans
 }
 
-/// クォートセグメントを文字列色スパンとして追加する。
-/// 単語全体のスパンより後に push することで region_highlight 上で優先される。
-fn push_quote_segs(spans: &mut Vec<Span>, segs: &[(usize, usize)]) {
-    for &(start, end) in segs {
-        spans.push(Span {
-            start,
-            end,
-            style: "fg=yellow".into(),
-        });
+/// 走査した 1 語。位置は文字単位。
+#[derive(Debug)]
+struct Word {
+    start: usize,
+    end: usize,
+    /// クォートを剥いだ論理語 (コマンド分類・代入判定用)
+    logical: String,
+    /// クォート外の文字のみ (引数位置でのオプション/パス/glob 判定用)。
+    /// エスケープした文字の代わりに `\` を置く
+    bare: String,
+    /// クォートセグメントの範囲 (文字列色で塗る)
+    quote_segs: Vec<(usize, usize)>,
+}
+
+impl Word {
+    /// 語の一部でもクォート・エスケープされているか (エイリアス展開と予約語解釈を抑止する)。
+    fn is_quoted(&self) -> bool {
+        !self.quote_segs.is_empty() || self.bare.contains('\\')
     }
+
+    /// 対話 zsh (BANG_HIST) の履歴展開 (`!!`・`!$`・`!vim`) か。`!=` と `!(` は除く。
+    fn is_history_expansion(&self, chars: &[char]) -> bool {
+        chars[self.start] == '!'
+            && self.end - self.start > 1
+            && !matches!(chars[self.start + 1], '=' | '(')
+    }
+
+    /// 代入の `=` より前 (`=` が無ければ語全体) にクォート・エスケープがあるか。
+    fn has_quoted_name(&self, chars: &[char]) -> bool {
+        chars[self.start..self.end]
+            .iter()
+            .take_while(|&&c| c != '=')
+            .any(|&c| matches!(c, '\'' | '"' | '\\'))
+    }
+}
+
+/// 語の走査に使う、走査を始めた時点の文脈。
+#[derive(Debug, Clone, Copy)]
+struct WordScanContext {
+    /// 語がコマンド位置にあるか (配列代入と関数定義の判定に使う)
+    expects_command: bool,
+    /// サブシェルの中か (中では `)` で語を区切る)
+    in_subshell: bool,
+}
+
+/// `start` から通常の語を読む。クォートは shell の語結合と同様に単語の一部として
+/// 閉じクォートまで消費する (`FOO='a b' cmd` や `ec'ho'` を 1 語に保つ)。
+fn scan_word(chars: &[char], start: usize, context: WordScanContext) -> Word {
+    let mut word = Word {
+        start,
+        end: start,
+        logical: String::new(),
+        bare: String::new(),
+        quote_segs: Vec::new(),
+    };
+    let mut pos = start;
+    // 配列代入 `name=( … )` の括弧の深さ。中の空白・改行・演算子は語の一部
+    let mut array_depth = 0usize;
+    // 語中のグロブの括弧 `(a|b)` の深さ。中の `|` はパイプではなく選択肢
+    let mut glob_depth = 0usize;
+    while pos < chars.len()
+        && (array_depth > 0 || !ends_word(chars, pos, &word.logical, glob_depth, context))
+    {
+        let c = chars[pos];
+        if c == '<'
+            && let Some(len) = numeric_glob_len(chars[pos..].iter().copied())
+        {
+            word.logical.extend(&chars[pos..pos + len]);
+            word.bare.extend(&chars[pos..pos + len]);
+            pos += len;
+            continue;
+        }
+        if c == '(' {
+            if array_depth > 0 || opens_array(chars, start, pos, &word.logical, context) {
+                array_depth += 1;
+            } else {
+                glob_depth += 1;
+            }
+        } else if c == ')' && array_depth > 0 {
+            array_depth -= 1;
+        } else if c == ')' && glob_depth > 0 {
+            glob_depth -= 1;
+        }
+        match c {
+            // 語中の行継続は取り除いて前後を連結する (`ec\<改行>ho` は echo)
+            '\\' if chars.get(pos + 1) == Some(&'\n') => pos += 2,
+            '\'' | '"' => {
+                let end = if c == '\'' {
+                    scan_single_quoted(chars, pos, &mut word.logical)
+                } else {
+                    scan_double_quoted(chars, pos, &mut word.logical)
+                };
+                word.quote_segs.push((pos, end));
+                pos = end;
+            }
+            '\\' if pos + 1 < chars.len() => {
+                // 先頭の `\cmd` だけはエイリアスを抑止する意味を分類時まで保持する。
+                // それ以外のバックスラッシュは shell と同様に論理語から取り除く。
+                if pos == start {
+                    word.logical.push('\\');
+                }
+                // エスケープ対象はクォート済みなので glob/option/path 判定から除外する。
+                // `\\` を番兵として残し、後続文字が誤って語頭扱いされるのを防ぐ。
+                word.bare.push('\\');
+                word.logical.push(chars[pos + 1]);
+                pos += 2;
+            }
+            _ => {
+                word.logical.push(c);
+                word.bare.push(c);
+                pos += 1;
+            }
+        }
+    }
+    word.end = pos;
+    word
+}
+
+/// 括弧の外で `pos` の文字が語を終えるか (空白・演算子・リダイレクト・サブシェルの `)`・関数定義の `()`)。
+fn ends_word(
+    chars: &[char],
+    pos: usize,
+    logical: &str,
+    glob_depth: usize,
+    context: WordScanContext,
+) -> bool {
+    let c = chars[pos];
+    is_blank(c)
+        || matches!(c, '&' | ';' | '>')
+        || (c == '<' && numeric_glob_len(chars[pos..].iter().copied()).is_none())
+        || (c == '|' && glob_depth == 0)
+        || (c == ')' && context.in_subshell && glob_depth == 0)
+        // 関数定義 `name()` の名前はここで切る
+        || (c == '('
+            && chars.get(pos + 1) == Some(&')')
+            && context.expects_command
+            && !logical.is_empty()
+            && !logical.ends_with('='))
+}
+
+/// 語頭から `pos` の `(` の手前までが、クォート・エスケープの無い代入 `NAME=` だけなら
+/// 配列代入の始まり。
+fn opens_array(
+    chars: &[char],
+    start: usize,
+    pos: usize,
+    logical: &str,
+    context: WordScanContext,
+) -> bool {
+    context.expects_command
+        && logical.find('=') == Some(logical.len().saturating_sub(1))
+        && is_assignment_word(logical)
+        && !chars[start..pos]
+            .iter()
+            .any(|&c| matches!(c, '\'' | '"' | '\\'))
+}
+
+/// `start` の `'` から閉じクォートの次 (閉じていなければ末尾) までを読み、中身を論理語に足す。
+fn scan_single_quoted(chars: &[char], start: usize, logical: &mut String) -> usize {
+    let mut pos = start + 1;
+    while pos < chars.len() && chars[pos] != '\'' {
+        logical.push(chars[pos]);
+        pos += 1;
+    }
+    if pos < chars.len() {
+        pos += 1;
+    }
+    pos
+}
+
+/// `start` の `"` から閉じクォートの次 (閉じていなければ末尾) までを読み、中身を論理語に足す。
+fn scan_double_quoted(chars: &[char], start: usize, logical: &mut String) -> usize {
+    let mut pos = start + 1;
+    while pos < chars.len() && chars[pos] != '"' {
+        if chars[pos] == '\\' && pos + 1 < chars.len() {
+            let next = chars[pos + 1];
+            // 行継続は除き、ダブルクォートでエスケープできる文字だけ `\` を外す。
+            if next == '\n' {
+                pos += 2;
+                continue;
+            }
+            if matches!(next, '$' | '`' | '"' | '\\' | '!') {
+                pos += 1;
+            }
+        }
+        logical.push(chars[pos]);
+        pos += 1;
+    }
+    if pos < chars.len() {
+        pos += 1;
+    }
+    pos
+}
+
+/// `start` の `$` から始まる変数展開の終端 (排他) を返す。`$` でないか末尾の `$` なら None。
+fn variable_end(chars: &[char], start: usize) -> Option<usize> {
+    if chars[start] != '$' || start + 1 >= chars.len() {
+        return None;
+    }
+    let mut pos = start + 1;
+    if chars[pos] == '{' {
+        while pos < chars.len() && chars[pos] != '}' {
+            pos += 1;
+        }
+        if pos < chars.len() {
+            pos += 1;
+        }
+    } else if is_zsh_special_parameter_char(chars[pos]) {
+        // `$?`, `$$`, `$!` などの特殊パラメータは 1 文字だけで成立する。
+        pos += 1;
+    } else {
+        while pos < chars.len() && (chars[pos].is_alphanumeric() || chars[pos] == '_') {
+            pos += 1;
+        }
+    }
+    Some(pos)
+}
+
+/// `start` から始まるリダイレクト (`2>`・`&>`・`>`・`<` など) の終端 (排他) を返す。
+/// `<1-10>` などの数値 glob はリダイレクトにしない。
+fn redirect_end(chars: &[char], start: usize) -> Option<usize> {
+    let c = chars[start];
+    // zsh で記述子になるのは 1 桁だけ。`12>file` の `12` はコマンド名や引数になる。
+    let fd_end = start + 1;
+    if c.is_ascii_digit()
+        && fd_end < chars.len()
+        && matches!(chars[fd_end], '>' | '<')
+        && !(chars[fd_end] == '<' && numeric_glob_len(chars[fd_end..].iter().copied()).is_some())
+    {
+        return Some(redirect_operator_end(chars, fd_end));
+    }
+    if c == '&' && chars.get(start + 1) == Some(&'>') {
+        let mut pos = start + 2;
+        if chars.get(pos) == Some(&'>') {
+            pos += 1;
+        }
+        // `&>|`・`&>!`・`&>>|`・`&>>!` (CLOBBER) の `|`/`!` も演算子の一部
+        if matches!(chars.get(pos), Some('|' | '!')) {
+            pos += 1;
+        }
+        return Some(pos);
+    }
+    if c == '>' || (c == '<' && numeric_glob_len(chars[start..].iter().copied()).is_none()) {
+        return Some(redirect_operator_end(chars, start));
+    }
+    None
+}
+
+/// `start` (`((` の直後) から、算術コマンドを閉じる `))` の位置を返す。中の括弧は対応を数える。
+fn arithmetic_close(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (pos, &c) in chars.iter().enumerate().skip(start) {
+        match c {
+            '(' => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            ')' if chars.get(pos + 1) == Some(&')') => return Some(pos),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// 後続の単語をコマンド位置として扱い続ける語。
@@ -2679,5 +2780,150 @@ mod syntax_tests {
         }
         // `!` 単独は予約語のまま
         assert_eq!(pairs("! true")[0].1, "fg=yellow,bold");
+    }
+
+    // ---------------------------------------------------------------
+    // 語の走査とトークン終端のテスト
+    // ---------------------------------------------------------------
+
+    fn chars(text: &str) -> Vec<char> {
+        text.chars().collect()
+    }
+
+    fn scan(text: &str, expects_command: bool, in_subshell: bool) -> Word {
+        scan_word(
+            &chars(text),
+            0,
+            WordScanContext {
+                expects_command,
+                in_subshell,
+            },
+        )
+    }
+
+    #[test]
+    fn scan_word_はクォートを語に含め論理語とクォート外の文字を分ける() {
+        let word = scan("ec'ho' hi", true, false);
+        assert_eq!((word.start, word.end), (0, 6));
+        assert_eq!(word.logical, "echo");
+        assert_eq!(word.bare, "ec");
+        assert_eq!(word.quote_segs, [(2, 6)]);
+        assert!(word.is_quoted());
+    }
+
+    #[test]
+    fn scan_word_は代入の名前がクォートされているかを区別する() {
+        let text = chars("FOO='a b' cmd");
+        let context = WordScanContext {
+            expects_command: true,
+            in_subshell: false,
+        };
+        let word = scan_word(&text, 0, context);
+        assert_eq!(word.end, 9);
+        assert_eq!(word.logical, "FOO=a b");
+        assert!(!word.has_quoted_name(&text));
+
+        let text = chars("F'O'O=bar");
+        let word = scan_word(&text, 0, context);
+        assert_eq!(word.logical, "FOO=bar");
+        assert!(word.has_quoted_name(&text));
+    }
+
+    #[test]
+    fn scan_word_はエスケープした文字をクォート外の判定から外す() {
+        let word = scan("x\\*", false, false);
+        assert_eq!(word.logical, "x*");
+        assert_eq!(word.bare, "x\\");
+        // 語頭の `\cmd` はエイリアスの抑止を分類まで伝えるため論理語に `\` を残す
+        let word = scan("\\ls", true, false);
+        assert_eq!(word.logical, "\\ls");
+        assert_eq!(word.bare, "\\s");
+    }
+
+    #[test]
+    fn scan_word_は配列代入の括弧の中の空白を語に含める() {
+        let word = scan("a=(b c) rest", true, false);
+        assert_eq!(word.end, 7);
+        assert_eq!(word.logical, "a=(b c)");
+        // コマンド位置でなければ括弧はグロブで、空白で語が終わる
+        assert_eq!(scan("a=(b c) rest", false, false).end, 4);
+    }
+
+    #[test]
+    fn scan_word_はグロブの括弧の中の縦棒で語を切らない() {
+        assert_eq!(scan("x(a|b) | y", false, false).end, 6);
+        assert_eq!(scan("x | y", false, false).end, 1);
+    }
+
+    #[test]
+    fn scan_word_は関数定義とサブシェルの閉じ括弧で語を切る() {
+        assert_eq!(scan("name() { :; }", true, false).end, 4);
+        // 引数位置の `()` は語の一部
+        assert_eq!(scan("name() x", false, false).end, 6);
+        assert_eq!(scan("a)b", false, true).end, 1);
+        assert_eq!(scan("a)b", false, false).end, 3);
+    }
+
+    #[test]
+    fn scan_word_の位置は文字単位() {
+        let word = scan("日本'語' x", true, false);
+        assert_eq!((word.start, word.end), (0, 5));
+        assert_eq!(word.logical, "日本語");
+        assert_eq!(word.quote_segs, [(2, 5)]);
+    }
+
+    #[test]
+    fn scan_word_はダブルクォートでエスケープできる文字だけバックスラッシュを外す() {
+        let word = scan(r#""\$x\a\!""#, false, false);
+        assert_eq!(word.logical, r"$x\a!");
+        assert_eq!(word.bare, "");
+        assert_eq!(word.quote_segs, [(0, 9)]);
+    }
+
+    #[test]
+    fn scan_word_は閉じていないクォートを末尾まで読む() {
+        let word = scan("'abc", false, false);
+        assert_eq!((word.end, word.logical.as_str()), (4, "abc"));
+        assert_eq!(word.quote_segs, [(0, 4)]);
+        let word = scan("\"a\\", false, false);
+        assert_eq!((word.end, word.logical.as_str()), (3, "a\\"));
+        assert_eq!(word.quote_segs, [(0, 3)]);
+    }
+
+    #[test]
+    fn variable_end_は変数展開の終端を返す() {
+        let end = |text: &str| variable_end(&chars(text), 0);
+        assert_eq!(end("$foo_1 x"), Some(6));
+        assert_eq!(end("${a b}c"), Some(6));
+        // 閉じていない `${` は末尾まで
+        assert_eq!(end("${abc"), Some(5));
+        assert_eq!(end("$?x"), Some(2));
+        assert_eq!(end("$ x"), Some(1));
+        // 末尾の `$` と `$` 以外は変数ではない
+        assert_eq!(end("$"), None);
+        assert_eq!(end("a$"), None);
+    }
+
+    #[test]
+    fn redirect_end_はリダイレクト演算子の終端を返す() {
+        let end = |text: &str| redirect_end(&chars(text), 0);
+        assert_eq!(end("2>&1"), Some(3));
+        assert_eq!(end(">>|f"), Some(3));
+        assert_eq!(end("&>>!f"), Some(4));
+        assert_eq!(end("&>f"), Some(2));
+        assert_eq!(end("<&3"), Some(2));
+        assert_eq!(end("<>f"), Some(2));
+        // 数値 glob・2 桁の数字・`&&` はリダイレクトではない
+        assert_eq!(end("<1-10>"), None);
+        assert_eq!(end("2<1-10>"), None);
+        assert_eq!(end("12>f"), None);
+        assert_eq!(end("&&"), None);
+    }
+
+    #[test]
+    fn arithmetic_close_は中の括弧の対応を数えて閉じ括弧を探す() {
+        assert_eq!(arithmetic_close(&chars("((1+(2*3)))"), 2), Some(9));
+        assert_eq!(arithmetic_close(&chars("(( a ) ))"), 2), Some(7));
+        assert_eq!(arithmetic_close(&chars("((x"), 2), None);
     }
 }
