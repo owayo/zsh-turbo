@@ -1326,11 +1326,58 @@ _zsh_turbo_line_pre_redraw
         );
         assert!(script.contains("typeset -g ZSH_TURBO_COMPLETION_DIRS"));
         assert!(script.contains("${(@s.:.)ZSH_TURBO_COMPLETION_DIRS}"));
-        assert!(script.contains("[[ -n \"$completion_dir\" && -d \"$completion_dir\" ]]"));
         assert!(script.contains("(( ${fpath[(Ie)$completion_dir]} == 0 ))"));
         assert!(
             script.contains("() {\n    emulate -L zsh\n    if [[ -f \"$ZSH_COMPDUMP\" ]]"),
             "compinit もユーザのシェルオプションから隔離して実行する必要がある"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_script_補完ディレクトリは存在する絶対パスだけを重複なくfpathへ追加する() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/init.zsh");
+        let absolute = tmp.path().join("site-functions");
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&absolute).unwrap();
+        // 作業ディレクトリに相対パスと同じ名前のディレクトリがあっても読み込まない
+        std::fs::create_dir_all(work.join("rel")).unwrap();
+        std::fs::create_dir_all(work.join("~/zsh")).unwrap();
+        let absolute = absolute.display().to_string();
+        let dirs = format!(
+            "rel:{absolute}::./rel:~/zsh:{absolute}:{}/missing",
+            tmp.path().display()
+        );
+        let script = format!(
+            "cd {}\nZSH_TURBO_COMPLETION_DIRS={}\nsource {}\nprint -rl -- $fpath\n",
+            shell_single_quote(&work.display().to_string()),
+            shell_single_quote(&dirs),
+            shell_single_quote(&init_path.display().to_string())
+        );
+        let output = std::process::Command::new("zsh")
+            .args(["-dfc", &script])
+            .env("ZDOTDIR", tmp.path())
+            .env("ZSH_COMPDUMP", tmp.path().join("zcompdump"))
+            .output()
+            .expect("zsh を実行できるべき");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let fpath: Vec<&str> = stdout.lines().collect();
+        assert_eq!(
+            fpath.iter().filter(|dir| **dir == absolute).count(),
+            1,
+            "{fpath:?}"
+        );
+        assert!(
+            !fpath
+                .iter()
+                .any(|dir| dir.contains("rel") || dir.contains("~") || dir.contains("missing")),
+            "{fpath:?}"
         );
     }
 

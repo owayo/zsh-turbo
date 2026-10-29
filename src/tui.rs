@@ -678,6 +678,18 @@ impl App {
                     ));
                 }
             }
+            // 相対パスは autoload の時点のカレントディレクトリで解決され、作業中の
+            // ディレクトリの補完を読み込む。`~` も zsh 側で展開しない
+            EditTarget::CompletionDirs
+                if value
+                    .split(':')
+                    .any(|dir| !dir.is_empty() && !std::path::Path::new(dir).is_absolute()) =>
+            {
+                return Err(self.lang.text(
+                    "Use absolute paths separated by colons.",
+                    "絶対パスを : で区切って指定してください。",
+                ));
+            }
             EditTarget::Custom(_, CustomField::When)
                 if !value.is_empty()
                     && value != "always"
@@ -1509,11 +1521,15 @@ pub fn run_tui() -> std::io::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
     };
-    let mut terminal = ratatui::init();
+    // 制御端末が無いなどで初期化できないときは panic せずエラーを返す。
+    // raw mode に入った後で失敗した場合も端末を戻す
+    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
     let mut app = App::new(config, lang);
     app.initial_config_bytes = Some(initial);
     let result = run_app(&mut terminal, &mut app);
     ratatui::restore();
+    // 隠したカーソルは Terminal の Drop が戻す。続けて開く行入力のウィザードの前に閉じる
+    drop(terminal);
     result?;
     if app.launch_font_wizard {
         crate::font_wizard::run()?;

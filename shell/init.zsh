@@ -1245,7 +1245,8 @@ function _zsh_turbo_setup_completion_dirs() {
     emulate -L zsh
     local completion_dir
     for completion_dir in "${(@s.:.)ZSH_TURBO_COMPLETION_DIRS}"; do
-        [[ -n "$completion_dir" && -d "$completion_dir" ]] || continue
+        # 相対パスは autoload の時点のカレントディレクトリで解決され、作業中のディレクトリの補完を読み込む
+        [[ "$completion_dir" == /* && -d "$completion_dir" ]] || continue
         (( ${fpath[(Ie)$completion_dir]} == 0 )) && fpath+=("$completion_dir")
     done
 }

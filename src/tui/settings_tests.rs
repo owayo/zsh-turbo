@@ -696,6 +696,32 @@ fn 補完元と監視ファイルの相対パスは編集確定時に拒否す�
 }
 
 #[test]
+fn 補完ディレクトリは絶対パスだけを受け付ける() {
+    let mut app = App::new(Config::default(), Lang::Ja);
+    // 相対パスは autoload の時点のカレントディレクトリで解決され、`~` は展開しない
+    for invalid in ["completions", "/usr/share:rel", "~/zsh/completions"] {
+        app.start_edit(EditTarget::CompletionDirs);
+        replace_input(&mut app, invalid);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editing.is_some(), "{invalid}");
+        assert_eq!(app.config.shell.completion_dirs, "");
+        assert!(
+            app.status_msg.as_deref().unwrap().contains("絶対パス"),
+            "{invalid}"
+        );
+        press(&mut app, KeyCode::Esc);
+    }
+    // 空欄と空要素は zsh 側で読み飛ばすので受け付ける
+    for valid in ["", "/usr/share/zsh/site-functions", "/a::/b"] {
+        app.start_edit(EditTarget::CompletionDirs);
+        replace_input(&mut app, valid);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editing.is_none(), "{valid}: {:?}", app.status_msg);
+        assert_eq!(app.config.shell.completion_dirs, valid);
+    }
+}
+
+#[test]
 fn 補完一覧から詳細を開き削除確認と新規取消しができる() {
     let mut app = App::new(
         Config {
