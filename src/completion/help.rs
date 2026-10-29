@@ -290,8 +290,8 @@ fn parse_option(syntax: &str, description: &str) -> Option<OptionSpec> {
 
 fn is_flag_name(flag: &str) -> bool {
     flag.starts_with('-')
-        && flag != "--"
-        && flag.len() > 1
+        // `--` や区切り線の `-----` のように、ハイフンだけの語はフラグにしない
+        && flag.bytes().any(|c| c != b'-')
         && flag
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
@@ -454,8 +454,12 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
                 } else {
                     format!("({})", option.flags.join(" "))
                 };
-                let mut spec =
-                    format!("{exclusion}{flag}{suffix}[{}]", escape(&option.description));
+                let mut spec = format!("{exclusion}{flag}{suffix}");
+                // 値を取らない名前が `-` で終わるときに `[` を続けると、`_arguments` はその `-` を
+                // 同じ語で値を取る印と読んで名前から外すため、説明を付けない
+                if option.value.is_some() || !flag.ends_with('-') {
+                    spec.push_str(&format!("[{}]", escape(&option.description)));
+                }
                 if let Some(value) = &option.value {
                     let lower = value.to_ascii_lowercase();
                     let action = if ["file", "path", "directory"]
@@ -567,6 +571,37 @@ mod tests {
         ] {
             assert!(script.contains(spec), "{spec}\n{script}");
         }
+    }
+
+    #[test]
+    fn 値を取らないハイフン終わりのフラグは説明を付けず名前を保つ() {
+        let help = parse(
+            "Options:\n  --trail-  Trailing dash\n  -x-, --both-...  Repeated dash\n  --keep- <FILE>  Keep file\n",
+        );
+        let script = render("demo", &BTreeMap::from([(vec![], help)]));
+        // `_arguments` は名前の末尾の `-` の直後に `[` があると、同じ語で値を取る印と読む
+        for spec in [
+            "'(--trail-)--trail-'",
+            "'*-x-'",
+            "'*--both-'",
+            "'(--keep-)--keep-=[Keep file]:FILE:_files'",
+        ] {
+            assert!(script.contains(spec), "{spec}\n{script}");
+        }
+    }
+
+    #[test]
+    fn ハイフンだけの区切り線はフラグの候補にしない() {
+        let text = "Options:\n  ----------------\n  --zeta  Zeta flag\n  ---  Separator\n";
+        let help = parse(text);
+        assert_eq!(help.options.len(), 1);
+        assert_eq!(help.options[0].flags, ["--zeta"]);
+        assert_eq!(
+            parse_top_level("demo", text).options,
+            [("--zeta".to_owned(), "Zeta flag".to_owned())]
+        );
+        let script = render("demo", &BTreeMap::from([(vec![], help)]));
+        assert!(!script.contains("---"), "{script}");
     }
 
     #[test]
@@ -689,7 +724,7 @@ mod tests {
 
     #[test]
     fn フラグを読み取れないオプションの行はnoneを返す() {
-        for syntax in ["--", "-", "-<n>", "-é", "- name"] {
+        for syntax in ["--", "-", "---", "-<n>", "-é", "- name"] {
             assert!(parse_option(syntax, "Description").is_none(), "{syntax}");
         }
     }
