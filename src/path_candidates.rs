@@ -572,7 +572,8 @@ fn last_word(buffer: &str) -> Option<(Word, bool)> {
     word.map(|word| (word, command))
 }
 
-/// `i` 文字目の `$` から始まる展開を読み、次の位置を返す。閉じていないコマンド置換は None。
+/// `i` 文字目の `$` から始まる展開を読み、次の位置を返す。閉じていないコマンド置換と、
+/// クォート・バッククォート・`\` を含む `${...}` (閉じ括弧の位置を決められない) は None。
 fn read_dollar(text: &Text, i: usize, quote: Quote, word: &mut Word) -> Option<usize> {
     match text.get(i + 1) {
         Some('(') => {
@@ -587,6 +588,10 @@ fn read_dollar(text: &Text, i: usize, quote: Quote, word: &mut Word) -> Option<u
             let name = text.collect(i + 2..close);
             if is_name(&name) {
                 word.pieces.push(Piece::Var(name));
+            } else if name.contains(['\'', '"', '`', '\\']) {
+                // `${x:-'}'}` はクォートの中の `}` では閉じない。ここで閉じたとみなすと、
+                // 以降のクォートの状態が zsh とずれる
+                return None;
             } else {
                 word.unsupported = true;
             }
@@ -1257,6 +1262,34 @@ mod tests {
             "ls $HOME/dir/$",
         ] {
             assert_eq!(list_with(input, 256, &env), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn 展開の中にクォートやエスケープがあれば閉じ括弧を決められずnoneを返す() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join("dir")).unwrap();
+        fs::create_dir(root.join("a dir")).unwrap();
+        touch(&root.join("dir/file.txt"));
+        // zsh は `${x:-'}'}` の `'}'` をクォートとして読み、最後の語はクォート外の `a dir/` になる。
+        // 最初の `}` で閉じたとみなすとクォートの状態が逆になり、`dir/` をクォートの中として一覧にする
+        for input in [
+            "echo ${x:-'}'} a' 'dir/",
+            "echo ${x:-\"}\"} a\" \"dir/",
+            "echo \"${x:-\"}\"}\" a\" \"dir/",
+            "echo ${x:-\\}'} a' 'dir/",
+            "echo ${x:-`echo a`} dir/",
+        ] {
+            assert_eq!(list_in(root, input), None, "{input}");
+        }
+        // `$` だけを含む展開はクォートの状態がずれないため、後ろの語は従来どおり一覧にする
+        for input in ["echo ${x:-$y} dir/", "echo ${x:-${y}} dir/"] {
+            assert_eq!(
+                labels(&list_in(root, input).unwrap()),
+                ["file.txt"],
+                "{input}"
+            );
         }
     }
 
