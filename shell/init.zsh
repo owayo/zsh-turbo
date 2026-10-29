@@ -121,6 +121,12 @@ function _zsh_turbo_render_prompt() {
         left='%~ %# '
         right=''
     fi
+    # PROMPT_BANG が有効だと `!` は履歴番号に置き換わるため、表示する `!` を `!!` にする。
+    # emulate -L は PROMPT_BANG を戻さないため、ここで利用者の設定を判定できる。
+    if [[ -o prompt_bang ]]; then
+        left="${left//\!/!!}"
+        right="${right//\!/!!}"
+    fi
     # transient で表示を簡略化した後も、先頭の空行を維持する。
     local prompt_body="$left"
     typeset -g _ZSH_TURBO_PROMPT_PADDING=""
