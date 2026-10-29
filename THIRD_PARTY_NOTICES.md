@@ -11,7 +11,7 @@ Identical license documents are reproduced once, with references from each packa
 OR (and the legacy / notation) denotes alternative licenses; AND denotes combined terms.
 Reproducing alternative license texts does not turn OR into AND.
 
-Cargo.lock SHA-256: `6dba4ef945e20342062d042f97bef31833428d0d7f49c11400e1f3f48741c8ff`
+Cargo.lock SHA-256: `bf9351deb0575b519e20b40cb1b5e8fac4abc085041788464ef465d9cb5abc0d`
 
 ## MPL source availability
 
@@ -26,7 +26,7 @@ MesloLGS NF is downloaded separately and is not included in the release archive.
 Its upstream attribution and Apache-2.0 terms are in licenses/MesloLGS-NF.txt.
 The installer also saves these terms beside the fonts.
 
-## Packages (153)
+## Packages (152)
 
 The source archive links contain the exact published crate versions used by Cargo.lock.
 The two winapi GNU import-library crates omit license files from their archives;
@@ -97,7 +97,7 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | itertools 0.14.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/itertools/itertools-0.14.0.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-33) |
 | itoa 1.0.18 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/itoa/itoa-1.0.18.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2) |
 | js-sys 0.3.106 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/js-sys/js-sys-0.3.106.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-14) |
-| json5 1.3.2 | MIT | [source](https://static.crates.io/crates/json5/json5-1.3.2.crate) | [LICENSE](#document-47) |
+| jsonc-parser 0.34.0 | MIT | [source](https://static.crates.io/crates/jsonc-parser/jsonc-parser-0.34.0.crate) | [LICENSE](#document-47) |
 | kasuari 0.4.12 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/kasuari/kasuari-0.4.12.crate) | [LICENSE-APACHE](#document-48); [LICENSE-MIT](#document-49) |
 | libc 0.2.190 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/libc/libc-0.2.190.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-50) |
 | libredox 0.1.25 | MIT | [source](https://static.crates.io/crates/libredox/libredox-0.1.25.crate) | [LICENSE](#document-51) |
@@ -163,7 +163,6 @@ https://github.com/retep998/winapi-rs/blob/0.3.9/LICENSE-MIT
 | toml_parser 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_parser/toml_parser-1.1.5+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | toml_writer 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/toml_writer/toml_writer-1.1.3+spec-1.1.0.crate) | [LICENSE-APACHE](#document-16); [LICENSE-MIT](#document-6) |
 | typenum 1.20.1 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/typenum/typenum-1.20.1.crate) | [LICENSE](#document-91); [LICENSE-APACHE](#document-92); [LICENSE-MIT](#document-93) |
-| ucd-trie 0.1.7 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/ucd-trie/ucd-trie-0.1.7.crate) | [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-60) |
 | unicode-ident 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | [source](https://static.crates.io/crates/unicode-ident/unicode-ident-1.0.27.crate) | [LICENSE-APACHE](#document-1); [LICENSE-MIT](#document-2); [LICENSE-UNICODE](#document-94) |
 | unicode-normalization 0.1.25 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-normalization/unicode-normalization-0.1.25.crate) | [COPYRIGHT](#document-95); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-40) |
 | unicode-segmentation 1.13.3 | MIT OR Apache-2.0 | [source](https://static.crates.io/crates/unicode-segmentation/unicode-segmentation-1.13.3.crate) | [COPYRIGHT](#document-95); [LICENSE-APACHE](#document-7); [LICENSE-MIT](#document-40) |
@@ -3290,9 +3289,9 @@ SOFTWARE.
 ### Document 47
 
 ````text
-MIT License
+The MIT License (MIT)
 
-Copyright (c) 2025 Callum Oakley
+Copyright (c) 2020 David Sherret
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

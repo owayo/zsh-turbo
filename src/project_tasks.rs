@@ -387,23 +387,28 @@ fn deno_tasks(cwd: &Path) -> Vec<String> {
         .into_iter()
         .find_map(|file| read_small(&cwd.join(file)))
     {
-        // Deno は deno.json もコメントと末尾のカンマを許す JSONC として読む
+        // Deno と同じく jsonc-parser の既定の設定で読む (deno.json もコメント・末尾のカンマ・
+        // 引用符の無いキーを書ける)
         let document = few_brackets(&text)
-            .then(|| json5::from_str::<serde_json::Value>(&text).ok())
+            .then(|| jsonc_parser::parse_to_value(&text, &Default::default()).ok())
+            .flatten()
             .flatten();
-        if let Some(tasks) = document
-            .as_ref()
-            .and_then(|document| document.get("tasks"))
-            .and_then(serde_json::Value::as_object)
+        if let Some(jsonc_parser::JsonValue::Object(mut document)) = document
+            && let Some(tasks) = document.take_object("tasks")
         {
             names.extend(
                 tasks
-                    .iter()
+                    .into_iter()
                     // Deno 2.1 以降は `{"command": ..., "dependencies": [...]}` の形でも書ける
                     .filter(|(name, value)| {
-                        safe_name(name) && (value.is_string() || value.is_object())
+                        safe_name(name)
+                            && matches!(
+                                value,
+                                jsonc_parser::JsonValue::String(_)
+                                    | jsonc_parser::JsonValue::Object(_)
+                            )
                     })
-                    .map(|(name, _)| name.clone()),
+                    .map(|(name, _)| name.into_owned()),
             );
         }
     }
@@ -945,6 +950,35 @@ mod tests {
             ["deno task build", "deno task dev", "deno task serve"]
         );
         assert!(defines("deno", "serve", tmp.path()));
+    }
+
+    #[test]
+    fn denoの設定はdenoと同じ構文で読みエスケープの多い文字列も短時間で読む() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Deno は引用符の無いキーや単一引用符の文字列も受け付ける
+        std::fs::write(
+            tmp.path().join("deno.jsonc"),
+            "{tasks: {dev: 'deno run main.ts', /* 末尾のカンマ */},}",
+        )
+        .unwrap();
+        assert_eq!(
+            candidates_in("deno task ", tmp.path(), 10),
+            ["deno task dev"]
+        );
+
+        // 文字列の中のエスケープごとに先頭から複製すると、1 MiB 近い文書で数秒かかる
+        let escapes = "\\n".repeat(400_000);
+        std::fs::write(
+            tmp.path().join("deno.jsonc"),
+            format!("{{\"x\": \"{escapes}\", \"tasks\": {{\"check\": \"deno check\"}}}}"),
+        )
+        .unwrap();
+        let start = std::time::Instant::now();
+        assert_eq!(
+            candidates_in("deno task ", tmp.path(), 10),
+            ["deno task check"]
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[cfg(unix)]
