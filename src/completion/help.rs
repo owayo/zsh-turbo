@@ -413,6 +413,17 @@ fn escape(text: &str) -> String {
         .collect()
 }
 
+/// オプションの値の説明。`_arguments` は説明が `*` で始まると残りの語すべてを取る指定、
+/// 空なら `::` を省略できる引数の印と読むため、名前を補う
+fn value_message(value: &str) -> String {
+    let value: String = value.chars().filter(|c| !c.is_control()).collect();
+    match value.trim() {
+        "" => "value".into(),
+        value if value.starts_with('*') => escape(&format!("value ({value})")),
+        value => escape(value),
+    }
+}
+
 fn function(command: &str, path: &[String]) -> String {
     format!(
         "_zsh_turbo_help_{}_{command}_{}",
@@ -458,7 +469,7 @@ fn render(command: &str, nodes: &BTreeMap<Vec<String>, Help>) -> String {
                     spec.push_str(&format!(
                         "{}{}:{action}",
                         if option.optional { "::" } else { ":" },
-                        escape(value)
+                        value_message(value)
                     ));
                 }
                 specs.push(spec);
@@ -538,6 +549,24 @@ mod tests {
         assert!(script.contains("'*--verbose[Verbose output]'"), "{script}");
         assert!(script.contains("'(-q --quiet)--quiet[Quiet output]'"));
         assert!(script.contains("'(--include)--include=[Input files]:FILE:_files'"));
+    }
+
+    #[test]
+    fn 星印で始まる値名や空の値名でも引数の取り方を変えない() {
+        let help = parse(
+            "Options:\n  --glob <*.txt>  Glob pattern\n  --source <*FILE>  Source file\n  --any <...>  Any value\n  --empty <>  Empty value\n  --level[]  Level\n",
+        );
+        let script = render("demo", &BTreeMap::from([(vec![], help)]));
+        // `_arguments` は `:*` を残りの語すべてを取る指定、`::` を省略できる引数と読む
+        for spec in [
+            "'(--glob)--glob=[Glob pattern]:value (*.txt):'",
+            "'(--source)--source=[Source file]:value (*FILE):_files'",
+            "'(--any)--any=[Any value]:value:'",
+            "'(--empty)--empty=[Empty value]:value:'",
+            "'(--level)--level=[Level]::value:'",
+        ] {
+            assert!(script.contains(spec), "{spec}\n{script}");
+        }
     }
 
     #[test]
