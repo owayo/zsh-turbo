@@ -175,6 +175,27 @@ fn 入力中の表示行数を超えるタスクもすべて送り選んだ位�
 }
 
 #[test]
+fn 旧シェル連携のproject_listはタスクがあれば一覧をなければ履歴の候補を返す() {
+    let tmp = setup("build:\ntest:\n", "git status\n");
+    let root = tmp.path();
+    let project_list = |buffer: &str| {
+        let output = cli(root)
+            .args(["suggest", "--project-list", "--history-file"])
+            .arg(root.join("history"))
+            .args(["--", buffer])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    // 旧版の init.zsh が読む形式のため変えない: 1 行目が種類で、続けて候補を 1 行ずつ
+    assert_eq!(project_list("make"), "project\nmake build\nmake test\n");
+    assert_eq!(project_list("make t"), "project\nmake test\n");
+    assert_eq!(project_list("git s"), "history\ngit status");
+    assert_eq!(project_list("zzz"), "history\n");
+}
+
+#[test]
 fn 利用の記録も履歴もなければ先頭のタスクをghostと選択位置にする() {
     let tmp = setup("build:\ninstall:\n", "make busted\n");
     let response = ui_list(tmp.path(), "make");
