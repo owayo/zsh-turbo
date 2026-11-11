@@ -119,7 +119,9 @@ fn load(
         let ttl = if record.failed { FAILURE_TTL } else { TTL };
         (record.version == VERSION
             && record.stamp == stamp
-            && seconds(now).saturating_sub(record.updated) < ttl.as_secs())
+            && seconds(now)
+                .checked_sub(record.updated)
+                .is_some_and(|age| age < ttl.as_secs()))
         .then_some(record.help)
     };
     if let Some(help) = fresh() {
@@ -284,6 +286,27 @@ mod tests {
         assert_eq!(fails.get(), 1);
         load("demo", &binary, &root, now + FAILURE_TTL, &fail).unwrap();
         assert_eq!(fails.get(), 2);
+    }
+
+    #[test]
+    fn 時計が戻ったら成功と失敗のどちらのキャッシュも取り直す() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = tmp.path().join("demo");
+        fs::write(&binary, "v1").unwrap();
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        for failed in [false, true] {
+            let root = tmp.path().join(failed.to_string());
+            let runs = Cell::new(0);
+            let run = |_: &Path| {
+                runs.set(runs.get() + 1);
+                (!failed).then(|| HELP.to_owned())
+            };
+            load("demo", &binary, &root, now + TTL, &run).unwrap();
+            load("demo", &binary, &root, now, &run).unwrap();
+            assert_eq!(runs.get(), 2, "failed={failed}");
+            load("demo", &binary, &root, now, &run).unwrap();
+            assert_eq!(runs.get(), 2, "取り直した後はキャッシュを再利用する");
+        }
     }
 
     #[test]

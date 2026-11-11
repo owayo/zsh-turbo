@@ -9,6 +9,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // 生成する補完スクリプトの形を変えたら上げ、既存のキャッシュを作り直させる。
 const VERSION: u32 = 6;
 const FAILURE_BACKOFF: u64 = 300;
+const MAX_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
+
+fn invalid_source() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "expected a readable UTF-8 zsh #compdef completion file (max 4 MiB)",
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Stamp {
@@ -72,36 +80,47 @@ pub(super) fn resolve(command: &str) -> io::Result<PathBuf> {
 
 fn stamps(entry: &Registration) -> io::Result<Vec<Stamp>> {
     super::validate(std::slice::from_ref(entry)).map_err(io::Error::other)?;
-    let mut paths = Vec::new();
+    let mut current = Vec::new();
     if entry.source != Source::File {
-        paths.push(resolve(&entry.command)?);
+        current.push(stamp(&resolve(&entry.command)?)?);
     } else if let Ok(binary) = resolve(&entry.command) {
-        paths.push(binary);
+        current.push(stamp(&binary)?);
     }
     if entry.source == Source::Generator {
         let generator = entry
             .generator
             .first()
             .ok_or_else(|| io::Error::other("generator is empty"))?;
-        paths.push(resolve(generator)?);
+        current.push(stamp(&resolve(generator)?)?);
     }
     if entry.source == Source::File {
-        paths.push(expand_path(&entry.file)?);
+        let source = stamp(&expand_path(&entry.file)?)?;
+        // ハッシュや本文を読む前に拒否し、大きな補完元をメモリへ読み込まない。
+        if source.len > MAX_SOURCE_BYTES {
+            return Err(invalid_source());
+        }
+        current.push(source);
     }
     for path in &entry.watch_files {
-        paths.push(expand_path(path)?);
+        current.push(stamp(&expand_path(path)?)?);
     }
-    paths.into_iter().map(|p| stamp(&p)).collect()
+    Ok(current)
 }
 
-fn digest(path: &Path) -> io::Result<String> {
-    let mut file = File::open(path)?;
+fn digest(stamp: &Stamp) -> io::Result<String> {
+    // 確認後に伸び続けるファイルも、取得済みのサイズを超えた時点で打ち切る。
+    let mut file = File::open(&stamp.path)?.take(stamp.len.saturating_add(1));
     let mut hash = Sha256::new();
     let mut buffer = [0; 64 * 1024];
     loop {
         let count = file.read(&mut buffer)?;
         if count == 0 {
             break;
+        }
+        if file.limit() == 0 {
+            return Err(io::Error::other(
+                "input grew during hashing; retry on next check",
+            ));
         }
         hash.update(&buffer[..count]);
     }
@@ -182,7 +201,9 @@ fn refresh_at(
                 f.version == VERSION
                     && f.registration == *entry
                     && f.stamps == current
-                    && now.saturating_sub(f.updated) < FAILURE_BACKOFF
+                    && now
+                        .checked_sub(f.updated)
+                        .is_some_and(|age| age < FAILURE_BACKOFF)
             })
         {
             return Err(io::Error::other(failure.error));
@@ -235,10 +256,7 @@ fn refresh_locked(
     if !force && reusable.is_some_and(|r| r.stamps == current) {
         return Ok("cached");
     }
-    let hashes = current
-        .iter()
-        .map(|s| digest(&s.path))
-        .collect::<io::Result<Vec<_>>>()?;
+    let hashes = current.iter().map(digest).collect::<io::Result<Vec<_>>>()?;
     let unchanged_content = !force
         && reusable.is_some_and(|r| {
             r.hashes == hashes
@@ -273,11 +291,10 @@ fn refresh_locked(
             }
             Source::File => {
                 let path = expand_path(&entry.file)?;
-                let script = fs::read_to_string(&path)?;
-                if script.len() > 4 * 1024 * 1024 || !script.starts_with("#compdef") {
-                    return Err(io::Error::other(
-                        "expected a zsh #compdef completion file (max 4 MiB)",
-                    ));
+                let script = crate::small_file::read_to_string(&path, MAX_SOURCE_BYTES)
+                    .ok_or_else(invalid_source)?;
+                if !script.starts_with("#compdef") {
+                    return Err(invalid_source());
                 }
                 let source_path = fs::canonicalize(&path)?;
                 let name = path
@@ -371,6 +388,122 @@ pub(super) fn status(entry: &Registration, root: &Path) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn 上限を超えた補完元はハッシュや本文を読む前に拒否する() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_example");
+        let file = File::create(&path).unwrap();
+        file.set_len(4 * 1024 * 1024 + 1).unwrap();
+        let entry = Registration {
+            command: "example".into(),
+            source: Source::File,
+            file: path.to_str().unwrap().into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            stamps(&entry).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        file.set_len(4 * 1024 * 1024).unwrap();
+        assert!(stamps(&entry).is_ok());
+    }
+
+    #[test]
+    fn 補完元の上限を追加の監視ファイルには適用しない() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("_example");
+        let watched = tmp.path().join("watched");
+        fs::write(&source, b"#compdef example\n").unwrap();
+        File::create(&watched)
+            .unwrap()
+            .set_len(MAX_SOURCE_BYTES + 1)
+            .unwrap();
+        let entry = Registration {
+            command: "example".into(),
+            source: Source::File,
+            file: source.to_str().unwrap().into(),
+            watch_files: vec![watched.to_str().unwrap().into()],
+            ..Default::default()
+        };
+        let current = stamps(&entry).unwrap();
+        assert_eq!(
+            current.last().unwrap().path,
+            fs::canonicalize(watched).unwrap()
+        );
+        assert!(current.last().unwrap().len > MAX_SOURCE_BYTES);
+    }
+
+    #[test]
+    fn スタンプ取得後に伸びたファイルのハッシュを採用しない() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("input");
+        fs::write(&path, b"").unwrap();
+        let empty = stamp(&path).unwrap();
+        assert!(digest(&empty).is_ok());
+        fs::write(&path, b"changed").unwrap();
+        assert!(digest(&empty).is_err());
+        let current = stamp(&path).unwrap();
+        assert!(digest(&current).is_ok());
+        fs::write(&path, b"changed again").unwrap();
+        assert!(digest(&current).is_err());
+    }
+
+    #[test]
+    fn 補完元のサイズ超過や不正なutf8でも旧キャッシュを残す() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("_example");
+        let root = tmp.path().join("cache");
+        fs::write(&source, b"#compdef example\n_arguments '--ok[Test flag]'\n").unwrap();
+        let entry = Registration {
+            command: "example".into(),
+            source: Source::File,
+            file: source.to_str().unwrap().into(),
+            ..Default::default()
+        };
+        assert_eq!(refresh_at(&entry, &root, false, 1000).unwrap(), "updated");
+        let script = fs::read(root.join("example.zsh")).unwrap();
+        let record = fs::read(root.join("example.json")).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_len(MAX_SOURCE_BYTES + 1)
+            .unwrap();
+        assert!(refresh_at(&entry, &root, false, 1001).is_err());
+        assert_eq!(fs::read(root.join("example.zsh")).unwrap(), script);
+        assert_eq!(fs::read(root.join("example.json")).unwrap(), record);
+        fs::write(&source, b"#compdef example\n\xff").unwrap();
+        assert!(refresh_at(&entry, &root, false, 1002).is_err());
+        assert_eq!(fs::read(root.join("example.zsh")).unwrap(), script);
+        assert_eq!(fs::read(root.join("example.json")).unwrap(), record);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn スタンプは通常ファイルへのリンクを認め特殊ファイルは読まずに拒否する() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("_example");
+        let link = tmp.path().join("link");
+        fs::write(&source, b"#compdef example\n").unwrap();
+        symlink(&source, &link).unwrap();
+        assert_eq!(stamp(&link).unwrap(), stamp(&source).unwrap());
+        for target in [Path::new("/dev/zero"), tmp.path()] {
+            fs::remove_file(&link).unwrap();
+            symlink(target, &link).unwrap();
+            assert!(stamp(&link).is_err());
+        }
+        let fifo = tmp.path().join("fifo");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(stamp(&fifo).is_err());
+    }
+
     #[cfg(unix)]
     #[test]
     fn 失敗後は再生成を待ち強制更新や監視ファイルの変更では待たない() {
@@ -416,6 +549,9 @@ mod tests {
         changed.generator.push("changed-setting".into());
         assert!(refresh_at(&changed, &root, false, 1305).is_err());
         assert_eq!(fs::read_to_string(&count).unwrap(), "6\n");
+        // 時計が戻って未来の失敗記録になったら、待たずに再試行する。
+        assert!(refresh_at(&changed, &root, false, 1304).is_err());
+        assert_eq!(fs::read_to_string(&count).unwrap(), "7\n");
     }
 
     #[test]

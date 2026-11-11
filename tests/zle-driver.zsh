@@ -63,11 +63,11 @@ function await_selected() {
 function await_terminal() {
     emulate -L zsh
     setopt extendedglob
-    local expected="$1" actual
+    local expected="$1" mode="${2:-text}" actual
     repeat $fixture_wait; do
         drain_fixture
         actual="$(<"$TEST_ROOT/terminal")"
-        actual="${actual//$'\e'\[[0-9\;]##m/}"
+        [[ "$mode" == raw ]] || actual="${actual//$'\e'\[[0-9\;]##m/}"
         [[ "$actual" == *"$expected"* ]] && return 0
         zselect -t 5
     done
@@ -236,12 +236,13 @@ zpty -b fixture zsh -di || exit 1
     : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
     await_selected 'build' || exit 56
-    [[ "$(<"$TEST_ROOT/terminal")" == *$'\e[36m'* ]] || exit 56
+    # 選択の記録後も PTY の描画データが届くとは限らないため、色の出力も待つ。
+    await_terminal $'\e[36m' raw || exit 56
     : > "$TEST_ROOT/terminal"
     : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[B'
     await_selected 'check' || exit 57
-    [[ "$(<"$TEST_ROOT/terminal")" == *$'\e[36m'* ]] || exit 57
+    await_terminal $'\e[36m' raw || exit 57
     : > "$TEST_ROOT/terminal"
     : > "$TEST_ROOT/menu"
     zpty -w -n fixture $'\e[A'

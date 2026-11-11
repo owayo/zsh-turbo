@@ -1,3 +1,4 @@
+mod git;
 pub(crate) mod helpers;
 mod palette;
 pub use palette::{RAINBOW_PALETTES, rainbow_colors, rainbow_palette};

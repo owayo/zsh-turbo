@@ -1,0 +1,437 @@
+{
+  "system": "Darwin",
+  "machine": "arm64",
+  "rust": "1.99.1",
+  "profile": "release, opt-level=3, lto=true, codegen-units=1",
+  "warmups": 3,
+  "runs": 7,
+  "results": [
+    {
+      "case": "valid-small",
+      "binary": "before",
+      "bytes": 43,
+      "samples_ms": [
+        25.936458,
+        28.690333,
+        32.047584,
+        30.188292,
+        31.105,
+        30.109791,
+        28.139542
+      ],
+      "rss_bytes": [
+        6586368,
+        6586368,
+        6586368,
+        6602752,
+        6586368,
+        6586368,
+        6586368
+      ],
+      "median_ms": 30.109791,
+      "stdev_ms": 2.0455478931370172,
+      "median_rss_bytes": 6586368
+    },
+    {
+      "case": "valid-small",
+      "binary": "after",
+      "bytes": 43,
+      "samples_ms": [
+        27.4535,
+        33.034166,
+        28.500125,
+        30.393042,
+        29.285667,
+        28.508916,
+        31.141042
+      ],
+      "rss_bytes": [
+        6569984,
+        6569984,
+        6569984,
+        6537216,
+        6586368,
+        6586368,
+        6569984
+      ],
+      "median_ms": 29.285667,
+      "stdev_ms": 1.9028754828067442,
+      "median_rss_bytes": 6569984
+    },
+    {
+      "case": "oversized-16MiB",
+      "binary": "before",
+      "bytes": 16777216,
+      "samples_ms": [
+        28.280875,
+        28.285166,
+        28.223709,
+        29.242584,
+        28.45375,
+        30.537375,
+        28.047375
+      ],
+      "rss_bytes": [
+        23314432,
+        23314432,
+        23314432,
+        23298048,
+        23298048,
+        23314432,
+        23298048
+      ],
+      "median_ms": 28.285166,
+      "stdev_ms": 0.8876316513906413,
+      "median_rss_bytes": 23314432
+    },
+    {
+      "case": "oversized-16MiB",
+      "binary": "after",
+      "bytes": 16777216,
+      "samples_ms": [
+        12.1835,
+        13.323458,
+        13.218958,
+        13.65725,
+        12.080916,
+        14.180625,
+        11.831875
+      ],
+      "rss_bytes": [
+        6307840,
+        6307840,
+        6291456,
+        6307840,
+        6291456,
+        6291456,
+        6307840
+      ],
+      "median_ms": 13.218958,
+      "stdev_ms": 0.8958409683831534,
+      "median_rss_bytes": 6307840
+    }
+  ],
+  "git_prompt": {
+    "files": 1000,
+    "warmups": 3,
+    "runs": 7,
+    "samples_ms": {
+      "before": [
+        66.018708,
+        74.105083,
+        75.088917,
+        81.498708,
+        54.874625,
+        81.725875,
+        86.748125
+      ],
+      "after": [
+        84.116917,
+        62.782792,
+        84.593333,
+        82.997667,
+        90.280542,
+        91.814791,
+        90.96675
+      ]
+    },
+    "median_ms": {
+      "before": 75.088917,
+      "after": 84.593333
+    },
+    "stdev_ms": {
+      "before": 10.86666138584036,
+      "after": 10.004694743204869
+    },
+    "output_identical": true
+  },
+  "history": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.15.2",
+    "warmups": 3,
+    "runs": 7,
+    "results": [
+      {
+        "case": "small-prefix",
+        "binary": "before",
+        "entries": 1000,
+        "bytes": 52000,
+        "query": "git ",
+        "strategy": "prefix",
+        "samples_ms": [
+          6.578625,
+          6.518417,
+          6.605209,
+          6.501042,
+          6.412667,
+          6.09825,
+          6.724833
+        ],
+        "median_ms": 6.518417,
+        "stdev_ms": 0.1985951774225049,
+        "output_sha256": "f6b2246f7cd76640819e1b7a53ed6a02f8c96a87d1070fa5f436cea69b113c7a"
+      },
+      {
+        "case": "small-prefix",
+        "binary": "after",
+        "entries": 1000,
+        "bytes": 52000,
+        "query": "git ",
+        "strategy": "prefix",
+        "samples_ms": [
+          6.727208,
+          6.075125,
+          6.932792,
+          6.209416,
+          6.370958,
+          6.732166,
+          6.542292
+        ],
+        "median_ms": 6.542292,
+        "stdev_ms": 0.309589966026571,
+        "output_sha256": "f6b2246f7cd76640819e1b7a53ed6a02f8c96a87d1070fa5f436cea69b113c7a"
+      },
+      {
+        "case": "large-prefix",
+        "binary": "before",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "git ",
+        "strategy": "prefix",
+        "samples_ms": [
+          15.365625,
+          17.2405,
+          16.361375,
+          19.251042,
+          19.738583,
+          16.896916,
+          19.719625
+        ],
+        "median_ms": 17.2405,
+        "stdev_ms": 1.7641292704937095,
+        "output_sha256": "a8cc1c4306a20a3cdf4cf3581ad752c59d2679a8ab97dd825909bd75ea44337a"
+      },
+      {
+        "case": "large-prefix",
+        "binary": "after",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "git ",
+        "strategy": "prefix",
+        "samples_ms": [
+          15.716375,
+          16.602292,
+          19.926542,
+          19.100834,
+          22.474541,
+          17.884292,
+          19.011834
+        ],
+        "median_ms": 19.011834,
+        "stdev_ms": 2.235041035976052,
+        "output_sha256": "a8cc1c4306a20a3cdf4cf3581ad752c59d2679a8ab97dd825909bd75ea44337a"
+      },
+      {
+        "case": "large-prefix-miss",
+        "binary": "before",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "missing ",
+        "strategy": "prefix",
+        "samples_ms": [
+          11.69625,
+          10.966917,
+          11.599959,
+          11.504333,
+          11.051042,
+          11.114167,
+          10.9045
+        ],
+        "median_ms": 11.114167,
+        "stdev_ms": 0.32729988742887184,
+        "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "case": "large-prefix-miss",
+        "binary": "after",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "missing ",
+        "strategy": "prefix",
+        "samples_ms": [
+          11.429792,
+          11.114833,
+          11.660458,
+          11.148959,
+          11.444833,
+          11.107,
+          11.026208
+        ],
+        "median_ms": 11.148959,
+        "stdev_ms": 0.2355970340669484,
+        "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "case": "large-substring",
+        "binary": "before",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "status",
+        "strategy": "substring",
+        "samples_ms": [
+          14.331625,
+          14.140833,
+          14.13125,
+          14.626042,
+          14.654583,
+          13.978959,
+          13.811
+        ],
+        "median_ms": 14.140833,
+        "stdev_ms": 0.31705468400096615,
+        "output_sha256": "a8cc1c4306a20a3cdf4cf3581ad752c59d2679a8ab97dd825909bd75ea44337a"
+      },
+      {
+        "case": "large-substring",
+        "binary": "after",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "status",
+        "strategy": "substring",
+        "samples_ms": [
+          14.822833,
+          14.223791,
+          14.31075,
+          14.233125,
+          14.469667,
+          13.941417,
+          14.732583
+        ],
+        "median_ms": 14.31075,
+        "stdev_ms": 0.30843538950560806,
+        "output_sha256": "a8cc1c4306a20a3cdf4cf3581ad752c59d2679a8ab97dd825909bd75ea44337a"
+      },
+      {
+        "case": "large-fuzzy",
+        "binary": "before",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "gts",
+        "strategy": "fuzzy",
+        "samples_ms": [
+          15.2805,
+          14.937791,
+          17.654125,
+          15.679042,
+          15.237084,
+          14.823083,
+          15.558083
+        ],
+        "median_ms": 15.2805,
+        "stdev_ms": 0.9577066495399061,
+        "output_sha256": "a8cc1c4306a20a3cdf4cf3581ad752c59d2679a8ab97dd825909bd75ea44337a"
+      },
+      {
+        "case": "large-fuzzy",
+        "binary": "after",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "gts",
+        "strategy": "fuzzy",
+        "samples_ms": [
+          15.227417,
+          15.955917,
+          16.292291,
+          15.149625,
+          15.001167,
+          15.4575,
+          15.711084
+        ],
+        "median_ms": 15.4575,
+        "stdev_ms": 0.4682261405001498,
+        "output_sha256": "a8cc1c4306a20a3cdf4cf3581ad752c59d2679a8ab97dd825909bd75ea44337a"
+      },
+      {
+        "case": "large-miss",
+        "binary": "before",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "ZZZ",
+        "strategy": "fuzzy",
+        "samples_ms": [
+          17.354125,
+          17.101417,
+          17.387708,
+          17.516792,
+          17.393459,
+          17.86825,
+          18.4035
+        ],
+        "median_ms": 17.393459,
+        "stdev_ms": 0.43145065886743406,
+        "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "case": "large-miss",
+        "binary": "after",
+        "entries": 100000,
+        "bytes": 5200000,
+        "query": "ZZZ",
+        "strategy": "fuzzy",
+        "samples_ms": [
+          17.371208,
+          17.295292,
+          17.625708,
+          16.976708,
+          18.384209,
+          17.5855,
+          18.560917
+        ],
+        "median_ms": 17.5855,
+        "stdev_ms": 0.580452691514255,
+        "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "case": "unicode-fuzzy",
+        "binary": "before",
+        "entries": 100000,
+        "bytes": 6300000,
+        "query": "猫犬",
+        "strategy": "fuzzy",
+        "samples_ms": [
+          20.906541,
+          20.816208,
+          20.7415,
+          20.501417,
+          20.370334,
+          21.093084,
+          21.2035
+        ],
+        "median_ms": 20.816208,
+        "stdev_ms": 0.2992656068280196,
+        "output_sha256": "919a5a9c9d64f1c72368509c53f4aeee7bdfdf1f77fff6fa9ea785aac11b842b"
+      },
+      {
+        "case": "unicode-fuzzy",
+        "binary": "after",
+        "entries": 100000,
+        "bytes": 6300000,
+        "query": "猫犬",
+        "strategy": "fuzzy",
+        "samples_ms": [
+          20.84375,
+          21.290917,
+          21.026125,
+          20.398792,
+          20.696833,
+          20.820458,
+          21.106208
+        ],
+        "median_ms": 20.84375,
+        "stdev_ms": 0.29191032851251697,
+        "output_sha256": "919a5a9c9d64f1c72368509c53f4aeee7bdfdf1f77fff6fa9ea785aac11b842b"
+      }
+    ]
+  }
+}

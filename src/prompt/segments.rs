@@ -212,12 +212,10 @@ fn segment_dir(config: &Config, icons: &Icons) -> Segment {
     }
 }
 
-const GIT_STATUS_ARGS: &[&str] = &["--no-optional-locks", "status", "--porcelain", "-b"];
-
 fn segment_git(config: &Config, icons: &Icons) -> Option<Segment> {
     // `git status` 1 回でブランチ・追跡情報・ファイル状態をまとめて取得する。
     // タイムアウトで強制終了しても `.git/index.lock` が残らないよう、index の任意の更新をさせない。
-    let status = run_cmd("git", GIT_STATUS_ARGS)?;
+    let status = super::git::status()?;
     let mut lines = status.lines();
 
     // ブランチ行の形式: "## branch...origin/branch [ahead N, behind M]"
@@ -283,7 +281,7 @@ fn segment_git(config: &Config, icons: &Icons) -> Option<Segment> {
     }
 
     if config.prompt.git.show_stash
-        && let Some(count) = get_stash_count()
+        && let Some(count) = super::git::stash_count()
         && count > 0
     {
         parts.push(format!("{}{count}", icons.git_stash));
@@ -1229,11 +1227,6 @@ fn parse_ahead_behind(header: &str) -> (usize, usize) {
     (ahead, behind)
 }
 
-fn get_stash_count() -> Option<usize> {
-    let text = run_cmd("git", &["stash", "list"])?;
-    Some(text.lines().count())
-}
-
 /// gcloud の configuration ファイルから `project` の値を抽出する。
 /// 形式は INI ライクで、`[core]` セクション直下の `project = my-project` 行を想定。
 fn parse_gcloud_project(content: &str) -> Option<String> {
@@ -1300,7 +1293,7 @@ mod tests {
         let index = dir.path().join(".git").join("index");
         let before = std::fs::read(&index).unwrap();
 
-        git(GIT_STATUS_ARGS);
+        git(super::super::git::STATUS_ARGS);
 
         assert_eq!(std::fs::read(&index).unwrap(), before);
         assert!(!dir.path().join(".git").join("index.lock").exists());
