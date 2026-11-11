@@ -157,6 +157,16 @@ Custom segment commands run through the shell with a 500ms timeout. Only stdout 
 | `ip`             | Primary IPv4 (`ZSH_TURBO_IP_INTERFACE` to override; macOS: `en0`, Linux: global scope) |
 | *(custom)*       | Any command defined in `[[prompt.custom]]` |
 
+### Custom command deadlines
+
+Custom command segments have a 500 ms deadline and a 4 MiB output limit per stream. A timeout terminates the shell and its process group. Descendants that explicitly move to a different process group are outside that termination scope; retained output pipes do not extend the prompt's deadline.
+
+### Git display limits
+
+The Git segment reads branch and file status without running fsmonitor, external content filters, signature verification, or on-demand fetches. It requires a Git version supporting `--no-lazy-fetch`; the segment is hidden when that option is unavailable or required objects are missing. Git configuration and attributes are left unchanged.
+
+Files transformed by external filters, such as Git LFS, may be counted as modified when their stat information changes. Changes to a submodule's commit are counted; uncommitted changes inside submodules are not scanned. A filter key containing characters other than ASCII letters, digits, `.`, `_`, or `-` hides the segment because its command cannot be safely overridden. Run `git status` directly when you need the repository's full filter and submodule behavior.
+
 ## Project task completion
 
 Task names are read from files in the current directory:
@@ -231,7 +241,7 @@ Git is registered by default. Typing `git`, `git `, or `git cl` lists matching c
 - **Existing zsh completion** (`native`): keeps the completion already provided by `fpath` and enables the automatic subcommand list without generating a Tab cache.
 - **Help** (default for new registrations): reads `COMMAND --help` and discovered subcommand help, generating option names, subcommands, descriptions, and file/path arguments. Help is read in the C locale even when the command exits with a nonzero status. Command rows with aliases, such as `build, b`, retain the canonical name `build`. Flag names such as `--[no-]color` produce both `--color` and `--no-color`. A flag ending in `...`, such as `-v, --verbose...`, is repeatable: the option list uses its actual name, and Tab still offers either alias after use, including after stacked short flags such as `-vv`. An ellipsis after an argument placeholder (`--include <FILE>...`) does not mark the flag itself as repeatable. The generated completion matches like other completions, ignoring case and falling back to substring matches, including file arguments of commands with subcommands (`tool --config onf` completes `myconfig.toml`). It handles common English help layouts; arbitrary help formats, dynamic values, and inherited global options may require native completions. Scans use at most four workers, four subcommand levels, 128 help pages, five seconds per page, and 120 seconds overall. Unavailable child help and scan limits keep the information already collected; unavailable root help fails generation.
 - **Native generator**: enter an executable and its arguments as a JSON array, for example `["tool", "completion", "zsh"]`. No shell expansion or pipelines are applied. Use the CLI's documented generation command. A generator has a ten-second deadline.
-- **Completion file**: enter a path to a trusted zsh `#compdef` file. `~/` is supported. This also works for a CLI not installed yet.
+- **Completion file**: enter a path to a trusted UTF-8 zsh `#compdef` file of at most 4 MiB. The source must be a regular file or a symlink to one. `~/` is supported. This also works for a CLI not installed yet. An invalid or oversized source preserves the previous cache.
 
 The source is explicit: zsh-turbo does not guess commands that might perform an unrelated action. Generator output and files are executable zsh code, just like existing `fpath` completions.
 

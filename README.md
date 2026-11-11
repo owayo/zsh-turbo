@@ -59,6 +59,7 @@ A single Rust binary that provides prompt rendering, input suggestions, syntax h
 
 - **OS**: macOS, Linux
 - **Shell**: zsh 5.4+
+- **Git segment**: Git with `--no-lazy-fetch` support
 - **Rust**: 1.98+ (for building from source, edition 2024; the tested toolchain is pinned in `mise.toml`)
 
 ## Terminal Font Setup
@@ -239,6 +240,10 @@ Config file: `${XDG_CONFIG_HOME}/zsh-turbo/config.toml` when `XDG_CONFIG_HOME` i
 If neither the XDG setting nor the home directory provides an absolute path, shell integration uses default settings and `configure` reports an error. Configuration, completion sources, and font installation never fall back to paths relative to the working directory.
 
 Configuration saves use atomic replacement. Concurrent saves use independent, exclusively created temporary files so one writer cannot overwrite another writer's in-progress data.
+
+Completion file registrations accept UTF-8 `#compdef` files up to 4 MiB. An oversized or invalid source leaves the last working completion cache available.
+
+The Git prompt disables fsmonitor, external content filters, and on-demand fetches. It requires Git's `--no-lazy-fetch` option; unsupported Git versions hide this segment. See the [Git display limits](docs/configuration.md#git-display-limits) for filter and submodule behavior.
 
 Run `zsh-turbo configure` to edit every setting below, or edit the config file directly. The TUI loads your existing configuration; press `S` to save it to the same file.
 
