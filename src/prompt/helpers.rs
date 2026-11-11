@@ -112,8 +112,7 @@ fn run_cmd_core(
             }
             Ok(None) | Err(_) => {
                 terminate_command(&mut child);
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
+                // 別グループへ移った子孫が pipe を保持していても、読み取りの終了は待たない。
                 return None;
             }
         }
@@ -121,8 +120,6 @@ fn run_cmd_core(
 
     if require_success && !status.success() {
         terminate_command(&mut child);
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
         return None;
     }
 
@@ -133,8 +130,6 @@ fn run_cmd_core(
     }
     if !stdout_thread.is_finished() || !stderr_thread.is_finished() {
         terminate_command(&mut child);
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
         return None;
     }
 
@@ -554,6 +549,86 @@ mod tests {
             !marker.exists(),
             "タイムアウト後に子孫プロセスが実行を継続している"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn 親が成功終了しても出力パイプを保持する子孫はタイムアウトで終了する() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("survived");
+        let marker_arg = marker.to_string_lossy();
+        // 親は待たずに終了するが、子孫が stdout/stderr を保持している。
+        let script = r#"(sleep 1; printf survived > "$1") & exit 0"#;
+        assert_eq!(run_cmd("sh", &["-c", script, "sh", &marker_arg]), None);
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(
+            !marker.exists(),
+            "出力待ちのタイムアウト後も子孫が動いている"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn 別のプロセスグループがパイプを保持しても終了を待たない() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_owned();
+        let script = root.join("holder.py");
+        std::fs::write(&script, "import os, sys, time\nfrom pathlib import Path\nos.setsid()\nroot = Path(sys.argv[1])\n(root / 'ready').touch()\nwhile root.exists() and not (root / 'release').exists():\n    time.sleep(0.01)\n(root / 'done').touch()\n").unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                let result = run_cmd(
+                    "sh",
+                    &[
+                        "-c",
+                        r#"python3 "$1" "$2" & while [ ! -f "$2/ready" ]; do sleep 0.01; done; exit 0"#,
+                        "sh",
+                        script.to_str().unwrap(),
+                        root.to_str().unwrap(),
+                    ],
+                );
+                sender.send(result).unwrap();
+            })
+        };
+        let result = receiver.recv_timeout(Duration::from_secs(5));
+        // 旧実装でもテストを停止でき、意図的に別グループへ移した子孫を残さないよう解放する。
+        std::fs::write(root.join("release"), b"").unwrap();
+        let cleanup = Instant::now();
+        while !root.join("done").exists() && cleanup.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        worker.join().unwrap();
+        assert!(root.join("done").exists(), "子孫の解放を確認できない");
+        assert!(
+            root.join("ready").exists(),
+            "子孫が別グループへ移る前に終了した"
+        );
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn 出力上限ちょうどは受け取り超過した出力は採用しない() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("output");
+        let limit = 4 * 1024 * 1024;
+        let bytes = vec![b'x'; limit + 1];
+        for len in [limit, limit + 1] {
+            std::fs::write(&path, &bytes[..len]).unwrap();
+            for (script, stderr_fallback) in [(r#"cat "$1""#, false), (r#"cat "$1" >&2"#, true)] {
+                let output = run_cmd_inner(
+                    "sh",
+                    &["-c", script, "sh", path.to_str().unwrap()],
+                    stderr_fallback,
+                    Duration::from_secs(20),
+                );
+                assert_eq!(
+                    output.as_deref().map(str::len),
+                    (len == limit).then_some(limit),
+                    "{script}: {len} bytes"
+                );
+            }
+        }
     }
 
     #[test]
